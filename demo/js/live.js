@@ -42,6 +42,9 @@ const SPEED = [[1, 'slow'], [2, 'normal'], [3, 'fast'], [4, 'fastest']];
 const ONOFF = [[0, 'off'], [1, 'on']];
 const TEXTURE = ['checker', 'rings', 'noise'];
 const FPS = [[100, '100'], [50, '50'], [25, '25']];
+// The options whose value goes in a saved GIF's suggested title: "Tunnel Fire Rings".
+const WORDS = ['palette', 'texture', 'shape', 'color', 'floor', 'warp'];
+const cap = (t) => t[0].toUpperCase() + t.slice(1);
 const FX = [
   ['tunnel', 'the time warp', { palette: [PAL, 'chrono'], texture: [TEXTURE, 'checker'], layers: [[[2, 'two'], [1, 'one']], 2], speed: [SPEED, 2], twist: [[0, 1, 2, 3], 1], 'colour cycling': [ONOFF, 1, 'cycle'], drift: [ONOFF, 0], 'frames/s': [FPS, 100, 'fps'] }],
   ['rotozoom', 'Mode 7 turn, zoom and warp', { palette: [PAL, 'fire'], texture: [TEXTURE, 'checker'], layers: [[[2, 'two'], [1, 'one']], 2], wobble: [[[0, 'none'], [1, 'gentle'], [2, 'wavy'], [3, 'wild']], 2], speed: [SPEED, 2], zoom: [[1, 2, 3, 4], 2], view: [[[0, 'flat'], [1, 'floor']], 0, 'floor'], 'colour cycling': [ONOFF, 0, 'cycle'], 'frames/s': [FPS, 100, 'fps'] }],
@@ -57,7 +60,7 @@ export function effects(box, preview, refresh) {
       const s = h('select', { 'data-key': key, 'data-def': def }, vals.map((v) => { const [val, text = val] = [].concat(v); return h('option', { value: val }, text); }));
       s.value = def;
       s.onchange = () => { set(); refresh(); preview(it); };
-      return h('label.stack', label[0].toUpperCase() + label.slice(1), s);
+      return h('label.stack', cap(label), s);
     });
     const form = h('div.form', { id: 'fx-' + fx, style: 'margin-top:12px;grid-template-columns:repeat(auto-fill,minmax(110px,1fr))' }, sels);
     const set = () => {
@@ -65,7 +68,15 @@ export function effects(box, preview, refresh) {
       const path = `@fx:${fx}${q ? '?' + q : ''}`;
       Object.assign(it, { path, e: app.wasm.parsePath(path) }).norm = app.wasm.normalizeTitle(it.e.title);
     };
-    it.pick = () => box.firstChild != form && box.replaceChildren(form, h('p.cap', { style: 'margin-top:12px' }, 'Drawn live by the panel; add it to a playlist like any GIF'));
+    // "Save as GIF…": Create Art draws one loop of it (`app.artFrom.fx`), to
+    // add text, trim and save like any animation; titled from what is set.
+    const gif = h('button', { id: 'fx-gif', onclick: () => {
+      const t = sels.map((l) => l.lastChild).filter((s) => WORDS.includes(s.dataset.key) && s.value != s.dataset.def).map((s) => cap(s.selectedOptions[0].text));
+      app.artFrom = { fx: it.path, title: [it.e.title, ...t].join(' ') };
+      app.go('create');
+    } }, 'Save as GIF…');
+    it.pick = () => box.firstChild != form && box.replaceChildren(form, h('div.row.acts', { style: 'margin-top:12px' }, gif),
+      h('p.cap', 'Drawn live by the panel; add it to a playlist like any GIF, or save it as a GIF of your own to add text and trim it'));
     set();
     return it;
   });

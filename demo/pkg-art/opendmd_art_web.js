@@ -278,6 +278,23 @@ export class Studio {
         return ret >>> 0;
     }
     /**
+     * A live effect's path (`@fx:tunnel?palette=fire…`) as an animation:
+     * one loop of it, drawn by the core's effect ([`anim::effect_plan`]
+     * says how many frames at what delay); `decode` draws the rest. Throws
+     * if the path names no effect.
+     * @param {string} path
+     * @returns {Studio}
+     */
+    static fromEffect(path) {
+        const ptr0 = passStringToWasm0(path, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.studio_fromEffect(ptr0, len0);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return Studio.__wrap(ret[0]);
+    }
+    /**
      * An animated GIF: its header and first frame read (throws if it does
      * not decode); `decode` reads the rest.
      * @param {Uint8Array} bytes
@@ -308,8 +325,9 @@ export class Studio {
         return ret >>> 0;
     }
     /**
-     * `[width, height, workWidth, workHeight, reduce, damaged, capped, plays]`
-     * of an animation (plays: 0 forever); empty for a still.
+     * `[width, height, workWidth, workHeight, reduce, damaged, capped, plays,
+     * cut]` of an animation (plays: 0 forever; cut: an effect longer than
+     * the frames it was given); empty for a still.
      * @returns {Uint32Array}
      */
     info() {

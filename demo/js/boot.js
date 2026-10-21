@@ -28,7 +28,7 @@ export function bootCard(card) {
     await app.refreshConfig();
   });
   card.append(head,
-    note('What the panel shows while it starts', 'A warp into the name and the version, then the first GIF (Short adds about a second, Full about five). With no card in, the panel says so, and shows its address.'),
+    note('What the panel shows while it starts', 'The name lights up, dot by dot, over the version, then the first GIF (Short adds about a second, Full about five). With no card in, the panel says so, and shows its address.'),
     h('div.form.f2', h('label.stack', 'Start-up show', sel)),
     h('div.row', { style: 'margin-top:12px' },
       h('button', { id: 'st-boot-preview', onclick: () => (sel.value === 'off' ? toast('Off: the panel stays dark until the first GIF') : play(sel.value)) }, 'Preview'),

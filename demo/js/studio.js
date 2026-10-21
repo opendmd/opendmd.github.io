@@ -287,22 +287,25 @@ function build(root) {
   }
 
   // An animated GIF: decoded in slices, then the timeline.
+  // (Or a live effect from the Library's Effects tab, `from.fx` its path:
+  // one loop of it drawn by the art module's copy of the core's effects.)
   async function loadGif(bytes, from, tok) {
     const t0 = performance.now();
     let st;
-    try { st = art.Studio.fromGif(bytes); } catch (e) {
+    try { st = from.fx ? art.Studio.fromEffect(from.fx) : art.Studio.fromGif(bytes); } catch (e) {
       msg.textContent = `That GIF could not be read (${e.message || e})`;
       return false;
     }
     const all = st.inFile;
-    const ok = await run(() => st.decode(2), () => tok === S.tok, () => { msg.textContent = `Reading frames… ${st.sourceFrames} of ${all}`; });
+    const ok = await run(() => st.decode(2), () => tok === S.tok, () => { msg.textContent = `${from.fx ? 'Drawing' : 'Reading'} frames… ${st.sourceFrames} of ${all}`; });
     if (!ok) { st.free(); return false; }
-    const [ow, oh, ww, wh, reduce, damaged, capped] = st.info();
+    const [ow, oh, ww, wh, reduce, damaged, capped, , cut] = st.info();
     adopt(st, from);
     const n = st.sourceFrames;
     msg.textContent = `${from.label || 'GIF'}: ${ow} × ${oh} · ${n} frames`
       + (reduce > 1 ? ` · working at ${ww} × ${wh} (1/${reduce} size) to fit in memory` : '')
       + (capped ? ` · only the first ${n.toLocaleString()} frames are kept` : '')
+      + (cut ? ` · the first ${secs(st.delays().reduce((a, b) => a + b, 0))} s of it` : from.fx ? ' · one loop' : '')
       + (damaged ? ' · the rest of the file is damaged' : '');
     el.dataset.tImport = Math.round(performance.now() - t0);
     restage(true);
@@ -882,7 +885,16 @@ function build(root) {
         S.searched = null;
         fold(false);
       }
-      if (from) {
+      if (from?.fx) {
+        // "Save as GIF…" in the Effects tab: a new GIF, named as the demo
+        // card's recordings are (platform FX, category Demoscene).
+        if (app.device && !cats.includes('Demoscene')) cat.append(h('option', { value: 'Demoscene' }, 'Demoscene'));
+        cat.value = 'Demoscene';
+        author.value = '';
+        const tok = ++S.tok;
+        msg.textContent = 'Drawing…';
+        await loadGif(null, { fx: from.fx, title: from.title, platform: 'FX', label: from.title }, tok);
+      } else if (from) {
         const e = from.e, fields = art.nameFields(from.path);
         if (cats.includes(e.category)) cat.value = e.category;
         setPlatform(fields.platform || '');
