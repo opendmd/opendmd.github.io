@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="description" content="OpenDMD: open firmware and a web app for the DMDoS LED dot-matrix display.">
+<title>The SD card# · OpenDMD</title>
+<link rel="stylesheet" href="../site.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to the page</a>
+<header class="strip" aria-label="Animations drawn by OpenDMD"><div class="track"><picture class="led"><source srcset="../art/strip/press-start-f8773fd4.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/press-start-f8773fd4.gif" data-still="../art/strip/press-start-f8773fd4.png" alt="PRESS START scrolling across the panel in pink" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/tunnel-fire-5cafe7ed.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/tunnel-fire-5cafe7ed.gif" data-still="../art/strip/tunnel-fire-5cafe7ed.png" alt="A twisting tunnel of fiery rings" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/kenney-walk-2df5a3fc.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/kenney-walk-2df5a3fc.gif" data-still="../art/strip/kenney-walk-2df5a3fc.png" alt="Pixel-art characters walking across the panel" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/wire-torus-2dd0022a.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/wire-torus-2dd0022a.gif" data-still="../art/strip/wire-torus-2dd0022a.png" alt="A spinning wireframe torus in cyan" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/insert-coin-ca085cc0.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/insert-coin-ca085cc0.gif" data-still="../art/strip/insert-coin-ca085cc0.png" alt="INSERT COIN scrolling across the panel in amber" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/starfield-ca098c44.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/starfield-ca098c44.gif" data-still="../art/strip/starfield-ca098c44.png" alt="Stars flying towards the viewer" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/clock-266f4e5a.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/clock-266f4e5a.gif" data-still="../art/strip/clock-266f4e5a.png" alt="The panel&#x27;s big clock with the date underneath" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/wire-tesseract-861fb807.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/wire-tesseract-861fb807.gif" data-still="../art/strip/wire-tesseract-861fb807.png" alt="A rotating wireframe tesseract in pink" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/game-over-cfc73be4.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/game-over-cfc73be4.gif" data-still="../art/strip/game-over-cfc73be4.png" alt="A title card reading GAME OVER, thanks for playing" width="128" height="32" decoding="async"></picture><div style="display:contents" aria-hidden="true"><picture class="led"><source srcset="../art/strip/press-start-f8773fd4.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/press-start-f8773fd4.gif" data-still="../art/strip/press-start-f8773fd4.png" alt="" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/tunnel-fire-5cafe7ed.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/tunnel-fire-5cafe7ed.gif" data-still="../art/strip/tunnel-fire-5cafe7ed.png" alt="" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/kenney-walk-2df5a3fc.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/kenney-walk-2df5a3fc.gif" data-still="../art/strip/kenney-walk-2df5a3fc.png" alt="" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/wire-torus-2dd0022a.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/wire-torus-2dd0022a.gif" data-still="../art/strip/wire-torus-2dd0022a.png" alt="" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/insert-coin-ca085cc0.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/insert-coin-ca085cc0.gif" data-still="../art/strip/insert-coin-ca085cc0.png" alt="" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/starfield-ca098c44.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/starfield-ca098c44.gif" data-still="../art/strip/starfield-ca098c44.png" alt="" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/clock-266f4e5a.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/clock-266f4e5a.gif" data-still="../art/strip/clock-266f4e5a.png" alt="" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/wire-tesseract-861fb807.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/wire-tesseract-861fb807.gif" data-still="../art/strip/wire-tesseract-861fb807.png" alt="" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/game-over-cfc73be4.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/game-over-cfc73be4.gif" data-still="../art/strip/game-over-cfc73be4.png" alt="" width="128" height="32" decoding="async"></picture></div></div><button type="button" id="strip-pause" aria-pressed="false" aria-label="Pause the animations">Pause</button></header>
+<div class="wrap">
+<nav aria-label="Site"><a class="brand" href="../index.html"><picture class="led" style="--cols:70;--rows:16"><img src="../art/wordmark.png" alt="OpenDMD" width="70" height="16"></picture></a><div class="links"><a href="../index.html">Overview</a><a href="../demo/" class='demo'>Try the demo</a><h4>Guide</h4><a href="hardware.html">What you need</a><a href="../install/index.html">Install</a><a href="web-app.html">The web app</a><a href="create-art.html">Create Art</a><a href="effects.html">Effects and live items</a><a href="card.html" class='on'>The SD card</a><a href="updating.html">Updating</a><a href="troubleshooting.html">Troubleshooting</a><h4>For developers</h4><a href="../dev/index.html">Building from source</a><a href="../dev/api.html">HTTP API</a><a href="../dev/simulator.html">The simulator</a><a href="../dev/pinout.html">Hardware pinout</a></div></nav>
+<main id="main">
+<h1 id="the-sd-card">The SD card<a class="headerlink" href="#the-sd-card" title="Permanent link">#</a></h1>
+<p>Your GIFs live on the microSD card in the display. OpenDMD plays a card
+made for DMDoS exactly as it is: no conversion, nothing to rename. The card
+also keeps working with DMDoS.</p>
+<p>OpenDMD doesn't come with any GIFs. A card you set up for DMDoS works as
+it is, and the DMDoS GIF pack (<strong>DMDos GUI v1 + GIFs</strong>) is in the Software
+section of <a href="https://dmdos.net/">dmdos.net</a>: copy it onto a FAT32 card as
+dmdos.net describes. You can also add your own GIFs from the
+<a href="web-app.html#library">Library</a>, or make some with
+<a href="create-art.html">Create Art</a>.</p>
+<h2 id="whats-on-a-card">What's on a card<a class="headerlink" href="#whats-on-a-card" title="Permanent link">#</a></h2>
+<pre><code>gifs/
+  Consoles/
+    SNES_Super_Metroid_01.gif
+    MD_Streets_of_Rage_2_03.gif
+  Arcade/
+  Pinball_Short/
+  ...
+filelist.txt
+filelist.hall
+filelist.xmas
+</code></pre>
+<ul>
+<li><strong><code>gifs/</code></strong> holds the animations, one folder per <strong>category</strong>. The
+  folders are the category tabs in the Library. Make a new folder and you
+  have a new category.</li>
+<li><strong><code>filelist.txt</code></strong> is the list the panel plays: <strong>All files</strong> in the web
+  app. It doesn't have to list every GIF on the card. When you add GIFs
+  from the web app, it offers to add them to the playlist that's playing.</li>
+<li><strong><code>filelist.hall</code></strong> and <strong><code>filelist.xmas</code></strong> are the Halloween and
+  Christmas playlists, if your card has them.</li>
+</ul>
+<p>Playlists you make in the web app are saved on the card too, so they move
+with it.</p>
+<h2 id="how-names-become-details">How names become details<a class="headerlink" href="#how-names-become-details" title="Permanent link">#</a></h2>
+<p>The web app reads each GIF's platform, title and author from its file name:</p>
+<table>
+<thead>
+<tr>
+<th>File name</th>
+<th>Platform</th>
+<th>Title</th>
+<th>Author</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>SNES_Super_Metroid_01.gif</code></td>
+<td>SNES</td>
+<td>Super Metroid</td>
+<td></td>
+</tr>
+<tr>
+<td><code>MD_Streets_of_Rage_2_03_ross.gif</code></td>
+<td>MD</td>
+<td>Streets of Rage 2</td>
+<td>ross</td>
+</tr>
+<tr>
+<td><code>ARCADE_GoldenAxe16.gif</code></td>
+<td>ARCADE</td>
+<td>GoldenAxe</td>
+<td></td>
+</tr>
+<tr>
+<td><code>Sunset.gif</code></td>
+<td>none</td>
+<td>Sunset</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<p>The pattern is <code>PLATFORM_Title_Words_01.gif</code>: the platform first, then the
+title with underscores between words, then a number so several GIFs of the
+same game can sit side by side. An author name, in lower case, can go at
+the end.</p>
+<p>You rarely need to type these yourself. <strong>+ Add GIFs</strong>, <strong>Edit details…</strong>
+and Create Art ask for a title, platform, category and author and build the
+name for you. If you copy GIFs onto the card from a computer, name them this
+way and they'll sort into the right platform.</p>
+<h2 id="using-a-new-card">Using a new card<a class="headerlink" href="#using-a-new-card" title="Permanent link">#</a></h2>
+<p>The player reads cards formatted as <strong>FAT32</strong>. Most cards up to 32 GB come
+that way. Bigger cards usually come formatted as exFAT, which the player
+can't read: put one in and the web app's <strong>Now</strong> view says it needs FAT32
+and offers <strong>Format card…</strong>, which sets it up for you. Formatting erases
+the card, so do it before adding GIFs.</p>
+<p>On a computer, a tool such as <a href="https://rufus.ie">Rufus</a> (Windows) can
+format a card as FAT32 too, as dmdos.net suggests for its pack.</p>
+<p>To move a DMDoS collection to a new card, copy the <code>gifs</code> folder and the
+<code>filelist</code> files from the old card to the new one with a computer.</p>
+<p>Take your time when you first fill a card: the player makes a lighter copy
+of each GIF in the background, mostly while the panel is off at night, so
+a big collection plays at its smoothest after a night or two.</p>
+<h2 id="if-a-card-starts-failing">If a card starts failing<a class="headerlink" href="#if-a-card-starts-failing" title="Permanent link">#</a></h2>
+<p>Cards wear out. If the player keeps hitting read errors it slows the card
+down to keep going, and <strong>Settings</strong> says "Card running at reduced speed
+after errors", or shows a count of card errors. Either message means it's
+time for a new card.</p>
+</main>
+<footer><p>OpenDMD is an independent, open-source project. It is not made by or affiliated with
+<a href="https://dmdos.net/">DMDoS</a>: the display, its board (by <a href="https://mortaca.com">MORTACA</a>),
+the build guide and the GIF pack all come from dmdos.net. The animations on this site are recordings of
+OpenDMD's own effects and the CC0 <a href="https://kenney.nl/assets/pixel-platformer">Kenney</a> sprites.
+Code under <a href="../LICENSE-MIT.txt">MIT</a> or <a href="../LICENSE-APACHE.txt">Apache 2.0</a>.</p></footer>
+</div>
+<script>
+(function(){var d=document.documentElement,b=document.getElementById("strip-pause");if(!b)return;
+function set(p){d.classList.toggle("still",p);b.setAttribute("aria-pressed",p?"true":"false");b.textContent=p?"Play":"Pause";
+document.querySelectorAll("img[data-still]").forEach(function(i){if(!i.dataset.anim)i.dataset.anim=i.getAttribute("src");i.src=p?i.dataset.still:i.dataset.anim});
+try{localStorage.setItem("opendmd-still",p?"1":"")}catch(e){}}
+var s=false;try{s=localStorage.getItem("opendmd-still")==="1"}catch(e){}
+if(s)set(true);b.addEventListener("click",function(){set(!d.classList.contains("still"))})})();
+</script>
+</body>
+</html>

@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="description" content="OpenDMD: open firmware and a web app for the DMDoS LED dot-matrix display.">
+<title>The simulator# · OpenDMD</title>
+<link rel="stylesheet" href="../site.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to the page</a>
+<header class="strip" aria-label="Animations drawn by OpenDMD"><div class="track"><picture class="led"><source srcset="../art/strip/press-start-f8773fd4.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/press-start-f8773fd4.gif" data-still="../art/strip/press-start-f8773fd4.png" alt="PRESS START scrolling across the panel in pink" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/tunnel-fire-5cafe7ed.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/tunnel-fire-5cafe7ed.gif" data-still="../art/strip/tunnel-fire-5cafe7ed.png" alt="A twisting tunnel of fiery rings" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/kenney-walk-2df5a3fc.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/kenney-walk-2df5a3fc.gif" data-still="../art/strip/kenney-walk-2df5a3fc.png" alt="Pixel-art characters walking across the panel" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/wire-torus-2dd0022a.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/wire-torus-2dd0022a.gif" data-still="../art/strip/wire-torus-2dd0022a.png" alt="A spinning wireframe torus in cyan" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/insert-coin-ca085cc0.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/insert-coin-ca085cc0.gif" data-still="../art/strip/insert-coin-ca085cc0.png" alt="INSERT COIN scrolling across the panel in amber" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/starfield-ca098c44.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/starfield-ca098c44.gif" data-still="../art/strip/starfield-ca098c44.png" alt="Stars flying towards the viewer" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/clock-266f4e5a.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/clock-266f4e5a.gif" data-still="../art/strip/clock-266f4e5a.png" alt="The panel&#x27;s big clock with the date underneath" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/wire-tesseract-861fb807.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/wire-tesseract-861fb807.gif" data-still="../art/strip/wire-tesseract-861fb807.png" alt="A rotating wireframe tesseract in pink" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/game-over-cfc73be4.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/game-over-cfc73be4.gif" data-still="../art/strip/game-over-cfc73be4.png" alt="A title card reading GAME OVER, thanks for playing" width="128" height="32" decoding="async"></picture><div style="display:contents" aria-hidden="true"><picture class="led"><source srcset="../art/strip/press-start-f8773fd4.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/press-start-f8773fd4.gif" data-still="../art/strip/press-start-f8773fd4.png" alt="" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/tunnel-fire-5cafe7ed.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/tunnel-fire-5cafe7ed.gif" data-still="../art/strip/tunnel-fire-5cafe7ed.png" alt="" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/kenney-walk-2df5a3fc.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/kenney-walk-2df5a3fc.gif" data-still="../art/strip/kenney-walk-2df5a3fc.png" alt="" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/wire-torus-2dd0022a.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/wire-torus-2dd0022a.gif" data-still="../art/strip/wire-torus-2dd0022a.png" alt="" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/insert-coin-ca085cc0.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/insert-coin-ca085cc0.gif" data-still="../art/strip/insert-coin-ca085cc0.png" alt="" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/starfield-ca098c44.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/starfield-ca098c44.gif" data-still="../art/strip/starfield-ca098c44.png" alt="" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/clock-266f4e5a.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/clock-266f4e5a.gif" data-still="../art/strip/clock-266f4e5a.png" alt="" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/wire-tesseract-861fb807.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/wire-tesseract-861fb807.gif" data-still="../art/strip/wire-tesseract-861fb807.png" alt="" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/game-over-cfc73be4.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/game-over-cfc73be4.gif" data-still="../art/strip/game-over-cfc73be4.png" alt="" width="128" height="32" decoding="async"></picture></div></div><button type="button" id="strip-pause" aria-pressed="false" aria-label="Pause the animations">Pause</button></header>
+<div class="wrap">
+<nav aria-label="Site"><a class="brand" href="../index.html"><picture class="led" style="--cols:70;--rows:16"><img src="../art/wordmark.png" alt="OpenDMD" width="70" height="16"></picture></a><div class="links"><a href="../index.html">Overview</a><a href="../demo/" class='demo'>Try the demo</a><h4>Guide</h4><a href="../guide/hardware.html">What you need</a><a href="../install/index.html">Install</a><a href="../guide/web-app.html">The web app</a><a href="../guide/create-art.html">Create Art</a><a href="../guide/effects.html">Effects and live items</a><a href="../guide/card.html">The SD card</a><a href="../guide/updating.html">Updating</a><a href="../guide/troubleshooting.html">Troubleshooting</a><h4>For developers</h4><a href="index.html">Building from source</a><a href="api.html">HTTP API</a><a href="simulator.html" class='on'>The simulator</a><a href="pinout.html">Hardware pinout</a></div></nav>
+<main id="main">
+<h1 id="the-simulator">The simulator<a class="headerlink" href="#the-simulator" title="Permanent link">#</a></h1>
+<p><code>opendmd-sim</code> plays a card in a desktop window through the same
+<code>opendmd-core</code> engine the firmware runs.</p>
+<pre><code class="language-bash">make sim ARGS=&quot;--root /path/to/card --platforms MD,SNES&quot;
+</code></pre>
+<p><code>make sim</code> needs a display; the simulator opens a <code>128 * scale</code> by
+<code>32 * scale</code> window — 1280x320 at the default scale of 10.</p>
+<h2 id="what-it-draws">What it draws<a class="headerlink" href="#what-it-draws" title="Permanent link">#</a></h2>
+<p>By default the simulator doesn't draw pixels, it draws <strong>LEDs</strong>, because a P4
+HUB75 panel looks nothing like a grid of flat squares. The model in
+<code>opendmd-render/src/lib.rs</code> is measured off a close-up photo of the real panel
+(<code>hardware/IMG_0495.jpeg</code>), in units of the 4 mm LED pitch:</p>
+<ul>
+<li>a lit emitter is an anti-aliased disc of ~0.42 pitch across (measured FWHM
+  0.40 horizontally, 0.44 vertically — the package makes it slightly tall);</li>
+<li>a soft bloom around it falls to the mask level by ~0.75 pitch, so bright
+  neighbours' halos overlap, exactly as they do in the photo;</li>
+<li>the mask between LEDs is near black (5/255), and an unlit LED is a
+  barely-there square at 10/255 over half a pitch;</li>
+<li>the panel is driven linearly (BCM/PWM), so canvas bytes are decoded to
+  linear light, accumulated there, and re-encoded on the way out. That is why
+  mid greys look brighter here than a naive blit makes them.</li>
+</ul>
+<p>Everything that depends only on the scale — the per-LED kernel, the backdrop,
+the gamma tables — is built once, and the float accumulator is reused, so a
+frame is a fixed ~1.6 M multiply-adds at scale 10 with no allocation.</p>
+<h2 id="options">Options<a class="headerlink" href="#options" title="Permanent link">#</a></h2>
+<pre><code>--root &lt;dir&gt;              card root, holding gifs/ and filelist.txt (required)
+--manifest &lt;path&gt;         default &lt;root&gt;/filelist.txt
+--platforms MD,SNES       comma-separated platform prefixes
+--title &lt;substr&gt;          repeatable, matched against the normalized title
+--exclude-flag INVERT     repeatable
+--category / --exclude-category   repeatable, matched against gifs/&lt;Category&gt;
+--shuffle --seed &lt;u64&gt;    reproducible weighted shuffle
+--scale &lt;u32&gt;             pixels per LED, default 10
+--min-dwell / --max-dwell seconds, default 3 and 30
+--transition kind[:ms]    how files come in: dissolve (default, 400 ms),
+                          wipe_left, wipe_right, wipe_down, wipe_up, blinds,
+                          push, fade or none; ms 20..2000
+--flat                    flat squares with a 1 px gutter, the old renderer
+--gamma &lt;f32&gt;             canvas byte -&gt; linear light, default 2.2
+--led-gain &lt;f32&gt;          scales LED intensity, default 1.0 — match the panel
+                          brightness by eye
+--bloom &lt;f32&gt;             halo strength around each lit LED, default 0.22
+                          (fitted by eye to the photo — the knob to tune)
+--screenshot &lt;out.png&gt;    render the first frame of the first scheduled GIF
+                          and exit, without opening a window
+--screenshot-canvas &lt;out.png&gt;   the same frame as the raw 128x32 canvas
+                          (after --look)
+--look &lt;name&gt;             colour (default), amber, red, green, blue or white
+--glow off|short|long     phosphor glow, default off
+--play &lt;path&gt;             play just this: a card path or a live item,
+                          e.g. '@clock?date=1', '@text?msg=Hello',
+                          '@fx:tunnel?palette=chrono&amp;cycle=1'
+--screenshot-at &lt;ms&gt;      take the screenshot that far into the file (an
+                          effect mid-loop), default 0
+</code></pre>
+<p>Below <code>--scale 6</code> there are too few window pixels per LED for a dot and a
+bloom, so the flat renderer is used automatically and says so in the log.</p>
+<p>Keys: <code>Space</code> next, <code>P</code> pause/resume, <code>L</code> toggle LED/flat (the title bar shows
+which), <code>Esc</code> quit. Each new GIF prints
+<code>[n/total] /gifs/Consoles/SNES_Plok_08.gif</code>; startup prints the filter summary.</p>
+<p>The two <code>--screenshot*</code> flags are the only way to look at the renderer on a
+headless box, where <code>minifb</code> cannot open a window:</p>
+<pre><code class="language-bash">cd opendmd-sim &amp;&amp; cargo run --release -- --root /path/to/card \
+    --platforms SNES,MD --seed 7 --screenshot /tmp/led.png \
+    --screenshot-canvas /tmp/canvas.png
+</code></pre>
+</main>
+<footer><p>OpenDMD is an independent, open-source project. It is not made by or affiliated with
+<a href="https://dmdos.net/">DMDoS</a>: the display, its board (by <a href="https://mortaca.com">MORTACA</a>),
+the build guide and the GIF pack all come from dmdos.net. The animations on this site are recordings of
+OpenDMD's own effects and the CC0 <a href="https://kenney.nl/assets/pixel-platformer">Kenney</a> sprites.
+Code under <a href="../LICENSE-MIT.txt">MIT</a> or <a href="../LICENSE-APACHE.txt">Apache 2.0</a>.</p></footer>
+</div>
+<script>
+(function(){var d=document.documentElement,b=document.getElementById("strip-pause");if(!b)return;
+function set(p){d.classList.toggle("still",p);b.setAttribute("aria-pressed",p?"true":"false");b.textContent=p?"Play":"Pause";
+document.querySelectorAll("img[data-still]").forEach(function(i){if(!i.dataset.anim)i.dataset.anim=i.getAttribute("src");i.src=p?i.dataset.still:i.dataset.anim});
+try{localStorage.setItem("opendmd-still",p?"1":"")}catch(e){}}
+var s=false;try{s=localStorage.getItem("opendmd-still")==="1"}catch(e){}
+if(s)set(true);b.addEventListener("click",function(){set(!d.classList.contains("still"))})})();
+</script>
+</body>
+</html>

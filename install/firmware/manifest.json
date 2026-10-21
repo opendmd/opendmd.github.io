@@ -1,0 +1,19 @@
+{
+  "name": "OpenDMD",
+  "version": "1.0.0",
+  "new_install_prompt_erase": true,
+  "new_install_improv_wait_time": 0,
+  "builds": [
+    {
+      "chipFamily": "ESP32",
+      "parts": [
+        { "path": "bootloader.bin", "offset": 4096 },
+        { "path": "partition-table.bin", "offset": 32768 },
+        { "path": "ota_data_initial.bin", "offset": 61440 },
+        { "path": "opendmd-1.0.0-app.bin", "offset": 131072 },
+        { "path": "updater.bin", "offset": 2490368 },
+        { "path": "opendmd-1.0.0-www.pack", "offset": 2883584 }
+      ]
+    }
+  ]
+}

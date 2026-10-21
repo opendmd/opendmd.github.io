@@ -1,0 +1,6 @@
+{
+  "version": "1.0.0",
+  "firmware": "firmware/opendmd-1.0.0.odfw",
+  "www": "firmware/opendmd-1.0.0-www.pack",
+  "www_version": "v1.0.0"
+}

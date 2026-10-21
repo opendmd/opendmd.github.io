@@ -1,0 +1,12 @@
+/* Create Art's web sources (js/find.js): loaded with it. */
+.find-narrow{margin:4px 0 8px}
+.find-top{display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline;margin-bottom:6px}.find-top:has(:empty+:empty){display:none}
+.find-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+.find-hit{flex-direction:column;align-items:stretch;padding:6px;gap:4px;min-width:0;text-align:center}
+.find-hit.on{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc)}
+.find-img{display:flex;align-items:center;justify-content:center;height:72px;background:#000;border-radius:4px;overflow:hidden}
+.find-img img{max-width:100%;max-height:72px;image-rendering:pixelated;object-fit:contain}
+.find-t{font-size:13px;line-height:1.3;min-height:2.6em;overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow-wrap:anywhere}
+.find-hit small{color:var(--mut);font-size:12px}
+#find-caption{margin-top:10px}
+@media (max-width:760px){.find-grid{grid-template-columns:repeat(auto-fill,minmax(110px,1fr))}}

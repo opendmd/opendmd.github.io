@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="description" content="OpenDMD: open firmware and a web app for the DMDoS LED dot-matrix display.">
+<title>OpenDMD</title>
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to the page</a>
+<header class="strip" aria-label="Animations drawn by OpenDMD"><div class="track"><picture class="led"><source srcset="art/strip/press-start-f8773fd4.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/press-start-f8773fd4.gif" data-still="art/strip/press-start-f8773fd4.png" alt="PRESS START scrolling across the panel in pink" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="art/strip/tunnel-fire-5cafe7ed.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/tunnel-fire-5cafe7ed.gif" data-still="art/strip/tunnel-fire-5cafe7ed.png" alt="A twisting tunnel of fiery rings" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="art/strip/kenney-walk-2df5a3fc.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/kenney-walk-2df5a3fc.gif" data-still="art/strip/kenney-walk-2df5a3fc.png" alt="Pixel-art characters walking across the panel" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="art/strip/wire-torus-2dd0022a.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/wire-torus-2dd0022a.gif" data-still="art/strip/wire-torus-2dd0022a.png" alt="A spinning wireframe torus in cyan" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="art/strip/insert-coin-ca085cc0.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/insert-coin-ca085cc0.gif" data-still="art/strip/insert-coin-ca085cc0.png" alt="INSERT COIN scrolling across the panel in amber" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="art/strip/starfield-ca098c44.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/starfield-ca098c44.gif" data-still="art/strip/starfield-ca098c44.png" alt="Stars flying towards the viewer" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="art/strip/clock-266f4e5a.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/clock-266f4e5a.gif" data-still="art/strip/clock-266f4e5a.png" alt="The panel&#x27;s big clock with the date underneath" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="art/strip/wire-tesseract-861fb807.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/wire-tesseract-861fb807.gif" data-still="art/strip/wire-tesseract-861fb807.png" alt="A rotating wireframe tesseract in pink" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="art/strip/game-over-cfc73be4.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/game-over-cfc73be4.gif" data-still="art/strip/game-over-cfc73be4.png" alt="A title card reading GAME OVER, thanks for playing" width="128" height="32" decoding="async"></picture><div style="display:contents" aria-hidden="true"><picture class="led"><source srcset="art/strip/press-start-f8773fd4.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/press-start-f8773fd4.gif" data-still="art/strip/press-start-f8773fd4.png" alt="" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="art/strip/tunnel-fire-5cafe7ed.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/tunnel-fire-5cafe7ed.gif" data-still="art/strip/tunnel-fire-5cafe7ed.png" alt="" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="art/strip/kenney-walk-2df5a3fc.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/kenney-walk-2df5a3fc.gif" data-still="art/strip/kenney-walk-2df5a3fc.png" alt="" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="art/strip/wire-torus-2dd0022a.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/wire-torus-2dd0022a.gif" data-still="art/strip/wire-torus-2dd0022a.png" alt="" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="art/strip/insert-coin-ca085cc0.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/insert-coin-ca085cc0.gif" data-still="art/strip/insert-coin-ca085cc0.png" alt="" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="art/strip/starfield-ca098c44.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/starfield-ca098c44.gif" data-still="art/strip/starfield-ca098c44.png" alt="" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="art/strip/clock-266f4e5a.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/clock-266f4e5a.gif" data-still="art/strip/clock-266f4e5a.png" alt="" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="art/strip/wire-tesseract-861fb807.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/wire-tesseract-861fb807.gif" data-still="art/strip/wire-tesseract-861fb807.png" alt="" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="art/strip/game-over-cfc73be4.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/game-over-cfc73be4.gif" data-still="art/strip/game-over-cfc73be4.png" alt="" width="128" height="32" decoding="async"></picture></div></div><button type="button" id="strip-pause" aria-pressed="false" aria-label="Pause the animations">Pause</button></header>
+<div class="wrap">
+<nav aria-label="Site"><a class="brand" href="index.html"><picture class="led" style="--cols:70;--rows:16"><img src="art/wordmark.png" alt="OpenDMD" width="70" height="16"></picture></a><div class="links"><a href="index.html" class='on'>Overview</a><a href="demo/" class='demo'>Try the demo</a><h4>Guide</h4><a href="guide/hardware.html">What you need</a><a href="install/index.html">Install</a><a href="guide/web-app.html">The web app</a><a href="guide/create-art.html">Create Art</a><a href="guide/effects.html">Effects and live items</a><a href="guide/card.html">The SD card</a><a href="guide/updating.html">Updating</a><a href="guide/troubleshooting.html">Troubleshooting</a><h4>For developers</h4><a href="dev/index.html">Building from source</a><a href="dev/api.html">HTTP API</a><a href="dev/simulator.html">The simulator</a><a href="dev/pinout.html">Hardware pinout</a></div></nav>
+<main id="main">
+<section class="hero">
+<h1><span class="plate"><picture class="led" style="--cols:70;--rows:16"><img src="art/wordmark.png" alt="OpenDMD" width="70" height="16"></picture></span></h1>
+<a class="chip" href="guide/hardware.html">For the DMDoS display</a>
+<p class="tag">New open firmware and a web app for the DMDoS LED dot-matrix display.</p>
+<p><a class="cta" href="demo/">Try the demo in your browser →</a><a class="cta alt" href="install/">Install on your display</a><a class="cta alt" href="guide/hardware.html">What you need</a></p>
+</section>
+
+<p>OpenDMD is open-source firmware and a web app for the <strong>DMDoS display</strong>: a 128x32 LED
+dot-matrix display, two chained 64x32 HUB75 panels driven by an ESP32, that plays animated GIFs
+from a microSD card, like the "DMD" in a pinball machine. DMDoS is a community project from
+Spain, and <strong><a href="https://dmdos.net/">dmdos.net</a></strong> is where to get the hardware, build the display
+and find GIFs. OpenDMD is an alternative firmware for the same board: it plays a DMDoS card as
+it is, and adds a web app to manage it.</p>
+<ul>
+<li><strong>The firmware</strong> runs on the display's own ESP32 board. It plays the card and serves the web
+  app over WiFi.</li>
+<li><strong>The web app</strong> at <code>http://opendmd.local/</code> works in any browser, on a phone or a computer.
+  Previews and GIF preparation run right in the browser, using the same engine as the player.</li>
+<li><strong>The simulator</strong> plays a card in a desktop window, drawn as LEDs rather than flat pixels.</li>
+</ul>
+<div class="tiles"><figure><picture class="led"><source srcset="art/strip/press-start-f8773fd4.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/press-start-f8773fd4.gif" data-still="art/strip/press-start-f8773fd4.png" alt="PRESS START scrolling across the panel in pink" width="128" height="32" decoding="async" loading="lazy"></picture><figcaption>Scrolling text</figcaption></figure><figure><picture class="led"><source srcset="art/strip/tunnel-fire-5cafe7ed.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/tunnel-fire-5cafe7ed.gif" data-still="art/strip/tunnel-fire-5cafe7ed.png" alt="A twisting tunnel of fiery rings" width="128" height="32" decoding="async" loading="lazy"></picture><figcaption>Tunnel, fire palette</figcaption></figure><figure><picture class="led"><source srcset="art/strip/kenney-walk-2df5a3fc.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/kenney-walk-2df5a3fc.gif" data-still="art/strip/kenney-walk-2df5a3fc.png" alt="Pixel-art characters walking across the panel" width="128" height="32" decoding="async" loading="lazy"></picture><figcaption>Kenney Pixel Platformer sprites (CC0)</figcaption></figure><figure><picture class="led"><source srcset="art/strip/wire-torus-2dd0022a.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/wire-torus-2dd0022a.gif" data-still="art/strip/wire-torus-2dd0022a.png" alt="A spinning wireframe torus in cyan" width="128" height="32" decoding="async" loading="lazy"></picture><figcaption>Wireframe torus</figcaption></figure><figure><picture class="led"><source srcset="art/strip/starfield-ca098c44.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/starfield-ca098c44.gif" data-still="art/strip/starfield-ca098c44.png" alt="Stars flying towards the viewer" width="128" height="32" decoding="async" loading="lazy"></picture><figcaption>Starfield</figcaption></figure><figure><picture class="led"><source srcset="art/strip/clock-266f4e5a.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/clock-266f4e5a.gif" data-still="art/strip/clock-266f4e5a.png" alt="The panel&#x27;s big clock with the date underneath" width="128" height="32" decoding="async" loading="lazy"></picture><figcaption>The clock</figcaption></figure><figure><picture class="led"><source srcset="art/strip/rotozoom-floor-6b212bf0.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/rotozoom-floor-6b212bf0.gif" data-still="art/strip/rotozoom-floor-6b212bf0.png" alt="A Mode 7 floor sweeping past under a colour-cycling sky" width="128" height="32" decoding="async" loading="lazy"></picture><figcaption>Mode 7 rotozoom</figcaption></figure><figure><picture class="led"><source srcset="art/strip/tunnel-ice-77368afe.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/tunnel-ice-77368afe.gif" data-still="art/strip/tunnel-ice-77368afe.png" alt="A checkered tunnel in icy blues" width="128" height="32" decoding="async" loading="lazy"></picture><figcaption>Tunnel, ice palette</figcaption></figure><figure><picture class="led"><source srcset="art/strip/wire-morph-ad77008b.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/wire-morph-ad77008b.gif" data-still="art/strip/wire-morph-ad77008b.png" alt="A wireframe shape morphing between solids" width="128" height="32" decoding="async" loading="lazy"></picture><figcaption>Wireframe morph</figcaption></figure></div>
+<p class="tiles-note">Recorded from the simulator: the panel's own effects and live items, and the CC0 Kenney Pixel Platformer sprites. Bring your own GIFs, or make them with Create Art.</p>
+
+<h2 id="opendmd-and-dmdos">OpenDMD and DMDoS<a class="headerlink" href="#opendmd-and-dmdos" title="Permanent link">#</a></h2>
+<p>OpenDMD only replaces the software on the ESP32. For everything else, go to DMDoS and the
+people around it:</p>
+<ul class="features">
+<li><strong>The hardware</strong> the parts list, with where to buy each one, is in the Hardware section of
+  <a href="https://dmdos.net/">dmdos.net</a>. The DMDoS Board V3 is made by
+  <a href="https://mortaca.com">MORTACA</a>. <a href="guide/hardware.html">What you need</a> sums it up.</li>
+<li><strong>Building it</strong> the Assembly section of <a href="https://dmdos.net/">dmdos.net</a> walks through it
+  step by step, with a photo for each.</li>
+<li><strong>A frame</strong> a 3D-printable frame by Janibol of
+  <a href="https://www.youtube.com/@retromojones">Retromojones</a> is on
+  <a href="https://www.thingiverse.com/thing:6704880">Thingiverse</a>. The Frame section of dmdos.net has
+  printed kits and wooden frames.</li>
+<li><strong>GIFs</strong> the DMDoS GIF pack is in the Software section of <a href="https://dmdos.net/">dmdos.net</a>.
+  A card set up with it plays on OpenDMD as it is.</li>
+<li><strong>Help and ideas</strong> the DMDoS community's <a href="https://t.me/DMD0S">Telegram group</a>.</li>
+</ul>
+<p>OpenDMD is an independent project, not made by or affiliated with DMDoS or MORTACA. Questions
+about OpenDMD itself go to its <a href="https://github.com/opendmd/opendmd/issues">GitHub issues</a>. The
+original DMDoS firmware can be put back at any time from the Software section of dmdos.net.</p>
+<h2 id="install">Install<a class="headerlink" href="#install" title="Permanent link">#</a></h2>
+<p>Open the <strong><a href="https://opendmd.github.io/install/">installer</a></strong> in Chrome, Edge or Opera on a
+computer, plug the
+display's ESP32 board into your computer by USB, and click <strong>Install</strong>. On first start the
+player opens a WiFi network called <code>OpenDMD-Setup</code>: join it, enter your WiFi details, and the
+web app is at <code>http://opendmd.local/</code>. <a href="install/index.html">Install</a> has the details.</p>
+<p>From source: <code>make fw-release &amp;&amp; make flasher</code> (see <a href="dev/index.html">For developers</a>).</p>
+<h2 id="what-it-does">What it does<a class="headerlink" href="#what-it-does" title="Permanent link">#</a></h2>
+<ul class="features">
+<li><strong>Library</strong> search, browse by category and platform, preview each GIF with the panel look,
+  send it to the panel, and add, rename or delete GIFs.</li>
+<li><strong>Playlists</strong> build them by platform, category and title words, then reorder and switch
+  between them live. A GIF can be a favourite in one playlist and hidden in another.</li>
+<li><strong>Create Art</strong> find game screenshots, boxes and logos, or GeoCities GIFs, or use your own
+  picture. Frame it, recolour it, add text, trim frames, and save it as a GIF ready for the panel.</li>
+<li><strong>Smooth motion</strong> adds the in-between frames to GIFs that move in jerky steps, without
+  changing the file.</li>
+<li><strong>Live items and effects</strong> a clock, scrolling text, a tunnel, Mode 7 rotozoom, a starfield
+  and wireframe shapes, all drawn on the panel and usable in any playlist.</li>
+<li><strong>Looks</strong> full colour or a single amber, red, green, blue or white, with optional phosphor glow.</li>
+<li><strong>Schedules</strong> a playlist or brightness for parts of the week, and a night mode that turns the
+  panel off or dims it.</li>
+<li><strong>Smooth playback</strong> the player prepares a lighter copy of each GIF in the background, so GIFs
+  start quickly and play smoothly.</li>
+</ul>
+<h2 id="screenshots">Screenshots<a class="headerlink" href="#screenshots" title="Permanent link">#</a></h2>
+<table>
+<thead>
+<tr>
+<th>Library</th>
+<th>Create Art</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><img alt="The Library, with a GIF's details playing" src="docs/images/library.png" /></td>
+<td><img alt="Create Art with a picture loaded: Frame, Look, Text, Preview and Save" src="docs/images/create-art.png" /></td>
+</tr>
+<tr>
+<td><strong>Now playing</strong></td>
+<td><strong>Effects</strong></td>
+</tr>
+<tr>
+<td><img alt="The Now view, previewing what the panel plays" src="docs/images/now.png" /></td>
+<td><img alt="A tunnel effect and its options" src="docs/images/effects.png" /></td>
+</tr>
+<tr>
+<td><strong>Playlists</strong></td>
+<td><strong>On a phone</strong></td>
+</tr>
+<tr>
+<td><img alt="A playlist open in the editor" src="docs/images/playlists.png" /></td>
+<td><img src="docs/images/phone-library.png" width="300" alt="The Library on a phone"></td>
+</tr>
+</tbody>
+</table>
+<p>The demo card in these screenshots holds the panel's own effects and the
+<a href="https://kenney.nl/assets/pixel-platformer">Kenney Pixel Platformer</a> sprites (CC0).</p>
+<h2 id="documentation">Documentation<a class="headerlink" href="#documentation" title="Permanent link">#</a></h2>
+<p>The documentation is also at <strong><a href="https://opendmd.github.io/">opendmd.github.io</a></strong>.</p>
+<ul>
+<li><a href="guide/hardware.html">What you need</a>, <a href="install/index.html">Install</a> and
+  <a href="guide/updating.html">Updating</a></li>
+<li><a href="guide/web-app.html">The web app</a>, <a href="guide/create-art.html">Create Art</a> and
+  <a href="guide/effects.html">Effects and live items</a></li>
+<li><a href="guide/card.html">The SD card</a>: where GIFs go and how their names are read</li>
+<li><a href="guide/troubleshooting.html">Troubleshooting</a></li>
+<li><a href="dev/index.html">For developers</a>: building from source, the crates, the
+  <a href="dev/api.html">HTTP API</a></li>
+</ul>
+<h2 id="development">Development<a class="headerlink" href="#development" title="Permanent link">#</a></h2>
+<p>Everything builds from this repository with <code>make</code>; <a href="dev/index.html">For developers</a> lists
+the toolchains, the common targets and the crates.</p>
+<h2 id="license">License<a class="headerlink" href="#license" title="Permanent link">#</a></h2>
+<p>Either <a href="LICENSE-APACHE.txt">Apache 2.0</a> or <a href="LICENSE-MIT.txt">MIT</a>, at your option. Contributions are
+dual licensed the same way.</p>
+<p>OpenDMD comes with no GIFs. The animations on a DMDoS card are third-party content that this
+project can't relicense or redistribute: get the DMDoS GIF pack from
+<a href="https://dmdos.net/">dmdos.net</a>, or make your own with Create Art. The animations on the
+OpenDMD site are the panel's own effects and live items, recorded from the simulator, and the
+CC0 <a href="https://kenney.nl/assets/pixel-platformer">Kenney Pixel Platformer</a> sprites.</p>
+</main>
+<footer><p>OpenDMD is an independent, open-source project. It is not made by or affiliated with
+<a href="https://dmdos.net/">DMDoS</a>: the display, its board (by <a href="https://mortaca.com">MORTACA</a>),
+the build guide and the GIF pack all come from dmdos.net. The animations on this site are recordings of
+OpenDMD's own effects and the CC0 <a href="https://kenney.nl/assets/pixel-platformer">Kenney</a> sprites.
+Code under <a href="LICENSE-MIT.txt">MIT</a> or <a href="LICENSE-APACHE.txt">Apache 2.0</a>.</p></footer>
+</div>
+<script>
+(function(){var d=document.documentElement,b=document.getElementById("strip-pause");if(!b)return;
+function set(p){d.classList.toggle("still",p);b.setAttribute("aria-pressed",p?"true":"false");b.textContent=p?"Play":"Pause";
+document.querySelectorAll("img[data-still]").forEach(function(i){if(!i.dataset.anim)i.dataset.anim=i.getAttribute("src");i.src=p?i.dataset.still:i.dataset.anim});
+try{localStorage.setItem("opendmd-still",p?"1":"")}catch(e){}}
+var s=false;try{s=localStorage.getItem("opendmd-still")==="1"}catch(e){}
+if(s)set(true);b.addEventListener("click",function(){set(!d.classList.contains("still"))})})();
+</script>
+</body>
+</html>

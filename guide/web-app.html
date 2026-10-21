@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="description" content="OpenDMD: open firmware and a web app for the DMDoS LED dot-matrix display.">
+<title>The web app# · OpenDMD</title>
+<link rel="stylesheet" href="../site.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to the page</a>
+<header class="strip" aria-label="Animations drawn by OpenDMD"><div class="track"><picture class="led"><source srcset="../art/strip/press-start-f8773fd4.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/press-start-f8773fd4.gif" data-still="../art/strip/press-start-f8773fd4.png" alt="PRESS START scrolling across the panel in pink" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/tunnel-fire-5cafe7ed.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/tunnel-fire-5cafe7ed.gif" data-still="../art/strip/tunnel-fire-5cafe7ed.png" alt="A twisting tunnel of fiery rings" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/kenney-walk-2df5a3fc.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/kenney-walk-2df5a3fc.gif" data-still="../art/strip/kenney-walk-2df5a3fc.png" alt="Pixel-art characters walking across the panel" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/wire-torus-2dd0022a.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/wire-torus-2dd0022a.gif" data-still="../art/strip/wire-torus-2dd0022a.png" alt="A spinning wireframe torus in cyan" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/insert-coin-ca085cc0.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/insert-coin-ca085cc0.gif" data-still="../art/strip/insert-coin-ca085cc0.png" alt="INSERT COIN scrolling across the panel in amber" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/starfield-ca098c44.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/starfield-ca098c44.gif" data-still="../art/strip/starfield-ca098c44.png" alt="Stars flying towards the viewer" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/clock-266f4e5a.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/clock-266f4e5a.gif" data-still="../art/strip/clock-266f4e5a.png" alt="The panel&#x27;s big clock with the date underneath" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/wire-tesseract-861fb807.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/wire-tesseract-861fb807.gif" data-still="../art/strip/wire-tesseract-861fb807.png" alt="A rotating wireframe tesseract in pink" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/game-over-cfc73be4.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/game-over-cfc73be4.gif" data-still="../art/strip/game-over-cfc73be4.png" alt="A title card reading GAME OVER, thanks for playing" width="128" height="32" decoding="async"></picture><div style="display:contents" aria-hidden="true"><picture class="led"><source srcset="../art/strip/press-start-f8773fd4.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/press-start-f8773fd4.gif" data-still="../art/strip/press-start-f8773fd4.png" alt="" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/tunnel-fire-5cafe7ed.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/tunnel-fire-5cafe7ed.gif" data-still="../art/strip/tunnel-fire-5cafe7ed.png" alt="" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/kenney-walk-2df5a3fc.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/kenney-walk-2df5a3fc.gif" data-still="../art/strip/kenney-walk-2df5a3fc.png" alt="" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/wire-torus-2dd0022a.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/wire-torus-2dd0022a.gif" data-still="../art/strip/wire-torus-2dd0022a.png" alt="" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/insert-coin-ca085cc0.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/insert-coin-ca085cc0.gif" data-still="../art/strip/insert-coin-ca085cc0.png" alt="" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/starfield-ca098c44.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/starfield-ca098c44.gif" data-still="../art/strip/starfield-ca098c44.png" alt="" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/clock-266f4e5a.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/clock-266f4e5a.gif" data-still="../art/strip/clock-266f4e5a.png" alt="" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/wire-tesseract-861fb807.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/wire-tesseract-861fb807.gif" data-still="../art/strip/wire-tesseract-861fb807.png" alt="" width="128" height="32" decoding="async"></picture><picture class="led"><source srcset="../art/strip/game-over-cfc73be4.png" media="(prefers-reduced-motion: reduce)"><img src="../art/strip/game-over-cfc73be4.gif" data-still="../art/strip/game-over-cfc73be4.png" alt="" width="128" height="32" decoding="async"></picture></div></div><button type="button" id="strip-pause" aria-pressed="false" aria-label="Pause the animations">Pause</button></header>
+<div class="wrap">
+<nav aria-label="Site"><a class="brand" href="../index.html"><picture class="led" style="--cols:70;--rows:16"><img src="../art/wordmark.png" alt="OpenDMD" width="70" height="16"></picture></a><div class="links"><a href="../index.html">Overview</a><a href="../demo/" class='demo'>Try the demo</a><h4>Guide</h4><a href="hardware.html">What you need</a><a href="../install/index.html">Install</a><a href="web-app.html" class='on'>The web app</a><a href="create-art.html">Create Art</a><a href="effects.html">Effects and live items</a><a href="card.html">The SD card</a><a href="updating.html">Updating</a><a href="troubleshooting.html">Troubleshooting</a><h4>For developers</h4><a href="../dev/index.html">Building from source</a><a href="../dev/api.html">HTTP API</a><a href="../dev/simulator.html">The simulator</a><a href="../dev/pinout.html">Hardware pinout</a></div></nav>
+<main id="main">
+<h1 id="the-web-app">The web app<a class="headerlink" href="#the-web-app" title="Permanent link">#</a></h1>
+<p>Everything about your display is managed from a web page the player serves
+itself: open <strong><a href="http://opendmd.local/">http://opendmd.local/</a></strong> on any phone, tablet or computer on
+the same WiFi. There is nothing to install.</p>
+<p>On a computer the views are listed down the left side; on a phone they are
+along the bottom: <strong>Now</strong>, <strong>Library</strong>, <strong>Create Art</strong>, <strong>Playlists</strong> and
+<strong>Settings</strong>.</p>
+<p>Want to look around first? The <a href="https://opendmd.github.io/demo/">demo</a> is
+the same app running in your browser, with a few sample animations.</p>
+<h2 id="now">Now<a class="headerlink" href="#now" title="Permanent link">#</a></h2>
+<p><img alt="The Now view, previewing what the panel plays" src="../docs/images/now.png" /></p>
+<p>What the panel is showing right now: the title, platform and category, and a
+moving preview of it drawn the way the LEDs look. Use it as a remote:
+<strong>Skip</strong> to the next GIF, <strong>Pause</strong> and <strong>Resume</strong>, and drag the brightness
+slider.</p>
+<p>When a schedule or night mode is in charge, Now says so, and <strong>Wake for an
+hour</strong> brings the panel back for a while.</p>
+<h2 id="library">Library<a class="headerlink" href="#library" title="Permanent link">#</a></h2>
+<p><img alt="The Library, with a GIF's details playing" src="../docs/images/library.png" /></p>
+<p>Every GIF on your card. Search by title, pick a category from the tabs
+(these are the folders on your card), or narrow it down by platform with the
+chips underneath.</p>
+<p>Click a GIF to open its details: a preview, its title, platform, category
+and author, and what you can do with it:</p>
+<ul>
+<li><strong>Send to panel</strong> plays it now; afterwards the playlist carries on.</li>
+<li><strong>Add to playlist…</strong> puts it in a playlist. Select several GIFs to add
+  them all at once.</li>
+<li><strong>Edit in Create Art</strong> opens it in <a href="create-art.html">Create Art</a> to
+  change it.</li>
+<li><strong>Edit details…</strong> changes its title, platform, category or author. The
+  GIF is renamed on the card and every playlist keeps up.</li>
+<li><strong>Delete…</strong> removes it from the card and from every playlist, after
+  asking first.</li>
+</ul>
+<p><strong>Adding GIFs.</strong> Press <strong>+ Add GIFs</strong> and pick files from your computer or
+phone. For each one, give it a title, a platform, a category (or a new one)
+and, if you like, an author. The app suggests a title from the file name and
+shows the name the GIF will get on the card. Afterwards it offers to add the
+new GIFs to the playlist that's playing. Each GIF also gets a lighter copy
+for smooth playback, made as it uploads; you don't need to do anything.</p>
+<p><strong>Smooth motion.</strong> Some GIFs scroll or move in jumpy steps of a few pixels.
+When the app spots one, a <strong>Smooth motion</strong> switch appears under its
+preview. Turn it on and the panel fills in the in-between steps so it glides
+instead. Your GIF file isn't changed, and you can switch it off again any
+time.</p>
+<p><strong>Live and Effects</strong> are two extra tabs with things the panel draws by
+itself: a clock, scrolling text, and animated effects. See
+<a href="effects.html">Effects and live items</a>.</p>
+<h2 id="playlists">Playlists<a class="headerlink" href="#playlists" title="Permanent link">#</a></h2>
+<p><img alt="A playlist open in the editor" src="../docs/images/playlists.png" /></p>
+<p>A playlist is the set of GIFs the panel cycles through. <strong>All files</strong> is the
+default and plays everything listed on your card; <strong>Halloween</strong> and
+<strong>Christmas</strong> appear too if your card has those lists.</p>
+<ul>
+<li><strong>Make one:</strong> pick GIFs in the Library and choose <strong>Add to playlist… →
+  New playlist…</strong>, or open <strong>Build from filters</strong> to make one from
+  platforms, categories and title words (say, every SNES and Mega Drive
+  game with "Mario" in it). Shuffle and a limit are there too.</li>
+<li><strong>Edit one:</strong> open it, drag the ⠿ handles to reorder, pick entries to
+  remove them, then <strong>Save</strong>.</li>
+<li><strong>Switch to one:</strong> <strong>Save &amp; activate</strong> while editing, or <strong>Activate</strong> from
+  a playlist's <strong>…</strong> menu. The panel switches over in a few seconds.</li>
+</ul>
+<h3 id="favourites-and-hiding">Favourites and hiding<a class="headerlink" href="#favourites-and-hiding" title="Permanent link">#</a></h3>
+<p>Right-click a GIF in the Library or a playlist (long-press on a phone, or
+use its <strong>…</strong> button) to tune how it plays in that playlist:</p>
+<ul>
+<li><strong>Favourite</strong>: plays more often.</li>
+<li><strong>Play less often.</strong></li>
+<li><strong>Hide from this playlist</strong>: never plays there.</li>
+<li><strong>Play longer</strong> and <strong>Loop</strong>: stays on screen for longer, or plays a set
+  number of times.</li>
+</ul>
+<p>These are per playlist, so a GIF can be a favourite in one and hidden in
+another. <strong>Reset</strong> puts it back to normal.</p>
+<h2 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">#</a></h2>
+<p>The everyday settings are at the top and save as you change them:</p>
+<ul>
+<li><strong>Playback:</strong> brightness, how long each GIF stays on (<strong>Dwell min /
+  max</strong>), which playlist plays, a platform filter and <strong>Shuffle</strong>. Here too:
+  <strong>Colour</strong>, to show everything in full colour or in a single colour like a
+  classic dot-matrix display (amber, red, green, blue or white), and
+  <strong>Phosphor glow</strong>, which makes dots fade out softly like an old plasma
+  display.</li>
+<li><strong>Transition:</strong> how one GIF gives way to the next (dissolve, wipe,
+  blinds, push, fade or none) and how fast.</li>
+<li><strong>Start-up:</strong> the little show the panel plays when it powers on.</li>
+<li><strong>Power:</strong> <strong>Maximum brightness</strong>, a ceiling for the brightness slider.
+  Going above the suggested level can make the display reset on the power
+  supply it came with, so only raise it if you've fitted a stronger one.</li>
+</ul>
+<p>Open <strong>Advanced</strong> for the rest:</p>
+<ul>
+<li><strong>Time</strong> sets your time zone, for the clock and schedules.</li>
+<li><strong>Schedule</strong> picks a playlist or brightness for certain days and times
+  ("weekday evenings: Consoles"). The first rule that matches wins, and
+  your normal settings come back when it ends.</li>
+<li><strong>Night mode</strong> turns the panel off, or dims it, every night between the
+  times you choose.</li>
+<li><strong>Follow RePlayOS</strong> links the display to a RePlayOS gaming box: when you start a game,
+  the panel shows the console's logo, a title card and art for that game;
+  in the menus it plays a playlist of your choice. Turn on NET CONTROL on
+  the box, then enter its address and code here and press <strong>Test</strong>.</li>
+<li><strong>Playback cache</strong> shows how many GIFs have a lighter copy ready. The
+  player makes these by itself while the panel is idle; <strong>Prepare remaining
+  files</strong> does the rest now from your browser.</li>
+<li><strong>Network</strong> changes the WiFi network or the player's name (<code>opendmd</code> in
+  <code>opendmd.local</code>). These need a reboot.</li>
+<li><strong>Firmware</strong> shows the version and installs updates (see
+  <a href="updating.html">Updating</a>).</li>
+<li><strong>Security</strong> can require a key before the player can be controlled,
+  for shared networks. The web app asks for it once.</li>
+</ul>
+<h2 id="on-a-phone">On a phone<a class="headerlink" href="#on-a-phone" title="Permanent link">#</a></h2>
+<p><img src="../docs/images/phone-library.png" width="300" alt="The Library on a phone"></p>
+<p>Everything works on a phone too. The details of a GIF slide up from the
+bottom, and long-press replaces right-click.</p>
+</main>
+<footer><p>OpenDMD is an independent, open-source project. It is not made by or affiliated with
+<a href="https://dmdos.net/">DMDoS</a>: the display, its board (by <a href="https://mortaca.com">MORTACA</a>),
+the build guide and the GIF pack all come from dmdos.net. The animations on this site are recordings of
+OpenDMD's own effects and the CC0 <a href="https://kenney.nl/assets/pixel-platformer">Kenney</a> sprites.
+Code under <a href="../LICENSE-MIT.txt">MIT</a> or <a href="../LICENSE-APACHE.txt">Apache 2.0</a>.</p></footer>
+</div>
+<script>
+(function(){var d=document.documentElement,b=document.getElementById("strip-pause");if(!b)return;
+function set(p){d.classList.toggle("still",p);b.setAttribute("aria-pressed",p?"true":"false");b.textContent=p?"Play":"Pause";
+document.querySelectorAll("img[data-still]").forEach(function(i){if(!i.dataset.anim)i.dataset.anim=i.getAttribute("src");i.src=p?i.dataset.still:i.dataset.anim});
+try{localStorage.setItem("opendmd-still",p?"1":"")}catch(e){}}
+var s=false;try{s=localStorage.getItem("opendmd-still")==="1"}catch(e){}
+if(s)set(true);b.addEventListener("click",function(){set(!d.classList.contains("still"))})})();
+</script>
+</body>
+</html>
