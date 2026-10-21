@@ -16,6 +16,8 @@ background:#000 radial-gradient(closest-side,#1d1d20 50%,transparent 75%) 0 0/ca
 background:radial-gradient(closest-side,transparent 62%,rgba(0,0,0,.72) 100%);
 background-size:calc(100% / var(--cols)) calc(100% / var(--rows))}
 
+.banner{padding:9px 16px;text-align:center;font-size:14px;line-height:1.45;color:#111;background:var(--acc)}
+.banner strong{font-weight:800}
 .wrap{display:grid;grid-template-columns:248px minmax(0,1fr);max-width:1260px;margin:0 auto}
 nav{position:sticky;top:0;align-self:start;max-height:100vh;overflow:auto;padding:24px 16px;border-right:1px solid var(--line)}
 nav .brand{display:inline-block;margin:0 8px 18px;padding:8px 10px;border-radius:8px;background:#000;box-shadow:0 0 0 1px var(--line),0 0 24px rgba(247,165,49,.15)}
