@@ -16,19 +16,6 @@ background:#000 radial-gradient(closest-side,#1d1d20 50%,transparent 75%) 0 0/ca
 background:radial-gradient(closest-side,transparent 62%,rgba(0,0,0,.72) 100%);
 background-size:calc(100% / var(--cols)) calc(100% / var(--rows))}
 
-/* The strip across the top */
-.strip{position:relative;overflow:hidden;background:#000;border-bottom:1px solid var(--line);--led:3px}
-.strip::before,.strip::after{content:"";position:absolute;top:0;bottom:0;width:48px;z-index:1;pointer-events:none}
-.strip::before{left:0;background:linear-gradient(90deg,#000,transparent)}
-.strip::after{right:0;background:linear-gradient(-90deg,#000,transparent)}
-.strip .track{display:flex;width:max-content;animation:marquee 90s linear infinite}
-.strip:hover .track,.still .strip .track{animation-play-state:paused}
-.strip .led{flex:none;width:calc(128 * var(--led));margin:calc(2 * var(--led)) calc(3 * var(--led))}
-.strip .led img{height:calc(32 * var(--led))}
-.strip button{position:absolute;right:8px;bottom:8px;z-index:2;font:600 12px system-ui,sans-serif;color:var(--fg);
-background:rgba(20,21,24,.85);border:1px solid var(--line);border-radius:999px;padding:3px 10px;cursor:pointer}
-@keyframes marquee{to{transform:translateX(-50%)}}
-
 .wrap{display:grid;grid-template-columns:248px minmax(0,1fr);max-width:1260px;margin:0 auto}
 nav{position:sticky;top:0;align-self:start;max-height:100vh;overflow:auto;padding:24px 16px;border-right:1px solid var(--line)}
 nav .brand{display:inline-block;margin:0 8px 18px;padding:8px 10px;border-radius:8px;background:#000;box-shadow:0 0 0 1px var(--line),0 0 24px rgba(247,165,49,.15)}
@@ -117,16 +104,10 @@ footer p{max-width:860px;border-top:1px solid var(--line);padding-top:16px}
   main{padding:22px 16px 56px}
   footer{padding:0 16px 32px}
   h1{font-size:28px}
-  .strip{--led:2px}
-  .strip .track{animation-duration:70s}
   .hero .plate{padding:12px 14px}
   .hero .plate .led{width:280px}
   .hero .tag{font-size:18px}
   ol.steps>li{padding:12px 14px 12px 56px}
   ol.steps>li::before{left:12px;width:30px;height:30px}
   .cards{grid-template-columns:minmax(0,1fr)}
-}
-@media (prefers-reduced-motion:reduce){
-  .strip .track{animation:none}
-  .strip button{display:none}
 }
