@@ -3,7 +3,8 @@
 // reboot). Four cards (Playback, Transition, Start-up, Power) that save as
 // they change; everything else under Advanced: time, schedule, Follow
 // RePlayOS, the playback cache, network (its own Save: it reboots), the
-// device's facts, reindex and reboot, firmware and security (js/firmware.js),
+// panel timing (js/panel.js), the device's facts, reindex and reboot,
+// firmware and security (js/firmware.js),
 // and the About line.
 
 import { app, playlistLabel } from './state.js';
@@ -119,9 +120,10 @@ export async function mount(el) {
   const sched = scheduleCard();
   const follow = followCard();
   on('status', time.render);
-  const fw = h('div.grp', { id: 'st-fw', hidden: true }), sec = h('div.grp', { id: 'st-sec', hidden: true });
+  const fw = h('div.grp', { id: 'st-fw', hidden: true }), sec = h('div.grp', { id: 'st-sec', hidden: true }), pt = h('div.grp', { id: 'st-panel', hidden: true });
   let fwq;
-  const fwLoad = () => adv.open && (fwq ??= import('./firmware.js').then((m) => m.fwCards(fw, sec)));
+  // Firmware, Security and Panel timing (js/panel.js): modules of their own, loaded with Advanced.
+  const fwLoad = () => adv.open && (fwq ??= [import('./firmware.js').then((m) => m.fwCards(fw, sec)), import('./panel.js').then((m) => m.panelCard(pt))]);
   const adv = h('details.card', { id: 'st-adv', open: store.get('advanced', false), ontoggle: () => { store.set('advanced', adv.open); fwLoad(); } }, h('summary', 'Advanced'),
     time.el, sched.el, follow.el,
     h('div.grp', { id: 'pc' }, pcH,
@@ -135,7 +137,7 @@ export async function mount(el) {
         h('label.stack', 'Hostname (.local)', f.hostname)),
       h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-scan', onclick: scan }, 'Scan for networks'), nets),
       h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-save-net', onclick: () => save(['wifi_ssid', 'wifi_pass', 'hostname'], net) }, 'Save network'))),
-    h('div.grp', h('h3', 'Device'), facts, cardNote,
+    pt, h('div.grp', h('h3', 'Device'), facts, cardNote,
       h('div.row', { style: 'margin-top:12px' },
         h('button', { id: 'st-reindex', onclick: reindex }, 'Rebuild index'),
         h('button', { id: 'st-reboot-btn', onclick: reboot }, 'Reboot'))),

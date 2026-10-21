@@ -54,12 +54,13 @@ export class DeviceSource {
   }
   json(method, url, body, timeout) { return this.req(method, url, body, timeout).then((r) => r.json()); }
 
-  status() { return this.json('GET', '/api/status', undefined, 8000); }
+  // `recent`: with the Recently played list (`recent`, `recent_at`).
+  status(recent) { return this.json('GET', '/api/status' + (recent ? '?recent=1' : ''), undefined, 8000); }
   config() { return this.json('GET', '/api/config'); }
   // A playlist change (set, platforms, shuffle) rebuilds the index on the
   // device, which takes seconds; the firmware waits up to 60 s for it.
   putConfig(patch) { return this.json('PUT', '/api/config', patch); }
-  skip() { return this.json('POST', '/api/skip'); }
+  skip(back) { return this.json('POST', '/api/skip' + (back ? '?back=1' : '')); }
   pause() { return this.json('POST', '/api/pause'); }
   reindex() { return this.json('POST', '/api/reindex'); }
   reboot() { return this.json('POST', '/api/reboot'); }

@@ -96,9 +96,9 @@ export const app = {
     ];
   },
 
-  async refreshStatus() {
+  async refreshStatus(recent) {
     if (!this.device) return null;
-    this.status = await this.src.status();
+    this.status = await this.src.status(recent);
     emit('status', this.status);
     return this.status;
   },

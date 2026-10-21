@@ -17,6 +17,21 @@ const POLL_MS = 500;
 // "Exolon2 · Spectrum · Slide": the platform, category and flags by name.
 const tags = (e) => [e.platform, e.category && niceName(e.category), ...e.flags.map(flagName)].filter(Boolean).map((t) => ' · ' + t).join('');
 
+// Recently played, newest first, `at` on screen; a tap plays one again.
+function recentCard(prev, pick) {
+  const list = h('div.list', { id: 'now-recent' });
+  const card = h('div.card', { hidden: true }, h('h3', { style: 'margin-top:0' }, 'Recently played'), list);
+  card.set = (paths, at) => {
+    card.hidden = !paths.length;
+    prev.disabled = at + 1 >= paths.length;
+    clear(list, paths.map((p, k) => {
+      const e = app.wasm.parsePath(p);
+      return h('div' + (k === at ? '.cur' : ''), { onclick: () => pick(p), 'data-path': p }, h('span.grow', label(e)), h('span.muted', tags(e).slice(3)));
+    }));
+  };
+  return card;
+}
+
 export async function mount(el) {
   return app.device ? mountDevice(el) : mountLocal(el);
 }
@@ -33,6 +48,9 @@ function mountDevice(el) {
   const tagsEl = h('span', { id: 'now-tags' });
   const ord = h('span', { id: 'now-ord' });
   const pauseBtn = h('button', { id: 'now-pause', onclick: togglePause }, 'Pause');
+  const prevBtn = h('button', { id: 'now-prev', hidden: true, onclick: back }, 'Previous');
+  const againBtn = h('button', { id: 'now-again', onclick: () => pick(app.status?.now_playing?.path) }, 'Play again');
+  const rc = recentCard(prevBtn, pick);
   const bright = brightSlider('now-bright', app.config?.brightness ?? 96);
   bright.ceil(app.config?.max_brightness);
   const grid = h('span.figs', { id: 'now-stats' });
@@ -52,8 +70,9 @@ function mountDevice(el) {
     h('div.card', canvas, cap, sdLine,
       h('div.row.capl', h('span.grow', title, h('span.muted', tagsEl, ' · ', ord), ' ', followEl, ' ', conn, meta),
         h('label.cap', follow, 'Follow the panel')),
-      h('div.row', { style: 'margin-top:12px' }, pauseBtn, h('button.pri', { id: 'now-skip', onclick: skip }, 'Skip'),
+      h('div.row', { style: 'margin-top:12px' }, prevBtn, againBtn, pauseBtn, h('button.pri', { id: 'now-skip', onclick: skip }, 'Skip'),
         h('label', 'Brightness', bright.el))),
+    rc,
     more,
     lookControls(drift));
 
@@ -64,6 +83,7 @@ function mountDevice(el) {
   let clocks = [];   // [{rtt, off}]: off = device ms - local ms
   let last = null;   // the last status sample: {path, elapsed, t, frame, rate} (device clock)
   let base = null;   // this file's first sample, for the rate its position runs at
+  let recentOrd = -1; // the file `recent` was fetched with; -2: firmware without it
 
   follow.onchange = () => { store.set('follow', follow.checked); if (follow.checked) render(app.status); else { preview.clear(); shownPath = ''; } };
   const sendBright = debounce(async (v) => {
@@ -75,6 +95,13 @@ function mountDevice(el) {
   async function skip() {
     try { await app.src.skip(); setTimeout(poll, 400); } catch (e) { toast(e.message, 'bad'); }
   }
+
+  // Previous: back through Recently played, on the device.
+  const soon = () => { recentOrd = Math.min(recentOrd, -1); setTimeout(poll, 400); };
+  async function back() {
+    try { await app.src.skip(true); soon(); } catch (e) { toast(e.message, 'bad'); }
+  }
+  async function pick(p) { if (p && await app.play(p)) soon(); }
 
   async function togglePause() {
     try { const r = await app.src.pause(); app.status.paused = r.paused; render(app.status); } catch (e) { toast(e.message, 'bad'); }
@@ -149,6 +176,7 @@ function mountDevice(el) {
     followEl.textContent = followEl.title = fl ?? '';
     ord.textContent = `${np.ordinal} of ${s.entries.toLocaleString()}`;
     pauseBtn.textContent = s.paused ? 'Resume' : 'Pause';
+    againBtn.disabled = !np.path;
     const b = bannerFor(s, () => setTimeout(poll, 300));
     banner.hidden = !b;
     banner.dataset.mode = s.mode || 'normal';
@@ -179,10 +207,16 @@ function mountDevice(el) {
     if (document.hidden || busy) return;
     busy = true;
     try {
+      // Recently played changes only when a file starts: asked for then.
+      const ask = recentOrd > -2 && app.status?.now_playing?.ordinal !== recentOrd;
       const t0 = performance.now();
-      const s = await app.refreshStatus();
+      const s = await app.refreshStatus(ask);
       clock(s, t0, performance.now());
       render(s);
+      if (ask) {
+        recentOrd = s.recent ? s.now_playing.ordinal : -2;
+        if (s.recent) { prevBtn.hidden = false; rc.set(s.recent, s.recent_at); }
+      }
       sync();
       if (failures && preview.path) cap.textContent = '';
       failures = 0;
@@ -212,15 +246,21 @@ function mountLocal(el) {
   const seed = h('input', { type: 'number', id: 'sim-seed', value: 7, min: 0, style: 'width:90px' });
   const pauseBtn = h('button', { id: 'now-pause', disabled: true, onclick: () => { preview.setPaused(!preview.paused); pauseBtn.textContent = preview.paused ? 'Resume' : 'Pause'; } }, 'Pause');
   const nextBtn = h('button', { id: 'now-skip', disabled: true, onclick: () => next() }, 'Next');
+  const prevBtn = h('button', { id: 'now-prev', disabled: true, onclick: () => cur + 1 < hist.length && show(hist[++cur]) }, 'Previous');
+  const rc = recentCard(prevBtn, (p) => show(p, 1));
   let list = [];
   let i = -1;
+  // Recently played, by the device's rules (opendmd-core history.rs).
+  let hist = [];
+  let cur = 0;
 
   el.append(
     h('div.card', canvas,
       h('div.row.capl', h('span.grow', title, ' ', line), h('span.cap', 'One file in memory at a time, with the firmware’s 3–30 s dwell')),
       h('div.row', { style: 'margin-top:12px' },
         h('label', 'Playlist', listSel), h('label', 'Platforms', plats), h('label', shuffle, 'Shuffle'), h('label', 'Seed', seed),
-        h('button.pri', { id: 'sim-play', onclick: play }, 'Play'), pauseBtn, nextBtn)),
+        h('button.pri', { id: 'sim-play', onclick: play }, 'Play'), prevBtn, pauseBtn, nextBtn)),
+    rc,
     lookControls());
 
   const preview = new PanelPreview(canvas, {
@@ -253,9 +293,19 @@ function mountLocal(el) {
     i = (i + 1) % list.length;
     const path = list[i];
     if (path[0] !== '@' && !src.files.has(path)) return next(tries + 1);
-    const e = app.wasm.parsePath(path);
-    title.textContent = label(e);
     line.textContent = `· ${i + 1} of ${list.length}`;
+    await show(path, 1);
+  }
+
+  // `rec`: a new start, not Previous.
+  async function show(path, rec) {
+    if (rec) {
+      if (cur) hist.unshift(...hist.splice(cur, 1));
+      cur = 0;
+      hist = [path, ...hist.filter((p) => p !== path)].slice(0, 16);
+    }
+    rc.set(hist, cur);
+    title.textContent = label(app.wasm.parsePath(path));
     await preview.show(path, (p) => app.previewBytes(p));
   }
 
