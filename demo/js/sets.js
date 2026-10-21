@@ -289,5 +289,5 @@ export async function mount(el) {
   await loadSets();
   refresh();
   if (store.get('builder', false)) initBuilder();
-  return { show() { name.value = app.draft.name; refresh(); if (app.device) app.refreshStatus().catch(() => {}); } };
+  return { show() { name.value = app.draft.name; refresh(); if (ov.path) ov.load(ov.path); if (app.device) app.refreshStatus().catch(() => {}); } };
 }

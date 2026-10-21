@@ -25,6 +25,7 @@ export function panelCard(el) {
   const undo = btn('pt-undo', 'Undo', () => { const b = busy = boot(); send({ panel_confirm: false }).then(() => b && back()); });
   const restart = btn('pt-restart', 'Restart now', () => app.src.reboot().then(back, (e) => toast('restart: ' + e.message, 'bad')));
   const bar = h('div.banner', { id: 'pt-bar', hidden: true, style: 'margin:12px 0 0' }, msg, ' ', keep, ' ', undo, restart);
+  const tb = h('div.banner', { id: 'pt-box', hidden: true, style: 'margin:12px 0 0' });
   let left = null, tick = 0, busy = 0;
 
   async function send(patch) {
@@ -77,10 +78,10 @@ export function panelCard(el) {
     onchange: () => send({ panel: { [k]: JSON.parse(sel[k].value) } }),
   }, list.map(([v, l]) => h('option', { value: JSON.stringify(v) }, v === D[k] ? `${l} (default)` : l)))));
   el.append(h('h3', 'Panel timing'),
-    note('If some LEDs show wrong colours on certain pictures, try these one at a time',
+    note('If some LEDs show wrong colours on certain pictures, press Test panel timing, or try these one at a time',
       'Each change is tried for a minute, then undone unless you press Keep (if the panel goes dark, wait). The driver chip, data clock and refresh rate are tried after a restart; after another driver chip, switch the player off and on if colours stay odd.'),
-    h('div.form.f2', fields), bar,
-    h('div.row', { style: 'margin-top:12px' }, btn('pt-reset', 'Reset to defaults', () => send({ panel: null }))));
+    h('div.form.f2', fields), bar, tb,
+    h('div.row', { style: 'margin-top:12px' }, h('button.sm', { id: 'pt-test', hidden: app.src.kind !== 'device', onclick: () => import('./paneltest.js').then((m) => m.panelTest(tb)) }, 'Test panel timing'), btn('pt-reset', 'Reset to defaults', () => send({ panel: null }))));
   el.hidden = false;
   on('config', sync);
   sync(app.config);

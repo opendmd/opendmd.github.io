@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <meta name="description" content="OpenDMD: open firmware and a web app for the DMDoS LED dot-matrix display.">
-<title>Troubleshooting# · OpenDMD</title>
+<title>Troubleshooting · OpenDMD</title>
 <link rel="stylesheet" href="../site.css">
 </head>
 <body>
@@ -36,8 +36,17 @@
   take the SD card out and power the display on, and the panel shows its
   address.</li>
 <li>If the player can't join its saved WiFi (a new router, a changed
-  password), it opens the <strong>OpenDMD-Setup</strong> network again so you can enter
-  the new details, as on <a href="../install/index.html#first-start">first start</a>.</li>
+  password), plug it into a computer, open the <a href="../install/index.html">installer</a>,
+  click <strong>Install</strong> and choose <strong>Change Wi-Fi</strong>. Or join the
+  <strong>OpenDMD-Setup</strong> network it opens and enter the new details there, as
+  in <a href="../install/index.html#wifi-without-the-installer">WiFi without the installer</a>.</li>
+<li><strong>Two displays with the same name.</strong> Every display is called <code>opendmd</code>
+  until you rename it. When a second one joins your network with the same
+  name, one of them moves to <code>opendmd-2.local</code> (and it may be the one you
+  had first). Open <code>opendmd-2.local</code> or the display's address,
+  then give each display its own name in <strong>Settings → Advanced → Network</strong>
+  and reboot it. <strong>Settings → About</strong> shows the address a display really
+  has.</li>
 </ul>
 <h2 id="the-panel-says-theres-no-card-or-the-card-cant-be-read">The panel says there's no card, or the card can't be read<a class="headerlink" href="#the-panel-says-theres-no-card-or-the-card-cant-be-read" title="Permanent link">#</a></h2>
 <ul>
@@ -55,13 +64,19 @@ white pictures. Lower the brightness, or lower <strong>Maximum brightness</stron
 <h2 id="some-leds-show-the-wrong-colours-on-certain-pictures">Some LEDs show the wrong colours on certain pictures<a class="headerlink" href="#some-leds-show-the-wrong-colours-on-certain-pictures" title="Permanent link">#</a></h2>
 <p>If a few dots come out the wrong colour on some pictures but not others,
 the panel may be fussy about timing. Open <strong>Settings → Advanced → Panel
-timing</strong> and change one setting at a time, starting with <strong>Clock edge</strong>,
-then <strong>Latch blanking</strong>, and only then <strong>Driver chip</strong>. Each change is
-tried for a minute: press <strong>Keep</strong> if it looks better, or let it go back by
-itself. The driver chip needs a restart to try, and if the panel goes dark,
-just wait and it comes back on its own. <strong>Reset to defaults</strong> puts
+timing</strong> and press <strong>Test panel timing</strong>. The panel shows some test
+pictures, switching between <strong>A</strong> and <strong>B</strong> (the letter is in the bottom
+corner): pick the one that looks clean and it is saved. If both have dots,
+it tries a second setting the same way. Stop puts everything back, and so
+does leaving the page for two minutes.</p>
+<p>If neither helps, change the settings by hand, one at a time: <strong>Clock
+edge</strong>, then <strong>Latch blanking</strong>, and only then <strong>Driver chip</strong>. Each change
+is tried for a minute: press <strong>Keep</strong> if it looks better, or let it go back
+by itself. The driver chip needs a restart to try, and if the panel goes
+dark, just wait and it comes back on its own. <strong>Reset to defaults</strong> puts
 everything back. After trying a different driver chip, switch the display
-off and on before judging the result.</p>
+off and on before judging the result. If nothing helps, the panel itself
+may be faulty.</p>
 <h2 id="settings-says-card-running-at-reduced-speed-or-shows-card-errors">Settings says "Card running at reduced speed" or shows card errors<a class="headerlink" href="#settings-says-card-running-at-reduced-speed-or-shows-card-errors" title="Permanent link">#</a></h2>
 <p>The card is wearing out. The player keeps going as best it can, but replace
 the card soon and copy your GIFs over.</p>

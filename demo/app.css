@@ -114,7 +114,7 @@ details>summary{cursor:pointer;color:var(--mut);padding:4px 0}
 .tab{background:none;border:0;border-bottom:2px solid transparent;border-radius:0;color:var(--mut);padding:4px 12px;white-space:nowrap;flex:none}
 .tab:hover:not(:disabled){color:var(--fg);background:none}
 .tab.on{color:var(--fg);border-bottom-color:var(--acc);font-weight:600}
-.tab.sys:not(.on){opacity:.6}
+.tab.sys:not(.on){opacity:.6}.lq #lib-cats{gap:8px}#lib-cats>*{flex:none;white-space:nowrap}
 .lib-progress .bar{height:4px}
 .dhead{display:flex;gap:8px;align-items:flex-start;margin-top:12px}
 #lib-d-title{margin:0 0 4px}#lib-d-meta{margin:0}

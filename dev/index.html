@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <meta name="description" content="OpenDMD: open firmware and a web app for the DMDoS LED dot-matrix display.">
-<title>For developers# · OpenDMD</title>
+<title>For developers · OpenDMD</title>
 <link rel="stylesheet" href="../site.css">
 </head>
 <body>
@@ -40,11 +40,13 @@ make fw-flash PORT=/dev/ttyUSB0   # bench build over USB, then the serial monito
 <h2 id="releases-and-updates">Releases and updates<a class="headerlink" href="#releases-and-updates" title="Permanent link">#</a></h2>
 <pre><code class="language-sh">make fw-release              # dist/: firmware, web app pack, merged 4 MB image, signed update bundle
 make flasher                 # the browser installer with dist/ on http://localhost:8765
+make improv-check            # the real Improv Serial host library against the firmware's framing (node, npm)
 make fw-ota HOST=opendmd.local     # firmware over WiFi (signed bundle)
 make www-push HOST=opendmd.local   # web app only, over WiFi
 make site                    # this site, with dist/'s release under install/
 </code></pre>
-<p>A release build has no WiFi credentials in it; the player starts its
+<p>A release build has no WiFi credentials in it: the installer gives it
+your WiFi over USB (Improv Serial), or the player starts its
 <code>OpenDMD-Setup</code> network instead. Firmware updates over WiFi are signed
 bundles: the player checks the signature before installing, and a small
 updater program copies the new firmware into place from the SD card.</p>

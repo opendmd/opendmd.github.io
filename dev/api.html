@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <meta name="description" content="OpenDMD: open firmware and a web app for the DMDoS LED dot-matrix display.">
-<title>OpenDMD HTTP API# · OpenDMD</title>
+<title>OpenDMD HTTP API · OpenDMD</title>
 <link rel="stylesheet" href="../site.css">
 </head>
 <body>
@@ -132,6 +132,10 @@ curl -s -X POST &quot;$DMD/api/skip?back=1&quot;
 <tr>
 <td><code>ip</code>, <code>wifi</code>, <code>hostname</code></td>
 <td>address; <code>"sta"</code> or <code>"ap"</code> (setup mode); name</td>
+</tr>
+<tr>
+<td><code>mdns</code></td>
+<td>the name mDNS answers to (<code>&lt;mdns&gt;.local</code>): <code>hostname</code>, or <code>&lt;hostname&gt;-2</code> when another device has it; <code>""</code> without mDNS</td>
 </tr>
 <tr>
 <td><code>now_playing</code></td>
@@ -311,7 +315,7 @@ format running.</p>
 <tr>
 <td><code>hostname</code></td>
 <td>string, <code>"opendmd"</code></td>
-<td>name on the network (<code>opendmd.local</code>)</td>
+<td>name on the network (<code>opendmd.local</code>): 1-32 of <code>a-z 0-9 -</code>, no <code>-</code> at either end (lowercased)</td>
 </tr>
 <tr>
 <td><code>tz</code>, <code>tz_name</code></td>
@@ -405,10 +409,31 @@ playlist fields as in "Fields that recur", the panel ones as above;
 (the message says which), e.g. <code>brightness N is above the maximum M; raise
 Maximum brightness first</code> (lowering <code>max_brightness</code> below the saved
 <code>brightness</code> lowers it too); <code>404 {"error":"set not found"}</code> the playlist
-does not open; <code>409</code> a confirm with no trial; <code>413</code> over 8 KB.</p>
+does not open; <code>409</code> a confirm with no trial; <code>413</code> over 8 KB. With a
+card in, a new <code>platforms</code> (or a <code>set</code> change with a filter kept) is checked
+against the playlist that would be in force (a schedule rule's <code>set</code> if one
+applies) before anything is saved: one that would leave it empty is a <code>400</code>
+naming the filter; one whose playlist cannot be built at all is refused too
+(<code>500</code>, nothing saved). Follow RePlayOS's game and attract playlists are not
+checked up front; if a filter leaves nothing to play, Now says so and offers
+Clear filter.</p>
 <pre><code class="language-sh">curl -s -X PUT $DMD/api/config --json '{&quot;brightness&quot;:64,&quot;transition&quot;:&quot;wipe_left&quot;,&quot;transition_ms&quot;:300}'
 curl -s -X PUT $DMD/api/config --json '{&quot;set&quot;:&quot;consoles&quot;,&quot;shuffle&quot;:true}'
 curl -s -X PUT $DMD/api/config --json '{&quot;panel&quot;:{&quot;clk_phase&quot;:false}}'
+</code></pre>
+<h3 id="post-apipaneltest">POST /api/panel/test<a class="headerlink" href="#post-apipaneltest" title="Permanent link">#</a></h3>
+<p>The guided panel-timing test: the panel shows four test pictures, each
+under A then B (2 s each, the letter in the bottom-right corner), and
+nothing plays. <code>{"setting":"clk_phase"}</code> (A rising, B falling) or
+<code>"latch_blanking"</code> (A as saved, B two more, at most 4; from 4, two fewer)
+starts or restarts it; <code>{"stop":true}</code> ends it. It also ends after 120 s
+or on any <code>PUT /api/config</code>; either way the saved timing and playback come
+back. Nothing is saved (<code>panel_now</code> stays the saved values): save the pick
+with <code>"panel_confirm":true</code>. Reply: <code>{"ok":true, "setting","a","b",
+"left_s"}</code> (<code>a</code>, <code>b</code> as <code>panel</code>). <code>409</code> during a trial, with a change
+waiting for a restart, with the panel off for the night, or <code>clk_phase</code>
+on <code>mbi5124</code>/<code>dp3246</code>.</p>
+<pre><code class="language-sh">curl -s $DMD/api/panel/test --json '{&quot;setting&quot;:&quot;clk_phase&quot;}'
 </code></pre>
 <h3 id="get-apiwifiscan">GET /api/wifi/scan<a class="headerlink" href="#get-apiwifiscan" title="Permanent link">#</a></h3>
 <p>The networks in range (2.4 GHz, named, the strongest of each name), a
@@ -647,7 +672,8 @@ minutes to try again.</p>
 </tr>
 </tbody>
 </table>
-<p>Set the network with <code>PUT /api/config</code>, then reboot:</p>
+<p>Over USB, the browser installer sets it with Improv Serial instead (the
+player joins at once, no reboot). Over HTTP, set the network with <code>PUT /api/config</code>, then reboot:</p>
 <pre><code class="language-sh">curl -s -X PUT $DMD/api/config --json '{&quot;wifi_ssid&quot;:&quot;MyNet&quot;,&quot;wifi_pass&quot;:&quot;secret&quot;}'
 curl -s -X POST $DMD/api/reboot
 </code></pre>

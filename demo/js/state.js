@@ -39,6 +39,20 @@ export function setPath(set) {
   return !set ? '/filelist.txt' : set.startsWith('filelist.') ? '/' + set : `/sets/${set}.txt`;
 }
 
+// A listing that fails for any reason but "not there" (a request the busy
+// device dropped or refused with a 503) is tried twice more: an empty list
+// would show Playlists or a Library category with nothing in it until a
+// reload. A 404 (a picked folder without it, a directory gone) is [].
+export async function listOr(dir) {
+  for (let attempt = 1; ; attempt++) {
+    try { return await app.src.list(dir); } catch (e) {
+      if (e && e.status === 404) return [];
+      if (attempt >= 3) throw e;
+      await new Promise((r) => setTimeout(r, 700 * attempt));
+    }
+  }
+}
+
 export const app = {
   wasm,
   src: null,
@@ -71,20 +85,6 @@ export const app = {
   // share one listing: the device has four sockets.
   playlists() { return (this.pl ??= this.listPlaylists().finally(() => { this.pl = null; })).then((l) => [...l]); },
   async listPlaylists() {
-    // A listing that fails for any reason but "not there" (a request the
-    // busy device dropped while the Library was loading) is tried again:
-    // an empty list here would show Playlists with nothing to pick until a
-    // reload. A 404 is a locally picked folder without a root, or /sets
-    // gone meanwhile, and stays an empty list.
-    const listOr = async (dir) => {
-      for (let attempt = 1; ; attempt++) {
-        try { return await this.src.list(dir); } catch (e) {
-          if (e && e.status === 404) return [];
-          if (attempt >= 3) throw e;
-          await new Promise((r) => setTimeout(r, 700 * attempt));
-        }
-      }
-    };
     const root = await listOr('/');
     const sets = root.some((f) => f.dir && f.name === 'sets') ? await listOr('/sets') : [];
     const roots = root.filter((f) => !f.dir && /^filelist\./.test(f.name) && !OBSOLETE.test(f.name) && !/\.(idx|part|tmp|bak|meta)$/.test(f.name))

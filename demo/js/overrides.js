@@ -8,6 +8,9 @@ import { h, toast, label, base } from './util.js';
 
 const FAV = 3, LESS = 0.5;
 
+// Favourite on/off (Library, the menu, Now's ★).
+export const fav = (o = {}) => ({ ...o, w: o.w > 1 ? null : FAV, never: null });
+
 export const fileFor = (p) => (p.endsWith('.txt') ? p.slice(0, -4) : p) + '.meta';
 
 export class Overrides {
@@ -15,33 +18,43 @@ export class Overrides {
     this.path = '';      // the playlist's card path
     this.map = new Map(); // gif path -> {path, never?, w?, dwell?, dwell_x?, loops?}
     this.saving = null;
+    this.loading = null;
+    this.ok = true;
     this.again = false;
     this.onChange = () => {};
   }
 
   get name() { return playlistLabel(this.path); }
 
+  // The old map stays until the new list arrives; a change waits for it,
+  // and is refused if the list could not be read (it would wipe the rest).
   async load(path) {
     this.path = path;
-    this.map = new Map();
-    if (!path) return this;
-    let list = [];
-    try {
-      if (app.device) list = (await app.src.overrides(setValue(path))).overrides;
-      else {
+    const run = this.loading = (async () => {
+      if (!path) return [];
+      try {
+        if (app.device) return (await app.src.overrides(setValue(path))).overrides;
         const text = await app.src.readText(fileFor(path));
-        if (text) list = [...app.wasm.parseOverrides(text)];
-      }
-    } catch (e) { toast(`${this.name}: ${e.message}`, 'bad'); }
-    if (this.path === path) for (const o of list) this.map.set(o.path, o);
-    this.onChange();
+        return text ? [...app.wasm.parseOverrides(text)] : [];
+      } catch (e) { toast(`${this.name}: ${e.message}`, 'bad'); }
+    })();
+    const list = await run;
+    if (this.loading === run && this.path === path) {
+      this.ok = !!list;
+      this.map = new Map(list?.map((o) => [o.path, o]));
+      this.onChange();
+    }
     return this;
   }
 
   get(p) { return this.map.get(p); }
 
-  // Replace one GIF's override (an empty one removes it) and save.
-  set(p, o) {
+  // Replace one GIF's override (an empty one removes it; `o` may be a
+  // function of the current one) and save.
+  async set(p, o) {
+    await this.loading;
+    if (!this.ok) { toast(`couldn’t read “${this.name}”: try again`, 'bad'); return this.load(this.path); }
+    if (o.call) o = o(this.get(p) || {});
     const keep = Object.fromEntries(Object.entries(o).filter(([k, v]) => k !== 'path' && v != null && v !== false));
     if (Object.keys(keep).length) this.map.set(p, { path: p, ...keep });
     else this.map.delete(p);
@@ -59,7 +72,7 @@ export class Overrides {
         if (text || !app.device) await app.src.writeFile(file, text);
         else await app.src.deleteFile(file);
         toast(`saved for “${this.name}”${app.device && app.activePath === this.path ? ' · the player is catching up (a few seconds)' : ''}`, 'ok');
-      } catch (e) { toast(`saving for “${this.name}”: ${e.message}`, 'bad'); }
+      } catch (e) { toast(`saving for “${this.name}”: ${e.message}`, 'bad'); this.load(this.path); }
     })();
     await this.saving;
     this.saving = null;
@@ -92,14 +105,14 @@ export function menu(ov, path, x, y, extra) {
   closeMenu();
   if (!ov.path && !extra) { toast('save the playlist first', 'bad'); return; }
   const o = ov.get(path) || {};
-  const put = (patch) => { closeMenu(); ov.set(path, { ...o, ...patch }); };
+  const put = (patch) => { closeMenu(); ov.set(path, (x) => ({ ...x, ...patch })); };
   const secs = h('input', { type: 'number', min: 1, max: 86400, placeholder: 's', id: 'ov-secs', value: o.dwell || '', style: 'width:72px' });
   const loops = h('input', { type: 'number', min: 1, max: 1000, placeholder: '×', id: 'ov-loops', value: o.loops || '', style: 'width:64px' });
   const item = (id, on, text, act) => h('button.mi' + (on ? '.on' : ''), { id, onclick: act }, h('span.ck', on ? '✓' : ''), text);
   const e = app.wasm.parsePath(path);
   open = h('div.menu', { id: 'ov-menu', role: 'menu' },
     h('div.mh', h('b', label(e)), ov.path && h('span.muted', ` in “${ov.name}”`)),
-    ov.path && [item('ov-fav', o.w > 1, '★ Favourite — plays more often', () => put({ w: o.w > 1 ? null : FAV, never: null })),
+    ov.path && [item('ov-fav', o.w > 1, '★ Favourite — plays more often', () => put(fav(o))),
     item('ov-less', o.w != null && o.w < 1, '▽ Play less often', () => put({ w: o.w != null && o.w < 1 ? null : LESS, never: null })),
     item('ov-hide', o.never, '⊘ Hide from this playlist', () => put({ never: o.never ? null : true, w: null })),
     h('div.mr', h('span', 'Play longer'),

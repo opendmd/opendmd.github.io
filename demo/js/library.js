@@ -2,8 +2,8 @@
 // picked (finding new art on the web is Create Art's, js/studio.js). See
 // "The Library's layout" in CLAUDE.md.
 
-import { app, playlistLabel } from './state.js';
-import { Overrides, glyphs, menu, moreButton, actions } from './overrides.js';
+import { app, playlistLabel, listOr } from './state.js';
+import { Overrides, glyphs, menu, moreButton, actions, fav } from './overrides.js';
 import { PanelPreview } from './preview.js';
 import { prepareBytes } from './prepare.js';
 import { VList } from './vlist.js';
@@ -90,7 +90,10 @@ export async function mount(el) {
   let cat = store.get('lib.cat', 'Consoles');
   let cats = [];
   let items = [], shown = [], current = null, thumbs = thumbsOn();
-  const platforms = new Set();
+  // A search is of every GIF, with its own facets (fCats, fPlats).
+  const platforms = new Set(), fCats = new Set(), fPlats = new Set();
+  let byCat = new Map(), every, was;
+  const forget = () => { byCat = new Map(); every = null; };
 
   const search = h('input', { type: 'search', id: 'lib-search', placeholder: 'Search GIFs', enterKeyHint: 'search', oninput: () => apply() });
   const count = h('span.muted', { id: 'lib-count' });
@@ -102,7 +105,7 @@ export async function mount(el) {
   // art on the one platform chip picked, else GifCities).
   const webQ = h('b');
   const webHint = h('div.lib-web', { id: 'lib-web', hidden: true }, 'Nothing here matches “', webQ, '”. ',
-    h('button.txt', { id: 'lib-web-go', onclick: () => { app.artFind = { q: search.value.trim(), platform: platforms.size === 1 ? [...platforms][0] : '' }; app.go('create'); } }, 'Search the web in Create Art →'));
+    h('button.txt', { id: 'lib-web-go', onclick: () => { const ps = fPlats.size ? fPlats : platforms; app.artFind = { q: search.value.trim(), platform: ps.size === 1 ? [...ps][0] : '' }; app.go('create'); } }, 'Search the web in Create Art →'));
   const addBar = h('i');
   const addMsg = h('span', { id: 'lib-add-progress' });
   const addErr = h('div.log.bad', { id: 'lib-add-errors' });
@@ -210,7 +213,7 @@ export async function mount(el) {
   function detailMenu(btn) {
     const o = ov.get(current.path) || {};
     actions(btn, 'lib-d-menu', [
-      ['lib-d-fav', (o.w > 1 ? '★' : '☆') + ' Favourite in…', () => inList(btn, (x) => ({ w: x.w > 1 ? null : 3, never: null }), (x) => x.w > 1)],
+      ['lib-d-fav', (o.w > 1 ? '★' : '☆') + ' Favourite in…', () => inList(btn, fav, (x) => x.w > 1)],
       ['lib-d-hide', '⊘ Hide in…', () => inList(btn, (x) => ({ never: x.never ? null : true, w: null }), (x) => x.never)],
       app.device && ['lib-d-edit', 'Edit details…', edit],
       app.device && ['lib-d-del', 'Delete…', remove, '.danger']], label(current.e));
@@ -221,8 +224,7 @@ export async function mount(el) {
     const o = ov.get(it.path) || {};
     actions(btn, 'lib-in-menu', lists.map((p) => [{ 'data-path': p.path }, [h('span.ck', p.path === ov.path && is(o) ? '✓' : ''), p.label], async () => {
       if (p.path !== ov.path) { await ov.load(p.path); store.set('lib.ov', p.path); }
-      const x = ov.get(it.path) || {};
-      ov.set(it.path, { ...x, ...patch(x) });
+      ov.set(it.path, (x) => ({ ...x, ...patch(x) }));
     }]), 'In which playlist?');
   }
 
@@ -253,7 +255,7 @@ export async function mount(el) {
   const real = () => cats.filter(([v]) => v[0] != '@').map(([v]) => v);
   async function categories() {
     let dirs = [];
-    try { dirs = (await app.src.list('/gifs')).filter((d) => d.dir).map((d) => d.name).sort(byNice); } catch (e) { toast('listing /gifs: ' + e.message, 'bad'); }
+    try { dirs = (await listOr('/gifs')).filter((d) => d.dir).map((d) => d.name).sort(byNice); } catch (e) { toast('listing /gifs: ' + e.message, 'bad'); }
     const tab = (d) => [d, niceName(d)];
     cats = [...dirs.filter((d) => !isSys(d)).map(tab), ['@', 'Live'], ['@fx', 'Effects'], ...dirs.filter(isSys).map(tab)];
     if (!cats.some(([v]) => v === cat)) cat = dirs.includes('Consoles') ? 'Consoles' : cats[0][0];
@@ -271,48 +273,77 @@ export async function mount(el) {
 
   async function load() {
     store.set('lib.cat', cat);
+    platforms.clear();
     if (!(liveBox.hidden = cat[0] != '@')) {
       items = (await import('./live.js'))[cat == '@' ? 'items' : 'effects'](liveBox, preview, () => list.refresh());
-      platforms.clear();
-      renderChips();
       return apply();
     }
     count.textContent = 'Loading…';
-    const want = cat, dir = `/gifs/${cat}`;
-    let files = [];
-    try { files = (await app.src.list(dir)).filter((f) => !f.dir).map((f) => f.name); } catch (e) { toast(`listing ${dir}: ${e.message}`, 'bad'); }
-    if (want != cat) return;
-    items = files.filter((n) => /\.gif$/i.test(n)).map((name) => {
-      const path = `${dir}/${name}`;
-      const e = app.wasm.parsePath(path);
-      return { path, e, name, norm: app.wasm.normalizeTitle(e.title) };
-    }).sort((a, b) => a.norm.localeCompare(b.norm) || (a.e.variant ?? 0) - (b.e.variant ?? 0));
-    platforms.clear();
-    renderChips();
-    apply();
+    // The tab is listed afresh every time; a search sees the change.
+    const want = cat, old = byCat.get(cat);
+    byCat.delete(cat);
+    const got = await listCat(cat), paths = (l) => String(l?.map((x) => x.path));
+    if (paths(await old) != paths(got)) every = null;
+    if (!got) toast(`couldn’t read ${niceName(want)}: try again`, 'bad');
+    if (want == cat) { items = got || []; apply(); }
   }
 
-  function renderChips() {
-    const counts = new Map();
-    for (const it of items) if (it.e.platform) counts.set(it.e.platform, (counts.get(it.e.platform) || 0) + 1);
-    const top = [...counts].sort((a, b) => b[1] - a[1]).slice(0, 24);
-    grid.classList.toggle('noplat', top.length < 2);
-    clear(chips, top.map(([p, n]) => h('button.chip' + (platforms.has(p) ? '.on' : ''), {
-      'data-platform': p,
-      onclick: () => { if (!platforms.delete(p)) platforms.add(p); renderChips(); apply(); },
-    }, p, h('small', n))));
+  const cmp = (a, b) => a.norm.localeCompare(b.norm) || (a.e.variant ?? 0) - (b.e.variant ?? 0);
+  function listCat(c) {
+    const m = byCat, dir = `/gifs/${c}`;
+    if (!m.has(c)) m.set(c, listOr(dir).then((fs) => fs.filter((f) => !f.dir && /\.gif$/i.test(f.name)).map(({ name }) => {
+      const path = `${dir}/${name}`, e = app.wasm.parsePath(path);
+      return { path, e, name, lname: name.toLowerCase(), norm: app.wasm.normalizeTitle(e.title) };
+    }).sort(cmp), () => { m.delete(c); return null; }));
+    return m.get(c);
+  }
+  // Every GIF; with a category that couldn't be read, not kept (the next keystroke tries again).
+  async function gather() {
+    const all = [];
+    let bad = 0;
+    for (const c of real()) { const l = await listCat(c); if (l) all.push(...l); else bad++; }
+    if (bad) every = null;
+    return Object.assign(all.sort(cmp), { bad });
   }
 
-  function apply() {
-    const text = search.value;
-    const q = app.wasm.normalizeTitle(text);
-    const qn = text.trim().toLowerCase();
-    shown = items.filter((it) => (!platforms.size || platforms.has(it.e.platform))
-      && (!q || it.norm.includes(q) || (qn && it.name.toLowerCase().includes(qn))));
-    count.textContent = `${shown.length.toLocaleString()} of ${items.length.toLocaleString()}`;
+  function chipRow(el, counts, on, key, name = (v) => v) {
+    for (const v of on) if (!counts.has(v)) counts.set(v, 0);
+    const top = [...counts].sort((a, b) => on.has(b[0]) - on.has(a[0]) || b[1] - a[1]).slice(0, 24);
+    clear(el, top.map(([v, n]) => h('button.chip' + (on.has(v) ? '.on' : ''), {
+      [key]: v, 'aria-pressed': String(on.has(v)), onclick: () => { if (!on.delete(v)) on.add(v); apply(); },
+    }, name(v), h('small', n.toLocaleString()))));
+    return top.length;
+  }
+
+  // One pass: the rows, and each facet's counts under the other's choice.
+  async function apply() {
+    const text = search.value.trim(), all = !!text;
+    if (all) count.textContent = 'Searching…';
+    const pool = all ? await (every ||= gather()) : items;
+    if (text != search.value.trim()) return; // a newer apply() has run
+    if (was && !all) { fCats.clear(); fPlats.clear(); renderTabs(); }
+    if (all && !was) tabs.scrollLeft = r2.scrollLeft = 0;
+    grid.classList.toggle('lq', was = all);
+    tabs.role = all ? '' : 'tablist';
+    liveBox.hidden = all || cat[0] != '@';
+    const q = app.wasm.normalizeTitle(text), qn = text.toLowerCase(), ps = all ? fPlats : platforms;
+    const cc = new Map(), pc = new Map(), inc = (m, k) => m.set(k, (m.get(k) || 0) + 1);
+    let hits = 0;
+    shown = [];
+    for (const it of pool) {
+      if (q && !it.norm.includes(q) && !it.lname.includes(qn)) continue;
+      hits++;
+      const p = it.e.platform, okC = !fCats.size || fCats.has(it.e.category), okP = !ps.size || ps.has(p);
+      if (okP) inc(cc, it.e.category);
+      if (okC && p) inc(pc, p);
+      if (okC && okP) shown.push(it);
+    }
+    if (all) chipRow(tabs, cc, fCats, 'data-fcat', niceName);
+    grid.classList.toggle('noplat', chipRow(chips, pc, ps, 'data-platform') < 2);
+    count.textContent = `${shown.length.toLocaleString()} of ${pool.length.toLocaleString()}${pool.bad ? ' · some categories couldn’t be read: type again to retry' : ''}`;
     list.set(shown);
-    webQ.textContent = text.trim();
-    webHint.hidden = shown.length || !text.trim() || cat[0] == '@';
+    webQ.textContent = text;
+    webHint.hidden = hits || !all;
     list.el.hidden = !webHint.hidden; // no empty box under the hint
   }
 
@@ -354,11 +385,12 @@ export async function mount(el) {
 
   async function edit() {
     const to = await (await import('./details.js')).editDialog(current.path, opts());
-    if (to) { await ov.load(ov.path); await reveal(to); }
+    if (to) { forget(); await ov.load(ov.path); await reveal(to); }
   }
   async function remove() {
     if (!(await (await import('./details.js')).removeGif(current.path, label(current.e)))) return;
     current = null;
+    forget();
     body.hidden = true;
     side.classList.remove('open');
     pv.clear();
@@ -371,11 +403,18 @@ export async function mount(el) {
     const lists = await app.playlists().catch(() => []);
     const has = (p) => p && lists.some((x) => x.path === p);
     const want = [ov.path, store.get('lib.ov'), app.activePath].find(has) || lists[0]?.path || '/filelist.txt';
-    if (want !== ov.path) await ov.load(want);
+    await ov.load(want); // each time: Now's ☆ or the Playlists editor may have changed it
   }
 
   let dirty = false;
-  on('gifs', () => { dirty = true; });
+  on('gifs', (c) => { byCat.delete(c); every = null; dirty = true; });
+  // A restart or a card out and in: list everything again.
+  let up = 0, sd = app.status?.sd?.mounted;
+  on('status', (s) => {
+    if (s.uptime_secs < up || s.sd?.mounted !== sd) { forget(); dirty = true; }
+    up = s.uptime_secs;
+    sd = s.sd?.mounted;
+  });
   await categories();
   await playlists();
   sync();

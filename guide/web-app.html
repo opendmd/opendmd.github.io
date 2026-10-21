@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <meta name="description" content="OpenDMD: open firmware and a web app for the DMDoS LED dot-matrix display.">
-<title>The web app# · OpenDMD</title>
+<title>The web app · OpenDMD</title>
 <link rel="stylesheet" href="../site.css">
 </head>
 <body>
@@ -32,13 +32,26 @@ slider.</p>
 <p>Missed something? <strong>Recently played</strong> under the preview lists what the panel
 showed last, even while no page was open: tap one to play it again. <strong>Play
 again</strong> restarts what is on now, and <strong>Previous</strong> steps back one at a time.</p>
+<p>Like what's on? Tap <strong>☆</strong> next to the title to make it a favourite in the
+playlist that's playing (it turns to <strong>★</strong>; tap again to undo). The
+message that pops up names the playlist. The <strong>…</strong> on a Recently played
+GIF has the rest: play less often, hide, play longer. Clocks, text and
+effects have no ☆.</p>
 <p>When a schedule or night mode is in charge, Now says so, and <strong>Wake for an
 hour</strong> brings the panel back for a while.</p>
+<p>When there's nothing to play, Now says why instead: no card, an empty
+playlist, or a platform filter that matches none of the playlist's GIFs
+(with a <strong>Clear filter</strong> button).</p>
 <h2 id="library">Library<a class="headerlink" href="#library" title="Permanent link">#</a></h2>
 <p><img alt="The Library, with a GIF's details playing" src="../docs/images/library.png" /></p>
-<p>Every GIF on your card. Search by title, pick a category from the tabs
-(these are the folders on your card), or narrow it down by platform with the
-chips underneath.</p>
+<p>Every GIF on your card. Pick a category from the tabs (these are the
+folders on your card), or narrow it down by platform with the chips
+underneath.</p>
+<p><strong>Search</strong> looks through every GIF on the card, whatever tab you were on.
+Chips under the box show where the matches are, with a count each, say
+<strong>Consoles 42</strong> or <strong>SNES 17</strong>: tap one to narrow the results, tap it again
+to undo. You can pick a category and a platform together. Clear the box to
+go back to the tab and chips you had before.</p>
 <p>Click a GIF to open its details: a preview, its title, platform, category
 and author, and what you can do with it:</p>
 <ul>
@@ -92,12 +105,15 @@ use its <strong>…</strong> button) to tune how it plays in that playlist:</p>
   number of times.</li>
 </ul>
 <p>These are per playlist, so a GIF can be a favourite in one and hidden in
-another. <strong>Reset</strong> puts it back to normal.</p>
+another. <strong>Reset</strong> puts it back to normal. On <strong>Now</strong>, the ☆ next to the
+title makes the GIF on screen a favourite in the playlist that's playing.</p>
 <h2 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">#</a></h2>
 <p>The everyday settings are at the top and save as you change them:</p>
 <ul>
 <li><strong>Playback:</strong> brightness, how long each GIF stays on (<strong>Dwell min /
-  max</strong>), which playlist plays, a platform filter and <strong>Shuffle</strong>. Here too:
+  max</strong>), which playlist plays, <strong>Platforms</strong> and <strong>Shuffle</strong>. Platforms
+  lists the platforms in the playlist, with how many GIFs each has: tap
+  the ones to play, or <strong>All</strong>. Here too:
   <strong>Colour</strong>, to show everything in full colour or in a single colour like a
   classic dot-matrix display (amber, red, green, blue or white), and
   <strong>Phosphor glow</strong>, which makes dots fade out softly like an old plasma
@@ -124,11 +140,15 @@ another. <strong>Reset</strong> puts it back to normal.</p>
 <li><strong>Playback cache</strong> shows how many GIFs have a lighter copy ready. The
   player makes these by itself while the panel is idle; <strong>Prepare remaining
   files</strong> does the rest now from your browser.</li>
-<li><strong>Network</strong> changes the WiFi network or the player's name (<code>opendmd</code> in
-  <code>opendmd.local</code>). These need a reboot.</li>
+<li><strong>Network</strong> changes the WiFi network or the <strong>Display name</strong> (<code>opendmd</code>
+  in <code>opendmd.local</code>). Give each display its own name if you have more
+  than one. These need a reboot. <strong>About</strong> shows the address the display
+  really has: if another display already had its name, it's <code>&lt;name&gt;-2.local</code>
+  and About says so.</li>
 <li><strong>Panel timing</strong> is for a panel that shows a few wrong-coloured dots on
-  some pictures: each change is tried for a minute and undone unless you
-  press <strong>Keep</strong> (see <a href="troubleshooting.html#some-leds-show-the-wrong-colours-on-certain-pictures">Troubleshooting</a>).</li>
+  some pictures: <strong>Test panel timing</strong> shows test pictures under A and B
+  and saves the one you pick; a change by hand is tried for a minute and
+  undone unless you press <strong>Keep</strong> (see <a href="troubleshooting.html#some-leds-show-the-wrong-colours-on-certain-pictures">Troubleshooting</a>).</li>
 <li><strong>Firmware</strong> shows the version and installs updates (see
   <a href="updating.html">Updating</a>).</li>
 <li><strong>Security</strong> can require a key before the player can be controlled,
