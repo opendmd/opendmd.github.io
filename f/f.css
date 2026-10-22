@@ -1,0 +1,51 @@
+/* The share page: the web app's colours and preview, the site's headings. */
+:root{--bg:#0e0f11;--bg2:#16181b;--bg3:#1e2125;--line:#2a2e33;--fg:#dde1e6;--mut:#8b939c;--acc:#f0a030;--bad:#e55;--r:6px;color-scheme:dark}
+@font-face{font-family:Silkscreen;src:url(../fonts/silkscreen.woff2) format("woff2");font-display:swap}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--acc)}
+h1,h2,.brand{font:400 24px/1.25 Silkscreen,system-ui,sans-serif;color:var(--acc);text-rendering:geometricPrecision;overflow-wrap:anywhere;margin:0 0 12px}
+h2{font-size:16px}
+.top{display:flex;flex-wrap:wrap;align-items:center;gap:8px 20px;padding:12px 16px;border-bottom:1px solid var(--line);background:var(--bg2)}
+.brand{font-size:16px;margin:0;text-decoration:none}
+.top nav{display:flex;flex-wrap:wrap;gap:4px 16px}.top nav a{color:var(--mut);text-decoration:none}.top nav a:hover{color:var(--fg)}
+main{max-width:880px;margin:0 auto;padding:20px 16px 40px}
+.card{background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:14px;margin:0 0 14px}
+.stage{background:#000}
+.panel{display:block;width:100%;margin:0 auto;aspect-ratio:4/1;image-rendering:pixelated;background:#000;border-radius:var(--r)}
+.cap{color:var(--mut);font-size:13px;margin:8px 0 0}
+.bad{color:var(--bad)}
+.sls{margin-top:6px}
+.sls label{display:flex;align-items:center;gap:12px;min-height:36px}
+.sls span{min-width:56px;color:var(--mut);font-size:13px}
+.sls input{flex:1;accent-color:var(--acc)}
+.sls output{font:13px ui-monospace,Menlo,monospace;min-width:3em;text-align:right}
+.acts{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 14px}
+button,.btn,input,select{font:inherit;color:var(--fg);background:var(--bg3);border:1px solid var(--line);border-radius:var(--r);min-height:40px;padding:8px 14px}
+button,.btn{cursor:pointer;text-decoration:none;display:inline-flex;align-items:center}
+button:hover,.btn:hover{border-color:var(--acc)}
+.pri{background:var(--acc);border-color:var(--acc);color:#111;font-weight:600}
+.btn[aria-disabled]{opacity:.5;cursor:not-allowed}
+button.txt{background:none;border:0;padding:0 2px;min-height:0;color:var(--acc);font-size:inherit}
+:focus-visible{outline:2px solid #33d1ff;outline-offset:2px}
+.row{display:flex;gap:8px;margin-top:6px}.row input{flex:1;min-width:0}
+#f-where{margin:-6px 0 14px}
+pre{margin:0;padding:10px 12px;border:1px solid var(--line);border-radius:var(--r);background:#0a0b0c;overflow:auto;font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;tab-size:2;white-space:pre}
+.psi-hl .n{color:var(--acc)}.psi-hl .c{color:var(--mut)}.psi-hl .e{text-decoration:underline wavy var(--bad);background:#e5555530}
+.sub .grid{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:8px 12px;align-items:center;margin:12px 0}
+.sub label{color:var(--mut);font-size:13px}
+.file{display:flex;align-items:center;gap:4px;font:14px ui-monospace,Menlo,monospace;color:var(--mut)}.file input{flex:1;min-width:0;font:inherit;color:var(--fg)}
+.psi-file{margin:10px 0 12px;font-size:13px;max-height:16em}
+.qr{display:flex;align-items:center;gap:16px}
+#f-qr{flex:none;width:168px;background:#fff;border-radius:var(--r);line-height:0}#f-qr svg{width:100%;height:auto}
+.qr .cap{margin:0}
+footer{max-width:880px;margin:0 auto;padding:0 16px 32px;color:var(--mut);font-size:13px}
+@media (max-width:600px){
+  h1{font-size:16px}
+  .sub .grid{grid-template-columns:minmax(0,1fr)}
+  .sub .grid label{margin-top:6px}
+  .acts>*{flex:1 1 auto;justify-content:center}
+  .qr{display:none} /* a phone is what scans it */
+  input,select{font-size:16px}
+}

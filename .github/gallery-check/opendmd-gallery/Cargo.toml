@@ -1,0 +1,20 @@
+[package]
+name = "opendmd-gallery"
+version = "1.0.0-beta.4"
+edition = "2021"
+description = "The formula gallery's checker: validates a gallery file (header, text, slug), compiles it with opendmd-psi, estimates its cost and draws previews."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/opendmd/opendmd"
+publish = false
+
+# No dependencies but opendmd-psi, on purpose: the public site repo's
+# gallery workflow builds this crate from a vendored copy with
+# `cargo build --locked --offline` — nothing is downloaded, so nothing but
+# this source runs (see site/public-repo/.github/gallery-check/README.md).
+# (No `[patch.crates-io] gif` stanza: nothing here uses gif, and a patch
+# path that is not vendored would break that build.)
+[dependencies]
+opendmd-psi = { path = "../opendmd-psi" }
+
+[profile.release]
+debug = false

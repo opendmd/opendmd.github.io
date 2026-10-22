@@ -1,0 +1,104 @@
+# The formula gallery's check, on every pull request to the public site
+# repo (opendmd/opendmd.github.io). Installed by OpenDMD's
+# tools/site-publish.sh from site/public-repo/ in the main repository: edit
+# it there; a change made here is replaced at the next publish. The threat
+# model is in .github/gallery-check/README.md.
+#
+# ##########################################################################
+# # THE INVARIANT: nothing from the pull request is ever checked out,     #
+# # built or run. This workflow runs on `pull_request_target`, so GitHub  #
+# # runs the BASE branch's copy of this file (a pull request that edits   #
+# # it changes nothing here) - which is only safe while the contribution  #
+# # stays data:                                                            #
+# #  - it is fetched as git objects (refs/pull/<n>/merge), never checked  #
+# #    out; the checker reads its blobs with `git cat-file`;              #
+# #  - the checker is built ONLY from the merge commit's first parent     #
+# #    (main, verified to be on main), never from the pull request's copy;#
+# #  - `permissions: {}`: no token can write anything; the public repo is #
+# #    fetched anonymously; there are no secrets here;                    #
+# #  - the event's values reach the scripts through env only, and only    #
+# #    the number and the head SHA (checked: digits / 40 hex), never a    #
+# #    title, branch name or anything else a contributor typed.           #
+# # Never add a checkout of the head, `cargo`/`make`/`npm` on its tree,   #
+# # or `${{ github.event.pull_request.title }}`-like expressions.         #
+# ##########################################################################
+name: Gallery check
+
+on:
+  pull_request_target:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: gallery-check-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Gallery check (trusted)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      PR: ${{ github.event.pull_request.number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+      API_URL: ${{ github.api_url }}/repos/${{ github.repository }}
+    steps:
+      - name: Fetch the pull request (git objects only, nothing checked out)
+        run: |
+          set -euo pipefail
+          [[ "$PR" =~ ^[0-9]+$ && "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::unexpected event values"; exit 1; }
+          git init -q "$RUNNER_TEMP/pr"
+          cd "$RUNNER_TEMP/pr"
+          fetch() {
+            git fetch -q --no-tags --depth=2 "$REPO_URL" "+refs/pull/$PR/merge:refs/pr" "+refs/heads/main:refs/main"
+          }
+          # GitHub makes refs/pull/<n>/merge in the background: it can lag
+          # behind a push. Asking for the pull request's `mergeable` (no
+          # token: a public repo) starts it; then fetch again.
+          for try in 1 2 3 4 5 6; do
+            if fetch && [ "$(git rev-parse 'refs/pr^2')" = "$HEAD_SHA" ]; then break; fi
+            if [ "$try" = 6 ]; then
+              echo "::error::GitHub has no up-to-date merge of this pull request yet: re-run this check in a minute (or resolve a conflict with main)."
+              exit 1
+            fi
+            m=$(curl -fsS --max-time 20 "$API_URL/pulls/$PR" | jq -r .mergeable || true)
+            echo "the merge is not ready (mergeable: ${m:-unknown}); waiting"
+            if [ "$m" = false ]; then
+              echo "::error::this pull request conflicts with main: resolve the conflict and push again."
+              exit 1
+            fi
+            sleep $((try * ${GALLERY_WAIT:-5}))  # (GALLERY_WAIT: the local test's, 0)
+          done
+          # The first parent must be main: the checker is built from it.
+          git merge-base --is-ancestor 'refs/pr^1' refs/main || { echo "::error::the merge's first parent is not on main"; exit 1; }
+          git log --format='%H %P' -1 refs/pr
+
+      - name: The checker's source, from main (the merge's first parent)
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/base"
+          git -C "$RUNNER_TEMP/pr" archive 'refs/pr^1' .github/gallery-check | tar -x -C "$RUNNER_TEMP/base"
+
+      - name: Build the checker (offline, no dependencies)
+        run: |
+          cargo --version
+          cargo build --release --locked --offline \
+            --manifest-path "$RUNNER_TEMP/base/.github/gallery-check/opendmd-gallery/Cargo.toml" \
+            --target-dir "$RUNNER_TEMP/target"
+
+      - name: Check what the pull request adds
+        run: |
+          "$RUNNER_TEMP/target/release/opendmd-gallery" pr --repo "$RUNNER_TEMP/pr" \
+            --base 'refs/pr^1' --head refs/pr \
+            --previews "$RUNNER_TEMP/previews" --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the previews for the reviewer
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: formula-previews
+          path: ${{ runner.temp }}/previews
+          if-no-files-found: ignore
+          retention-days: 14

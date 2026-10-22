@@ -1,0 +1,8 @@
+-- Rings rippling out from a point that wanders
+loop 6
+frame {
+  cx = 0.5 + 0.35 * sin(t/6)
+  cy = 0.5 + 0.3 * cos(t/3)
+}
+d = len((x - cx) * 4, y - cy)
+pal(ocean, 0.5 + 0.5 * sin(d * 3 - t/2))

@@ -1,0 +1,36 @@
+[package]
+name = "opendmd-psi"
+version = "1.0.0-beta.4"
+edition = "2021"
+description = "Psi: OpenDMD's per-pixel effects language (Formulas) — a compiler and a row-vectorised Q16.16 VM, no_std."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/opendmd/opendmd"
+publish = false
+
+# no_std; `alloc` only in the compiler (its token and node lists). A compiled
+# `Program` is a fixed-size value and evaluating it never allocates.
+[dependencies]
+
+[features]
+default = ["tables"]
+# Psi's own copies of the sine and the five palettes, identical to
+# opendmd-core's `fx::SIN` / `PALETTES` (core's tests check it). The
+# firmware, the simulator and the web app get Psi through opendmd-core's
+# `psi` feature, which turns this off and lends core's tables instead, so
+# the device carries one copy; the standalone tests, the bench and the wasm
+# parity test use these.
+tables = []
+
+[[test]]
+name = "golden"
+required-features = ["tables"]
+
+[[example]]
+name = "bench"
+required-features = ["tables"]
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+[profile.release]
+debug = false

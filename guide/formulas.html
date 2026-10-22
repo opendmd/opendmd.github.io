@@ -13,7 +13,7 @@
 <a class="skip" href="#main">Skip to the page</a>
 <div class="banner" role="note"><strong>Preview.</strong> OpenDMD isn't publicly launched yet: what's here works, but it may change, and the source code isn't public yet.</div>
 <div class="wrap">
-<nav aria-label="Site"><a class="brand" href="../index.html"><picture class="led" style="--cols:70;--rows:16"><img src="../art/wordmark.png" alt="OpenDMD" width="70" height="16"></picture></a><div class="links"><a href="../index.html">Overview</a><a href="../demo/" class='demo'>Try the demo</a><h4>Guide</h4><a href="hardware.html">What you need</a><a href="../install/index.html">Install</a><a href="web-app.html">The web app</a><a href="create-art.html">Create Art</a><a href="effects.html">Effects and live items</a><a href="formulas.html" class='on'>Formulas</a><a href="card.html">The SD card</a><a href="updating.html">Updating</a><a href="troubleshooting.html">Troubleshooting</a><h4>For developers</h4><a href="../dev/index.html">Building from source</a><a href="../dev/api.html">HTTP API</a><a href="../dev/simulator.html">The simulator</a><a href="../dev/effects.html">Writing an effect</a><a href="../dev/pinout.html">Hardware pinout</a></div></nav>
+<nav aria-label="Site"><a class="brand" href="../index.html"><picture class="led" style="--cols:70;--rows:16"><img src="../art/wordmark.png" alt="OpenDMD" width="70" height="16"></picture></a><div class="links"><a href="../index.html">Overview</a><a href="../demo/" class='demo'>Try the demo</a><a href="../formulas/index.html">Formula gallery</a><h4>Guide</h4><a href="hardware.html">What you need</a><a href="../install/index.html">Install</a><a href="web-app.html">The web app</a><a href="create-art.html">Create Art</a><a href="effects.html">Effects and live items</a><a href="formulas.html" class='on'>Formulas</a><a href="card.html">The SD card</a><a href="updating.html">Updating</a><a href="troubleshooting.html">Troubleshooting</a><h4>For developers</h4><a href="../dev/index.html">Building from source</a><a href="../dev/api.html">HTTP API</a><a href="../dev/simulator.html">The simulator</a><a href="../dev/effects.html">Writing an effect</a><a href="../dev/pinout.html">Hardware pinout</a></div></nav>
 <main id="main">
 <h1 id="formulas">Formulas<a class="headerlink" href="#formulas" title="Permanent link">#</a></h1>
 <p><img alt="Formulas: the examples, and Plasma playing in its details" src="../docs/images/formulas.png" /></p>
@@ -32,7 +32,7 @@ there:</p>
 <ul>
 <li><strong>Remix</strong> (an example) or <strong>Edit</strong> (one of yours) opens it in the editor.</li>
 <li><strong>Save as GIF…</strong> makes a GIF of it in <a href="create-art.html">Create Art</a>.</li>
-<li><strong>Copy share link</strong> gives you a link that opens it (see
+<li><strong>Copy share link</strong> gives you a link to its own page, for anyone (see
   <a href="#sharing">Sharing</a>).</li>
 <li><strong>+ New formula</strong> starts a fresh one.</li>
 </ul>
@@ -261,15 +261,39 @@ milliseconds); all the examples are light or medium.</p>
   worked out once a frame, whatever line it's on.</li>
 </ul>
 <h2 id="sharing">Sharing<a class="headerlink" href="#sharing" title="Permanent link">#</a></h2>
-<p><strong>Copy share link</strong> gives a link with the whole formula in it, its name and
-its sliders. It opens in the <a href="https://opendmd.github.io/demo/">online demo</a>,
-so anyone can open it, with or without a player.</p>
+<p><strong>Copy share link</strong> gives a link to the formula's own page on the OpenDMD
+site, with the whole formula in it, its name and its sliders. Anyone can
+open it, with or without a player: the page plays it in the panel look,
+shows its code and its sliders, and has</p>
 <ul>
-<li>On your player, the share box also has <strong>Copy a link to this display</strong>:
-  that one opens the formula in your own player's app, on your own network.</li>
-<li>Keep formulas short to share them: past about 1,500 characters the link
-  gets long enough that some apps cut it, and the share box says so.</li>
+<li><strong>Open on my display</strong>: asks once for your display's address (it
+  suggests <code>opendmd.local</code>; the name or IP address your display shows) and
+  opens the formula in your display's editor, where you can save it. Your
+  phone or computer must be on the same network as the display.</li>
+<li><strong>Try it in the demo</strong>: opens it in the <a href="https://opendmd.github.io/demo/">online demo</a>'s
+  editor.</li>
+<li><strong>Copy code</strong> and <strong>Copy link</strong>, and a QR code of the link to open it on
+  a phone.</li>
+<li><strong>Submit to the gallery</strong> (see <a href="#the-formula-gallery">The formula gallery</a>).</li>
 </ul>
+<p>On your player, the share box also has <strong>Copy a link to this display</strong>:
+that one opens the formula in your own player's app, on your own network.
+Keep formulas short to share them: past about 1,500 characters the link
+gets long enough that some apps cut it, and the share box says so.</p>
+<h2 id="the-formula-gallery">The formula gallery<a class="headerlink" href="#the-formula-gallery" title="Permanent link">#</a></h2>
+<p>The <a href="https://opendmd.github.io/formulas/">formula gallery</a> on the OpenDMD
+site has formulas people have made, and the examples. <strong>Open</strong> shows one on
+its own page; <strong>Remix</strong> opens it in the demo's editor.</p>
+<p>To add yours, open its share link and press <strong>Submit to the gallery</strong>: give
+it a description, your name or GitHub handle and a licence (CC0, anyone may
+use it; or CC BY 4.0, with credit), then <strong>Open on GitHub</strong>. GitHub opens
+with the file ready and makes the pull request for you (you need a free
+GitHub account). A check says if anything needs fixing, a maintainer looks
+at it, and once it's merged it appears in the gallery with the next update
+of the site. The gallery takes formulas that are light enough for the panel
+(at most 8 ms a frame: "light" or "medium" in the editor) and at most 4 KB.
+The details are in the gallery's
+<a href="https://github.com/opendmd/opendmd.github.io/tree/main/gallery">README</a>.</p>
 <h2 id="saving-as-a-gif">Saving as a GIF<a class="headerlink" href="#saving-as-a-gif" title="Permanent link">#</a></h2>
 <p><strong>Save as GIF…</strong> draws one loop of the formula, at 50 frames a second (25
 for loops longer than about 5 seconds, and at most 240 frames), and opens

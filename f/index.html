@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="description" content="A formula for the OpenDMD LED display: try it, then open it on your own display.">
+<meta name="referrer" content="no-referrer">
+<title>Formula · OpenDMD</title>
+<link rel="preload" href="../fonts/silkscreen.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="f.css">
+<script type="module" src="f.js"></script>
+</head>
+<body>
+<header class="top"><a class="brand" href="../">OpenDMD</a><nav aria-label="Site"><a href="../formulas/">Gallery</a><a href="../guide/formulas.html">About formulas</a><a href="../demo/">Demo</a></nav></header>
+<main id="main">
+<div id="f-none" class="card" hidden>
+<h1>No formula here</h1>
+<p>This link has no formula in it: it may have been cut short. Pick one from the <a href="../formulas/">formula gallery</a>, or make your own in the <a href="../demo/#formulas">demo</a>.</p>
+</div>
+<article id="f" hidden>
+<h1 id="f-name"></h1>
+<div class="card stage"><canvas class="panel" id="f-panel"></canvas><p class="cap" id="f-cap"></p><div id="f-sl" class="sls"></div></div>
+<div class="acts">
+<button class="pri" id="f-open">Open on my display</button>
+<a class="btn" id="f-demo" href="../demo/">Try it in the demo</a>
+<button id="f-copy-code">Copy code</button>
+<button id="f-copy-link">Copy link</button>
+<button id="f-submit">Submit to the gallery…</button>
+</div>
+<p class="cap" id="f-where" hidden>Opens on <b id="f-where-addr"></b> · <button class="txt" id="f-change">Change</button></p>
+<form id="f-ask" class="card" hidden>
+<label for="f-addr">Your display’s address</label>
+<div class="row"><input id="f-addr" name="addr" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="opendmd.local" value="opendmd.local"><button class="pri" id="f-go">Open</button></div>
+<p class="cap">The name or IP address your display shows on its screen and in its web app (Settings › Device). Your device must be on the same network as the display. The formula opens in the display’s editor, where you can save it.</p>
+<p class="cap bad" id="f-addr-err" hidden></p>
+</form>
+<section class="card sub" id="f-sub" hidden aria-labelledby="f-sub-h">
+<h2 id="f-sub-h">Submit to the gallery</h2>
+<p class="cap">Formulas in the <a href="../formulas/">gallery</a> are files in a public GitHub repository, added by pull request. Fill this in and GitHub opens with the file ready: it makes your own copy and the pull request for you (you need a free GitHub account). A maintainer checks it before it appears.</p>
+<div class="grid">
+<label for="s-name">Name</label><input id="s-name" maxlength="40" autocomplete="off">
+<label for="s-desc">Description</label><input id="s-desc" maxlength="120" autocomplete="off" placeholder="One line: what it shows">
+<label for="s-author">Your name or GitHub handle</label><input id="s-author" maxlength="40" autocomplete="nickname" placeholder="@you">
+<label for="s-lic">Licence</label><select id="s-lic"><option value="CC0-1.0">CC0: anyone may use it, no credit needed</option><option value="CC-BY-4.0">CC BY 4.0: anyone may use it, with credit</option></select>
+<label for="s-file">File name</label><span class="file">gallery/<input id="s-file" maxlength="48" autocomplete="off" spellcheck="false">.psi</span>
+</div>
+<p class="cap bad" id="s-err" aria-live="polite"></p>
+<pre class="psi-file" id="s-text" aria-label="The file"></pre>
+<div class="acts"><a class="btn pri" id="s-go" target="_blank" rel="noopener">Open on GitHub</a><button id="s-copy">Copy the file</button></div>
+<p class="cap" id="s-long" hidden>This one is too long to hand to GitHub in a link: copy the file, then open GitHub, name the file as above and paste it in.</p>
+</section>
+<section class="card"><h2>The formula</h2><pre class="psi-hl" id="f-code"></pre>
+<p class="cap">Written in Psi, OpenDMD’s formula language: <a href="../guide/formulas.html">how formulas work</a>.</p></section>
+<section class="card qr" id="f-qr-box"><div id="f-qr"></div><p class="cap" id="f-qr-cap">Scan to open this page on your phone.</p></section>
+</article>
+</main>
+<footer><p>OpenDMD is an independent, open-source project for the DMDoS LED display. <a href="../">opendmd.github.io</a> · <a href="../licenses/">licences</a></p></footer>
+</body>
+</html>

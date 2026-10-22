@@ -1,0 +1,4 @@
+-- Moving stripes crossing, amber
+loop 4
+v = sqr(px / 16 + t/4) * sqr(py / 8 - t/2)
+pal(amber, v * 0.4 + 0.5)

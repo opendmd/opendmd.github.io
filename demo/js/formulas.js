@@ -12,6 +12,7 @@ import { app } from './state.js';
 import { PanelPreview } from './preview.js';
 import { h, clear, store, toast, debounce, saver } from './util.js';
 import { popup, closeMenu } from './overrides.js';
+import { link as mklink, parse, sliderName, about, TIP, marks } from './psikit.js';
 
 let P = null, mod = null, gen = 0;
 const psi = () => (mod ??= import(`../pkg-psi/opendmd_psi_web.js${gen ? '?' + gen : ''}`).then(async (m) => { P = { ...m, mem: (await m.default()).memory }; })
@@ -47,11 +48,6 @@ function draw(f, ms) {
 }
 const info = (src) => (take(src) && T(() => P.info(), null)) || [];
 
-// A formula's own slider names: `-- a: speed`.
-const sliderName = (src, k) => (src.match(new RegExp(`^\\s*(?:--|//)\\s*${k}\\s*[:=]\\s*(.+)$`, 'm')) || [])[1]?.trim() || k;
-const cost = (us) => (us <= 5000 ? 'light' : us <= 8000 ? 'medium' : 'heavy');
-const about = (i) => i.length ? [i[5] & 8 && `Loops every ${i[4] / 1000} s`, i[5] & 16 && 'Follows the clock', !(i[5] & 24) && 'Still', `${cost(i[6])} for the panel`].filter(Boolean).join(' · ') : '';
-const TIP = (i) => `${i[0]} steps, about ${(i[6] / 1000).toFixed(1)} ms a frame on the panel (light: under 5 ms; medium: under 8)`;
 const NOTE = () => (app.device ? 'Formulas play here in the browser for now. Save one as a GIF to play it on the panel.' : 'Formulas play here in the browser. Save one as a GIF to play it on an OpenDMD panel.');
 
 // A preview: the LED canvas, the formula it plays and its own clock.
@@ -103,19 +99,12 @@ const stored = () => { const d = store.get('psi.draft', null); return typeof d?.
 const sig = (f) => f.src + '\n\0' + (f.name || '');
 const dirty = (d) => d?.base != null && sig(d) !== d.base;
 
-function link(f, base = location.origin + location.pathname) {
-  const q = new URLSearchParams({ formula: f.src });
-  if (f.name) q.set('name', f.name);
-  const m = info(f.src)[5] || 0;
-  for (const [j, k] of ['a', 'b', 'c'].entries()) if (m & (1 << j) && f[k]) q.set(k, +f[k].toFixed(2));
-  return base + '#' + q;
-}
+// Share links (js/psikit.js: one encoder and decoder for here and the site's share page).
+const link = (f, base = location.origin + location.pathname) => mklink(f, base, info(f.src)[5] || 0);
 // `#formula=…&name=…&a=…` (app.js keeps it in app.formula).
 function fromLink(s) {
-  const q = new URLSearchParams(s), src = q.get('formula') || '', name = q.get('name') || 'Shared formula';
-  const f = { name: name.slice(0, 60), src: src.slice(0, 4096) };
-  if (f.src !== src) toast('The shared formula was too long: only its first 4,096 characters are here', 'bad');
-  for (const k of 'abc') if (q.has(k)) f[k] = Math.min(1, Math.max(0, +q.get(k) || 0));
+  const { f, cut } = parse(s);
+  if (cut) toast('The shared formula was too long: only its first 4,096 characters are here', 'bad');
   f.base = sig(f);
   return f;
 }
@@ -128,16 +117,19 @@ async function copy(text) {
   t.remove();
   return ok;
 }
-const DEMO = 'https://opendmd.github.io/demo/';
+// The formula's own page on the site (/f/: a preview, its code, Open on my
+// display, Try it in the demo); the demo's links stay on its own site.
+const SHARE = () => (app.demo ? new URL('../f/', location.href).href : 'https://opendmd.github.io/f/');
 function share(btn, f) {
-  const r = btn.getBoundingClientRect(), url = link(f, DEMO), here = app.device && link(f);
+  const r = btn.getBoundingClientRect(), url = link(f, SHARE()), here = app.device && link(f);
   const field = h('input', { type: 'text', id: 'psi-link', readOnly: true, value: url, onfocus: (e) => e.target.select() });
   const go = (u) => async () => { closeMenu(); toast((await copy(u)) ? 'Link copied' : 'Select the link and copy it', 'ok'); };
   popup(h('div.menu.wide', { id: 'psi-share', role: 'dialog', 'aria-label': 'Share' }, h('div.mh', 'Share this formula'), field,
     h('button.mi', { id: 'psi-copy', onclick: go(url) }, 'Copy link'),
-    h('p.cap', 'It opens in the online demo, for anyone.'),
+    h('p.cap', 'Anyone can open it: the formula’s own page, to try it or open it on their display.'),
     url.length > 1500 && h('p.cap.bad', `This link is long (${url.length.toLocaleString()} characters): some apps cut long links`),
-    here && h('button.mi', { id: 'psi-copy-here', 'data-url': here, onclick: go(here) }, 'Copy a link to this display')), r.left, r.bottom + 4);
+    here && h('button.mi', { id: 'psi-copy-here', 'data-url': here, onclick: go(here) }, 'Copy a link to this display'),
+    h('a.btn.mi', { id: 'psi-submit', href: url + '&submit', target: '_blank', rel: 'noopener', style: 'text-decoration:none', onclick: closeMenu }, 'Submit to the gallery…')), r.left, r.bottom + 4);
 }
 
 // "Save as GIF…": one loop drawn here, into Create Art (its timeline, text
@@ -296,30 +288,9 @@ function editor() {
   const stash = debounce(() => store.set('psi.draft', B.draft), 300);
   // Numbers (a unary minus included), comments and the error, drawn under the (transparent) text.
   function paint() {
-    const s = ta.value;
-    toks = [];
-    const cls = new Array(s.length).fill('');
-    for (const m of s.matchAll(/(--|\/\/).*|[A-Za-z_]\w*|\d+\.?\d*|\.\d+/g)) {
-      const k = m[1] ? 'c' : /[\d.]/.test(m[0][0]) ? 'n' : '';
-      let a = m.index;
-      if (k === 'n') {
-        // `-2` after an operator, a bracket or the start of a line is one number.
-        if (s[a - 1] === '-' && /[-(,=*/+?:<>!%;\n]|^$/.test(s.slice(0, a - 1).trimEnd().slice(-1))) a--;
-        toks.push({ s: a, e: m.index + m[0].length });
-      }
-      if (k) cls.fill(k, a, m.index + m[0].length);
-    }
-    if (bad) for (let i = bad[0]; i < Math.max(bad[1], bad[0] + 1) && i < s.length; i++) cls[i] += ' e';
-    const esc = (t) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;');
-    let out = '', i = 0;
-    while (i < s.length) {
-      let j = i;
-      while (j < s.length && cls[j] === cls[i]) j++;
-      out += cls[i] ? `<span class="${cls[i]}">${esc(s.slice(i, j))}</span>` : esc(s.slice(i, j));
-      i = j;
-    }
-    if (bad && bad[0] >= s.length) out += '<span class=" e"> </span>';
-    hl.innerHTML = out + '\n';
+    const s = ta.value, m = marks(s, bad);
+    toks = m.toks;
+    hl.innerHTML = m.html + '\n';
     const n = s.split('\n').length, el = bad && s.slice(0, bad[0]).split('\n').length;
     gut.innerHTML = Array.from({ length: n }, (_, k) => (k + 1 === el ? `<b>${k + 1}</b>` : k + 1)).join('\n');
     ta.style.height = `calc(${Math.max(8, n + 1) * 1.5}em + 18px)`;

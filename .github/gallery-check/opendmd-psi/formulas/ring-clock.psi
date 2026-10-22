@@ -1,0 +1,10 @@
+loop 60
+frame {
+  hr = frac(hour/12 + minute/720)       -- the hour hand as a turn
+  glow = 0.6 + 0.4*sin(t/2)
+}
+d = len((x-0.5)*4, (y-0.5))            -- the ring, centred, aspect-corrected
+ang = frac(atan2(y-0.5, (x-0.5)*4) + 0.25)
+ring = smoothstep(0.08, 0.0, abs(d - 0.8))
+hand = step(abs(ang - hr), 0.01) * step(d, 0.8)
+rgb(ring*glow*0.3 + hand, ring*glow*0.5, ring*glow)
