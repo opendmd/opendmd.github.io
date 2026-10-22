@@ -1,11 +1,14 @@
-# The formula gallery's check
+# The formula gallery's check and the site's deploy
 
 `.github/workflows/gallery-check.yml` runs on every pull request to this
-repository and checks the formulas it adds to `gallery/`. Everything under
-`.github/` here (the workflow, `CODEOWNERS`, this file and the checker's
-source in `opendmd-psi/` and `opendmd-gallery/`) is installed by OpenDMD's
-`tools/site-publish.sh` from the main repository (`site/public-repo/`):
-change it there.
+repository and checks the formulas it adds to `gallery/`.
+`.github/workflows/pages.yml` deploys the site to GitHub Pages on every push
+to `main`, with the gallery's page regenerated from `gallery/`, so a merged
+formula is live within minutes. Everything under `.github/` here (the
+workflows, `CODEOWNERS`, this file, the checker's source in `opendmd-psi/`
+and `opendmd-gallery/`, and the gallery page's generator in
+`tools/gallery_page.py`) is installed by OpenDMD's `tools/site-publish.sh`
+from the main repository (`site/public-repo/`, `tools/`): change it there.
 
 ## What it checks
 
@@ -69,8 +72,8 @@ or run):
   or anything else a contributor typed. Untrusted text is printed escaped
   (`{:?}`) in the log, so it cannot start a workflow command, and as HTML
   entities in the job summary.
-- One third-party action, `actions/upload-artifact`, pinned by full commit
-  SHA. A 10-minute timeout; one run per pull request at a time.
+- One action, `actions/upload-artifact`, pinned by full commit SHA. A
+  10-minute timeout; one run per pull request at a time.
 
 **What a malicious pull request can do:** spend a few minutes of CI; show
 the reviewer a picture (drawn by the checker, not supplied) and escaped
@@ -80,10 +83,58 @@ review (CODEOWNERS).
 
 **What it cannot do:** change what the check runs; get a token that can
 write, or any secret; run its own code; reach the site without a
-maintainer merging it. And after a merge, the site build (`tools/site.py`
-in the main repository) checks every gallery file again with the main
-repository's own copy of the checker, leaves out any that fail, never
-follows a link, and renders every field as escaped text.
+maintainer merging it. And after a merge, the deploy (below) and the site
+build (`tools/site.py` in the main repository) check every gallery file
+again with main's copy of the checker, leave out any that fail, never
+follow a link, and render every field as escaped text.
+
+## The deploy (pages.yml)
+
+The site is served by GitHub Pages from **GitHub Actions** (not from the
+branch): `pages.yml` runs on every push to `main` (a merged pull request,
+or the release's publish) and when a maintainer runs it by hand
+(`workflow_dispatch`). Its build job fetches `main` anonymously (git
+objects, `git archive`; no checkout action), builds main's vendored checker
+(`cargo build --locked --offline`, as the check does), and runs main's
+vendored `tools/gallery_page.py` (Python's standard library only, `python3
+-I`) over the site: it checks every `gallery/*.psi` again, draws the
+thumbnails and rewrites the part of `formulas/index.html` between its
+`<!-- gallery:begin -->` and `<!-- gallery:end -->` markers. That is the
+same code the release's site build runs, so given the same gallery the
+deployed page is byte for byte the one the release built. The artifact is
+the repository's files without `.github/` and `gallery/` (the formulas'
+sources are not served; their page is), and without anything that is not
+a plain file or folder (a symbolic link is deleted, never followed). The
+deploy job runs only `actions/deploy-pages`.
+
+**What it can do:** publish what is on `main`. A formula is live within
+minutes of its merge, so the merge (the maintainer's review) is the gate,
+as before; the check and the re-check still keep out a file that fails.
+
+**What it cannot do:** run on a pull request (it has no `pull_request*`
+trigger, and a fork's pull request could only ever get a read-only token
+and no `id-token`); deploy from a branch other than `main` (the
+`github-pages` environment only accepts `main`, and both jobs also check
+`github.ref`); write to the repository (the build's token is read-only and
+unused, the deploy's is `pages: write` + `id-token: write` only); read a
+secret (there are none). Untrusted text never reaches a script through an
+expression, and the step that reads gallery files first stops workflow
+commands (`::stop-commands::`), so nothing in a file can be read as one.
+
+**Who can deploy:** anyone who can get content onto `main` — a maintainer
+merging a reviewed pull request, a repository admin (bypass), the release's
+deploy key — or run the workflow on `main` by hand. Someone with write
+access can also push a branch, and a branch can carry its own workflows
+(run on push or by hand): the `github-pages` environment refuses a
+deployment from it, but keep write access to the maintainers all the same.
+
+**If Actions is unavailable** (an outage, or the deploy breaks): switch
+Pages back to the branch (Settings › Pages › Build and deployment › Source:
+Deploy from a branch, `main`, `/`) and disable `pages.yml`. The branch holds
+the whole site as the last release built it, gallery page included (as of
+that release), so the site keeps working; formulas merged since then appear
+at the next release, or when the deploy is switched back on. The deployed
+site stays up while the source is switched either way.
 
 **The publish is the other way in.** The site is pushed to `main` by the
 main repository's release workflow with a deploy key, which bypasses the
@@ -111,13 +162,22 @@ repository's secrets ever leak, remove and replace the deploy key here
    - Bypass list: Deploy keys (the site publish) and Repository admin only.
 3. Settings › General: allow squash merging only; disable auto-merge.
 4. Settings › Actions › General:
-   - Allow only actions from this repository and `actions/upload-artifact`.
+   - Allow only actions from this repository and `actions/upload-artifact@*`,
+     `actions/upload-pages-artifact@*` and `actions/deploy-pages@*` (the
+     workflows pin each by commit SHA; `upload-pages-artifact` runs
+     `upload-artifact` itself).
    - Fork pull request workflows: require approval for all external
      contributors.
    - Workflow permissions: read repository contents only; do not allow
      GitHub Actions to create or approve pull requests.
 5. Settings › Secrets and variables › Actions: confirm there are none.
-6. Settings › Pages: deploy from branch `main`, folder `/`; Enforce HTTPS.
+6. Settings › Environments › `github-pages`: Deployment branches and tags:
+   selected branches, `main` only; no other rule is needed (no secrets).
+7. Settings › Pages: Build and deployment, Source: **GitHub Actions**;
+   Enforce HTTPS. (Only after a site publish has installed `pages.yml` and
+   given `formulas/index.html` its gallery markers: then run the Pages
+   workflow once by hand and check the site. Until then, deploy from branch
+   `main`, folder `/`: the fallback above.)
 
 **The main repository (opendmd/opendmd):** restrict who can push `v*` tags
 (a tag ruleset), and consider an Environment with a required reviewer for
@@ -126,5 +186,6 @@ the release workflow's "Publish the site" step.
 **Reviewing a contribution:** the check passed; only `gallery/*.psi`
 changed; the preview looks right on a 128 × 32 panel; the name and
 description are fine for everyone; the author owns it (or it is credited
-properly); not a duplicate. Squash and merge; it appears with the next site
-publish.
+properly); not a duplicate. Squash and merge; the Pages workflow deploys it
+within minutes (Actions › Pages shows the run; its log names any file the
+re-check left out).

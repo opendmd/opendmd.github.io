@@ -38,11 +38,14 @@ const D = 20;
 let held = null;
 const take = (src) => T(() => src != null && (src === held || (P.compile(src.slice(0, 4096)) && (held = src) != null)), false);
 const Q = (v) => Math.round((v || 0) * 65536);
-function draw(f, ms) {
+// `still`: a thumbnail, drawn at 10:09:30 like the site's gallery (opendmd-gallery's
+// preview clock), so one that follows the clock doesn't come out dark at night.
+function draw(f, ms, still) {
   if (!take(f.src)) return null;
   const d = new Date();
+  const [hh, mm, ss] = still ? [10, 9, 30] : [d.getHours(), d.getMinutes(), d.getSeconds()];
   return T(() => {
-    P.frame(ms, d.getHours(), d.getMinutes(), d.getSeconds(), Q(f.a), Q(f.b), Q(f.c));
+    P.frame(ms, hh, mm, ss, Q(f.a), Q(f.b), Q(f.c));
     return new Uint8Array(P.mem.buffer, P.pixels(), 12288);
   }, null);
 }
@@ -213,7 +216,7 @@ function build(root) {
     const c = h('canvas', { width: 128, height: 32 });
     const t = h('button.psi-tile', { 'data-name': f.name, onclick: () => pick(f, m) }, c, h('b', f.name), f.desc && h('span.cap', f.desc));
     t._f = f;
-    const rgb = draw(f, Math.floor((info(f.src)[4] || 8000) * 0.3 / D) * D);
+    const rgb = draw(f, Math.floor((info(f.src)[4] || 8000) * 0.3 / D) * D, true);
     if (rgb) {
       const img = new ImageData(128, 32);
       for (let p = 0, q = 0; p < 12288; p += 3, q += 4) img.data.set([rgb[p], rgb[p + 1], rgb[p + 2], 255], q);

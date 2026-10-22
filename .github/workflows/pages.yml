@@ -1,0 +1,105 @@
+# The site's deploy to GitHub Pages, on every push to main: the repository
+# as it is (the site, as OpenDMD's release published it) with the formula
+# gallery's page and thumbnails regenerated from gallery/*.psi, so a
+# contribution is live minutes after it is merged, without a release.
+# Installed by OpenDMD's tools/site-publish.sh from site/public-repo/ in the
+# main repository: edit it there; a change made here is replaced at the next
+# publish. The threat model is in .github/gallery-check/README.md.
+#
+# ##########################################################################
+# # It only ever builds main: merged, reviewed content (and the release's  #
+# # publish). Pull requests never trigger it (no pull_request* event), and #
+# # the github-pages environment only accepts deployments from main.      #
+# #  - build: a read-only token (unused: the repo is public and fetched    #
+# #    anonymously), no secrets; the gallery page's generator and the      #
+# #    checker are main's vendored copies (.github/gallery-check/), built   #
+# #    with `cargo build --locked --offline` (nothing is downloaded); the  #
+# #    gallery files are only data, checked again and escaped; links and  #
+# #    anything but plain files and folders are left out of the artifact.  #
+# #  - deploy: only `pages: write` and `id-token: write` (what            #
+# #    actions/deploy-pages needs), no code of ours runs there.            #
+# #  - no `${{ }}` in a script; actions pinned by full commit SHA.         #
+# # It writes nothing to the repository.                                   #
+# ##########################################################################
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+# One deploy at a time, in order; a newer push waits for the one running.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build the site
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+    steps:
+      - name: Fetch main (anonymously; nothing else)
+        run: |
+          set -euo pipefail
+          # main's tip, whichever push this run is for: runs are serialised
+          # (concurrency), so the last one deploys the latest main.
+          git init -q "$RUNNER_TEMP/repo"
+          git -C "$RUNNER_TEMP/repo" fetch -q --no-tags --depth=1 "$REPO_URL" +refs/heads/main:refs/main
+          git -C "$RUNNER_TEMP/repo" log --format='main is %H (%s)' -1 refs/main
+          # The site: everything but .github/ (the workflows and the
+          # checker's source) and gallery/ (the formulas' sources).
+          mkdir "$RUNNER_TEMP/site" "$RUNNER_TEMP/src"
+          git -C "$RUNNER_TEMP/repo" archive refs/main | tar -x -C "$RUNNER_TEMP/site"
+          rm -rf "$RUNNER_TEMP/site/.github" "$RUNNER_TEMP/site/gallery"
+          # The generator, the checker's source and the contributions.
+          git -C "$RUNNER_TEMP/repo" archive refs/main .github/gallery-check gallery | tar -x -C "$RUNNER_TEMP/src"
+
+      - name: Build the checker (offline, no dependencies)
+        run: |
+          cargo --version
+          cargo build --release --locked --offline \
+            --manifest-path "$RUNNER_TEMP/src/.github/gallery-check/opendmd-gallery/Cargo.toml" \
+            --target-dir "$RUNNER_TEMP/target"
+
+      - name: Regenerate the formula gallery
+        run: |
+          set -euo pipefail
+          # No workflow commands from here on: nothing a gallery file holds
+          # can be read as one.
+          echo "::stop-commands::$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+          # Only plain files and folders are published: a link (which the
+          # artifact's tar would follow) or anything else is left out.
+          find "$RUNNER_TEMP/site" ! -type f ! -type d -print -delete | sed 's/^/left out (not a plain file): /'
+          python3 --version
+          python3 -I "$RUNNER_TEMP/src/.github/gallery-check/tools/gallery_page.py" "$RUNNER_TEMP/site" \
+            --tool "$RUNNER_TEMP/target/release/opendmd-gallery" --gallery "$RUNNER_TEMP/src/gallery"
+
+      - name: Upload the site
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: ${{ runner.temp }}/site
+
+  deploy:
+    name: Deploy
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
