@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="description" content="OpenDMD: open firmware and a web app for the DMDoS LED dot-matrix display.">
+<title>Formulas · OpenDMD</title>
+<link rel="preload" href="../fonts/silkscreen.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="../site.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to the page</a>
+<div class="banner" role="note"><strong>Preview.</strong> OpenDMD isn't publicly launched yet: what's here works, but it may change, and the source code isn't public yet.</div>
+<div class="wrap">
+<nav aria-label="Site"><a class="brand" href="../index.html"><picture class="led" style="--cols:70;--rows:16"><img src="../art/wordmark.png" alt="OpenDMD" width="70" height="16"></picture></a><div class="links"><a href="../index.html">Overview</a><a href="../demo/" class='demo'>Try the demo</a><h4>Guide</h4><a href="hardware.html">What you need</a><a href="../install/index.html">Install</a><a href="web-app.html">The web app</a><a href="create-art.html">Create Art</a><a href="effects.html">Effects and live items</a><a href="formulas.html" class='on'>Formulas</a><a href="card.html">The SD card</a><a href="updating.html">Updating</a><a href="troubleshooting.html">Troubleshooting</a><h4>For developers</h4><a href="../dev/index.html">Building from source</a><a href="../dev/api.html">HTTP API</a><a href="../dev/simulator.html">The simulator</a><a href="../dev/effects.html">Writing an effect</a><a href="../dev/pinout.html">Hardware pinout</a></div></nav>
+<main id="main">
+<h1 id="formulas">Formulas<a class="headerlink" href="#formulas" title="Permanent link">#</a></h1>
+<p><img alt="Formulas: the examples, and Plasma playing in its details" src="../docs/images/formulas.png" /></p>
+<p>A formula is a few lines of maths that draw on the panel, every pixel at
+once. Change a number and the picture changes as you type. Formulas are
+written in <strong>Psi</strong> (Ψ), OpenDMD's small language for the panel's pixels,
+but you don't need to know it to start: open an example, drag a number,
+and watch.</p>
+<p>Open <strong>Formulas</strong> (Ψ) in the app's menu. Formulas work in the
+<a href="https://opendmd.github.io/demo/">online demo</a> too, with no player at all.</p>
+<h2 id="the-gallery">The gallery<a class="headerlink" href="#the-gallery" title="Permanent link">#</a></h2>
+<p>Formulas opens on the examples (plasma, fire, rain, a clock, a sunrise that
+follows the time of day, and more) and the formulas you've saved. Pick one
+to see it playing in the panel look, with its sliders if it has any. From
+there:</p>
+<ul>
+<li><strong>Remix</strong> (an example) or <strong>Edit</strong> (one of yours) opens it in the editor.</li>
+<li><strong>Save as GIF…</strong> makes a GIF of it in <a href="create-art.html">Create Art</a>.</li>
+<li><strong>Copy share link</strong> gives you a link that opens it (see
+  <a href="#sharing">Sharing</a>).</li>
+<li><strong>+ New formula</strong> starts a fresh one.</li>
+</ul>
+<p>If you leave the editor without saving, the gallery offers <strong>Continue
+editing</strong> at the top, and the app asks before anything replaces it.</p>
+<p>Formulas play here in the browser for now. To play one on the panel, save
+it as a GIF.</p>
+<h2 id="the-editor">The editor<a class="headerlink" href="#the-editor" title="Permanent link">#</a></h2>
+<p>The preview is on top (on a phone it stays in view while you scroll) and
+the formula underneath; the preview follows as you type. Under it, a line
+says how long the loop is (or that the formula follows the clock) and how
+hard it is for the panel. If something is wrong, the editor says what in
+plain words just above the formula, marks the place, and keeps playing the
+last version that worked, dimmed.</p>
+<ul>
+<li><strong>Drag a number</strong> left or right to try other values. On a computer, drag
+  it right in the text, or put the cursor on it and press Alt + ↑ or ↓
+  (Shift for bigger steps). On a phone, tap a number and drag the bar that
+  appears under the formula, or use its − and + buttons. Numbers can go
+  below zero. Ctrl+Z (⌘Z) undoes a whole drag at once.</li>
+<li><strong>Sliders:</strong> a formula that uses <code>a</code>, <code>b</code> or <code>c</code> gets a slider for each,
+  0 to 1. A comment like <code>-- a: speed</code> gives the slider a name.</li>
+<li><strong>Cheat sheet</strong> lists everything the language has, with a line on each.
+  Tap a name to put it in.</li>
+<li><strong>Save</strong> keeps the formula in this browser, under its name.</li>
+</ul>
+<h2 id="a-plasma-in-two-minutes">A plasma in two minutes<a class="headerlink" href="#a-plasma-in-two-minutes" title="Permanent link">#</a></h2>
+<p>Press <strong>+ New formula</strong>, clear the text, and build it up line by line.</p>
+<ol>
+<li>Start with a gradient. <code>x</code> goes from 0 at the left edge to 1 at the
+   right, and <code>gray</code> turns a number from 0 to 1 into black to white:</li>
+</ol>
+<p><code>gray(x)</code></p>
+<ol start="2">
+<li>Make waves. <code>sin</code> goes up and down between −1 and 1 once for every 1 it
+   is given, so <code>x*2</code> gives two waves across the panel. Halve it and add a
+   half to keep it between 0 and 1:</li>
+</ol>
+<p><code>gray(sin(x*2)*0.5 + 0.5)</code></p>
+<ol start="3">
+<li>Set it moving. <code>t</code> is the time in seconds; <code>loop 8</code> makes the loop eight
+   seconds long, and <code>t/8</code> moves the wave once along in that time, so it
+   loops without a jump:</li>
+</ol>
+<p><code>loop 8
+   gray(sin(x*2 + t/8)*0.5 + 0.5)</code></p>
+<ol start="4">
+<li>Add a second wave going up and down the panel (<code>y</code> is 0 at the bottom, 1
+   at the top), moving the other way and twice as fast. Give the sum a name:</li>
+</ol>
+<p><code>loop 8
+   wave = sin(x*2 + t/8) + sin(y*1.5 - t/4)
+   gray(wave/4 + 0.5)</code></p>
+<ol start="5">
+<li>Colour it. <code>hsv</code> takes a hue (once round the rainbow for every 1), a
+   saturation and a brightness. Let the wave pick the hue, and turn the
+   rainbow once a loop:</li>
+</ol>
+<p><code>loop 8
+   wave = sin(x*2 + t/8) + sin(y*1.5 - t/4)
+   hsv(wave/4 + t/8, 1, 1)</code></p>
+<ol start="6">
+<li>One more wave, on a slant, and it's the Plasma example:</li>
+</ol>
+<p><code>loop 8
+   wave = sin(x*2 + t/8) + sin(y*1.5 - t/4) + sin(x*1.5 + y + t/8)
+   hsv(wave/6 + t/8, 0.9, 1)</code></p>
+<p>Now drag the <code>2</code> in <code>x*2</code>, or the <code>0.9</code>, and see what happens.</p>
+<h2 id="the-language">The language<a class="headerlink" href="#the-language" title="Permanent link">#</a></h2>
+<p>A formula is a few lines: names you set (<code>wave = …</code>, each name once), and a
+colour on the last line. It is worked out for every pixel, every frame.
+<code>--</code> starts a comment. Everything is a number; there are no loops, lists or
+words.</p>
+<p><strong>Values</strong></p>
+<table>
+<thead>
+<tr>
+<th>name</th>
+<th>what</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>x</code>, <code>y</code></td>
+<td>where the pixel is: 0 to 1 across (left to right) and up (bottom to top)</td>
+</tr>
+<tr>
+<td><code>px</code>, <code>py</code></td>
+<td>the pixel's column, 0–127, and row from the bottom, 0–31</td>
+</tr>
+<tr>
+<td><code>i</code></td>
+<td>the pixel's number, 0–4095, from the top left</td>
+</tr>
+<tr>
+<td><code>t</code></td>
+<td>seconds into the loop</td>
+</tr>
+<tr>
+<td><code>hour</code>, <code>minute</code>, <code>second</code></td>
+<td>the time of day</td>
+</tr>
+<tr>
+<td><code>a</code>, <code>b</code>, <code>c</code></td>
+<td>the sliders, 0 to 1</td>
+</tr>
+<tr>
+<td><code>w</code>, <code>h</code></td>
+<td>128 and 32</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Functions.</strong> Waves and angles are in <em>turns</em>, not degrees or radians:
+<code>sin(0.25)</code> is 1, and <code>sin</code> repeats every 1.</p>
+<table>
+<thead>
+<tr>
+<th>function</th>
+<th>what</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>sin(v)</code>, <code>cos(v)</code></td>
+<td>a smooth wave between −1 and 1</td>
+</tr>
+<tr>
+<td><code>tri(v)</code>, <code>saw(v)</code>, <code>sqr(v)</code></td>
+<td>triangle, sawtooth and square waves, −1 to 1</td>
+</tr>
+<tr>
+<td><code>abs(v)</code>, <code>floor(v)</code>, <code>frac(v)</code>, <code>sqrt(v)</code></td>
+<td>size, whole part, fraction, square root</td>
+</tr>
+<tr>
+<td><code>min(a, b)</code>, <code>max(a, b)</code>, <code>clamp(v, lo, hi)</code></td>
+<td>limits</td>
+</tr>
+<tr>
+<td><code>mix(a, b, k)</code></td>
+<td>from <code>a</code> to <code>b</code> as <code>k</code> goes from 0 to 1</td>
+</tr>
+<tr>
+<td><code>step(edge, v)</code></td>
+<td>1 when <code>v</code> is past <code>edge</code>, else 0</td>
+</tr>
+<tr>
+<td><code>smoothstep(e0, e1, v)</code></td>
+<td>a soft step from 0 to 1</td>
+</tr>
+<tr>
+<td><code>len(dx, dy)</code></td>
+<td>the distance, √(dx² + dy²)</td>
+</tr>
+<tr>
+<td><code>atan2(dy, dx)</code></td>
+<td>an angle, in turns (−½ to ½)</td>
+</tr>
+<tr>
+<td><code>noise(x, y, z)</code></td>
+<td>smooth random hills, 0 to 1</td>
+</tr>
+<tr>
+<td><code>hash(a, b)</code></td>
+<td>a random number, 0 to 1</td>
+</tr>
+<tr>
+<td><code>c ? a : b</code>, <code>select(c, a, b)</code></td>
+<td><code>a</code> when <code>c</code> is true (not 0), else <code>b</code></td>
+</tr>
+</tbody>
+</table>
+<p>Operators: <code>+ - * / %</code>, comparisons <code>&lt; &lt;= &gt; &gt;= == !=</code> (1 for true, 0 for
+false), and <code>and</code>, <code>or</code>, <code>not</code>. There is no power operator: write <code>x * x</code>.</p>
+<p><strong>Colour</strong> (the last line):</p>
+<table>
+<thead>
+<tr>
+<th>colour</th>
+<th>what</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>hsv(hue, sat, val)</code></td>
+<td>hue in turns; saturation and brightness 0 to 1</td>
+</tr>
+<tr>
+<td><code>rgb(r, g, b)</code></td>
+<td>red, green and blue, 0 to 1 each</td>
+</tr>
+<tr>
+<td><code>pal(name, v)</code></td>
+<td>a palette, <code>v</code> from 0 to 1: <code>fire</code>, <code>ice</code> (or <code>ocean</code>), <code>chrono</code>, <code>amber</code>, <code>rainbow</code>, <code>gray</code></td>
+</tr>
+<tr>
+<td><code>gray(v)</code></td>
+<td>black to white</td>
+</tr>
+</tbody>
+</table>
+<p>A last line that is just a number is <code>gray</code> of it.</p>
+<p><strong>The loop and the frame.</strong> <code>loop N</code> on a line of its own sets how long
+the loop is, in seconds (8 if you leave it out). For a seamless loop,
+everything that moves should come back to where it started: use <code>t/N</code>,
+<code>t*2/N</code> and so on with the loop's own <code>N</code>. Values inside <code>frame { … }</code>
+are worked out once a frame rather than for every pixel; they can't use
+the pixel's position.</p>
+<p><strong>Limits.</strong> A formula can be 4,096 characters and 256 steps (the editor
+shows the count). Numbers go from −32,768 to 32,767; past that they stop
+at the end instead of wrapping round, and dividing by zero gives the
+biggest number of the right sign rather than an error.</p>
+<h2 id="keeping-them-fast">Keeping them fast<a class="headerlink" href="#keeping-them-fast" title="Permanent link">#</a></h2>
+<p>Formulas are made to run on the panel's own small processor too, which
+draws every pixel 50 times a second. The editor rates each one <strong>light</strong>,
+<strong>medium</strong> or <strong>heavy</strong> for the panel (hover for an estimate in
+milliseconds); all the examples are light or medium.</p>
+<ul>
+<li>Cheap: <code>+ - *</code>, the waves (<code>sin</code>, <code>cos</code>, <code>tri</code>, <code>saw</code>, <code>sqr</code>), <code>abs</code>,
+  <code>frac</code>, <code>min</code>, <code>max</code>, <code>clamp</code>, <code>step</code>, comparisons, <code>pal</code>.</li>
+<li>Dividing by a fixed number (<code>x/8</code>) is free: it becomes a multiply.</li>
+<li>Dear: <code>noise</code>, <code>len</code>, <code>sqrt</code>, <code>atan2</code>, <code>smoothstep</code>, <code>hash</code>, and dividing
+  by something that changes from pixel to pixel. One of them is fine;
+  several add up.</li>
+<li>Anything that doesn't depend on the pixel (<code>hour/12</code>, <code>sin(t/8)</code>) is
+  worked out once a frame, whatever line it's on.</li>
+</ul>
+<h2 id="sharing">Sharing<a class="headerlink" href="#sharing" title="Permanent link">#</a></h2>
+<p><strong>Copy share link</strong> gives a link with the whole formula in it, its name and
+its sliders. It opens in the <a href="https://opendmd.github.io/demo/">online demo</a>,
+so anyone can open it, with or without a player.</p>
+<ul>
+<li>On your player, the share box also has <strong>Copy a link to this display</strong>:
+  that one opens the formula in your own player's app, on your own network.</li>
+<li>Keep formulas short to share them: past about 1,500 characters the link
+  gets long enough that some apps cut it, and the share box says so.</li>
+</ul>
+<h2 id="saving-as-a-gif">Saving as a GIF<a class="headerlink" href="#saving-as-a-gif" title="Permanent link">#</a></h2>
+<p><strong>Save as GIF…</strong> draws one loop of the formula, at 50 frames a second (25
+for loops longer than about 5 seconds, and at most 240 frames), and opens
+it in <a href="create-art.html">Create Art</a>, titled with its name. Add text, trim it
+or change its speed there, then save it to your card: it plays on the panel
+like any other GIF and goes in playlists.</p>
+<p>Formulas you save are kept in this browser. Another browser, or a cleared
+browser, won't have them: share a link to yourself to move one.</p>
+<h2 id="coming-next">Coming next<a class="headerlink" href="#coming-next" title="Permanent link">#</a></h2>
+<p>Playing formulas live on the panel, in playlists next to the effects, is
+coming. A formula then runs on the player itself, follows the clock and
+loops forever without the size of a GIF.</p>
+</main>
+<footer><p>OpenDMD is an independent, open-source project. It is not made by or affiliated with
+<a href="https://dmdos.net/">DMDoS</a>: the display, its board (by <a href="https://mortaca.com">MORTACA</a>),
+the build guide and the GIF pack all come from dmdos.net. The animations on this site are recordings of
+OpenDMD's own effects and the CC0 <a href="https://kenney.nl/assets/pixel-platformer">Kenney</a> sprites.
+Code under <a href="../LICENSE-MIT.txt">MIT</a> or <a href="../LICENSE-APACHE.txt">Apache 2.0</a>;
+<a href="../licenses/">third-party licences</a>.</p></footer>
+</div>
+</body>
+</html>

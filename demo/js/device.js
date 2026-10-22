@@ -43,7 +43,8 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
   const facts = h('dl.facts', { id: 'st-facts' });
   // One quiet line, only when the card has had trouble (sdhealth on the device).
   const cardNote = h('p.cap', { id: 'st-card-note', hidden: true, style: 'margin-top:12px' });
-  // Where and what this player is: its address, its firmware and this page's version; the API reference (api.html, from docs/api.md).
+  // Where and what this player is: its address, its firmware and this page's version; the API reference (api.html, from docs/api.md)
+  // and the third-party licences (licenses.txt, from licenses/ by make web).
   const about = h('dl.facts', { id: 'st-about' });
 
   banner.append('Saved. WiFi changes take effect after a reboot. ', h('button.sm', { onclick: reboot }, 'Reboot now'));
@@ -100,7 +101,8 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
       fact('GIFs started', s.gifs_started.toLocaleString()));
     const mm = s.mdns && s.mdns !== s.hostname;
     clear(about, fact('Address', [`${mm ? s.mdns : s.hostname}.local · ${s.ip}`, mm && h('div.bad', { id: 'st-mdns' }, `“${s.hostname}” is taken; this display is at ${s.mdns}.local. Give it its own name.`)]), fact('Firmware', `${s.version} (${s.variant})`), fact('Web app', s.www_version ?? '–'),
-      fact('API', h('a', { id: 'st-api', href: './api.html', target: '_blank', rel: 'noopener' }, 'API reference')));
+      fact('API', h('a', { id: 'st-api', href: './api.html', target: '_blank', rel: 'noopener' }, 'API reference')),
+      fact('Licences', h('a', { id: 'st-licences', href: './licenses.txt', target: '_blank', rel: 'noopener' }, 'Open-source licences')));
     const errs = sd.failures || (!sd.mounted && sd.reboots) || 0;
     cardNote.textContent = errs ? `Card errors: ${errs}, retrying`
       : sd.fallback ? 'Card running at reduced speed after errors' : '';

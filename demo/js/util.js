@@ -43,7 +43,7 @@ export const store = {
     try { const v = localStorage.getItem('odmd.' + key); return v == null ? fallback : JSON.parse(v); } catch { return fallback; }
   },
   set(key, value) {
-    try { localStorage.setItem('odmd.' + key, JSON.stringify(value)); } catch { /* private mode */ }
+    try { localStorage.setItem('odmd.' + key, JSON.stringify(value)); return true; } catch { return false; /* private mode, full */ }
   },
 };
 

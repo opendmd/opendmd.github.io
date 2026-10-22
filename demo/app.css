@@ -194,3 +194,6 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #set-entries{height:calc(100dvh - 380px)}#set-name-row:not([hidden])~#set-entries{height:calc(100dvh - 450px)}
 @media (max-width:1000px){.ed .sl,#view-sets:not(.ed) .se{display:none}.back{display:inline-flex}}
 @media (max-width:760px){.edfoot{bottom:calc(58px + env(safe-area-inset-bottom))}#set-entries{height:calc(100dvh - 420px)}#set-name-row:not([hidden])~#set-entries{height:calc(100dvh - 490px)}.transport>button{max-width:none}}
+/* Six items on a small phone: "Create" (the view's title says Create Art). */
+#nav .na{font-weight:inherit}
+@media (max-width:420px){#nav .na{display:none}}

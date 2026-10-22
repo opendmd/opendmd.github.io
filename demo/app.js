@@ -1,8 +1,8 @@
 // Entry point: load the wasm module, find out whether a device is serving us
 // (GET /api/status) or we are a static page on a laptop (local mode), and
-// route between the five views (Create Art is the Studio, js/studio.js, whose
-// stylesheet and wasm load when it is first opened; `#studio`, its old
-// address, still leads there). Each view is a module with
+// route between the six views (Create Art is the Studio, js/studio.js, and
+// Formulas js/formulas.js, whose stylesheets and wasm load when they are
+// first opened; `#studio`, Create Art's old address, still leads there). Each view is a module with
 // `mount(el) -> {show, hide}`, mounted on first visit.
 
 import init from './pkg/opendmd_web.js';
@@ -13,7 +13,7 @@ import { closeMenu } from './js/overrides.js';
 
 await init();
 
-const VIEWS = ['now', 'library', 'sets', 'create', 'settings'];
+const VIEWS = ['now', 'library', 'sets', 'formulas', 'create', 'settings'];
 const MODULE = { create: 'studio' };
 // name -> the mount promise; ready[name] once it has resolved.
 const mounted = {}, ready = {};
@@ -24,8 +24,13 @@ let current = '', shown = '';
 // hash change while a view is still mounting (or before the source is
 // known) mounts whatever the hash says once it can.
 async function route() {
+  // Old addresses: the Studio's, and the editor's when Formulas were a Library tab.
   if (location.hash === '#studio') { location.replace('#create'); return; }
-  const [v, sub = ''] = location.hash.slice(1).split('/');
+  if (location.hash === '#library/formula') { location.replace('#formulas/edit'); return; }
+  // A shared formula: the Formulas editor (js/formulas.js reads it, and
+  // replaces the address once the editor has it).
+  const f = location.hash.startsWith('#formula=') && (app.formula = location.hash.slice(1));
+  const [v, sub = ''] = f ? ['formulas', 'edit'] : location.hash.slice(1).split('/');
   const name = VIEWS.includes(v) ? v : 'now';
   if (name !== current) {
     if (shown) ready[shown]?.hide?.();

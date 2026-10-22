@@ -13,7 +13,7 @@
 <a class="skip" href="#main">Skip to the page</a>
 <div class="banner" role="note"><strong>Preview.</strong> OpenDMD isn't publicly launched yet: what's here works, but it may change, and the source code isn't public yet.</div>
 <div class="wrap">
-<nav aria-label="Site"><a class="brand" href="index.html"><picture class="led" style="--cols:70;--rows:16"><img src="art/wordmark.png" alt="OpenDMD" width="70" height="16"></picture></a><div class="links"><a href="index.html" class='on'>Overview</a><a href="demo/" class='demo'>Try the demo</a><h4>Guide</h4><a href="guide/hardware.html">What you need</a><a href="install/index.html">Install</a><a href="guide/web-app.html">The web app</a><a href="guide/create-art.html">Create Art</a><a href="guide/effects.html">Effects and live items</a><a href="guide/card.html">The SD card</a><a href="guide/updating.html">Updating</a><a href="guide/troubleshooting.html">Troubleshooting</a><h4>For developers</h4><a href="dev/index.html">Building from source</a><a href="dev/api.html">HTTP API</a><a href="dev/simulator.html">The simulator</a><a href="dev/effects.html">Writing an effect</a><a href="dev/pinout.html">Hardware pinout</a></div></nav>
+<nav aria-label="Site"><a class="brand" href="index.html"><picture class="led" style="--cols:70;--rows:16"><img src="art/wordmark.png" alt="OpenDMD" width="70" height="16"></picture></a><div class="links"><a href="index.html" class='on'>Overview</a><a href="demo/" class='demo'>Try the demo</a><h4>Guide</h4><a href="guide/hardware.html">What you need</a><a href="install/index.html">Install</a><a href="guide/web-app.html">The web app</a><a href="guide/create-art.html">Create Art</a><a href="guide/effects.html">Effects and live items</a><a href="guide/formulas.html">Formulas</a><a href="guide/card.html">The SD card</a><a href="guide/updating.html">Updating</a><a href="guide/troubleshooting.html">Troubleshooting</a><h4>For developers</h4><a href="dev/index.html">Building from source</a><a href="dev/api.html">HTTP API</a><a href="dev/simulator.html">The simulator</a><a href="dev/effects.html">Writing an effect</a><a href="dev/pinout.html">Hardware pinout</a></div></nav>
 <main id="main">
 <section class="hero">
 <h1><span class="plate"><picture class="led" style="--cols:70;--rows:16"><img src="art/wordmark.png" alt="OpenDMD" width="70" height="16"></picture></span></h1>
@@ -34,7 +34,8 @@ it is, and adds a web app to manage it.</p>
 <li><strong>The web app</strong> at <code>http://opendmd.local/</code> works in any browser, on a phone or a computer.
   Previews and GIF preparation run right in the browser, using the same engine as the player.</li>
 <li><strong>The simulator</strong> plays a card in a desktop window, drawn as LEDs rather than flat pixels
-  (<a href="dev/simulator.html#download">downloads</a> for macOS, Windows and Linux).</li>
+  (for developers: <a href="dev/simulator.html">build it from source</a>; everyone else can try the
+  <a href="https://opendmd.github.io/demo/">web demo</a>).</li>
 </ul>
 <div class="tiles"><figure><picture class="led"><source srcset="art/strip/press-start-f8773fd4.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/press-start-f8773fd4.gif" data-still="art/strip/press-start-f8773fd4.png" alt="PRESS START scrolling across the panel in pink" width="128" height="32" decoding="async" loading="lazy"></picture><figcaption>Scrolling text</figcaption></figure><figure><picture class="led"><source srcset="art/strip/tunnel-fire-5cafe7ed.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/tunnel-fire-5cafe7ed.gif" data-still="art/strip/tunnel-fire-5cafe7ed.png" alt="A twisting tunnel of fiery rings" width="128" height="32" decoding="async" loading="lazy"></picture><figcaption>Tunnel, fire palette</figcaption></figure><figure><picture class="led"><source srcset="art/strip/kenney-walk-2df5a3fc.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/kenney-walk-2df5a3fc.gif" data-still="art/strip/kenney-walk-2df5a3fc.png" alt="Pixel-art characters walking across the panel" width="128" height="32" decoding="async" loading="lazy"></picture><figcaption>Kenney Pixel Platformer sprites (CC0)</figcaption></figure><figure><picture class="led"><source srcset="art/strip/wire-torus-2dd0022a.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/wire-torus-2dd0022a.gif" data-still="art/strip/wire-torus-2dd0022a.png" alt="A spinning wireframe torus in cyan" width="128" height="32" decoding="async" loading="lazy"></picture><figcaption>Wireframe torus</figcaption></figure><figure><picture class="led"><source srcset="art/strip/starfield-ca098c44.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/starfield-ca098c44.gif" data-still="art/strip/starfield-ca098c44.png" alt="Stars flying towards the viewer" width="128" height="32" decoding="async" loading="lazy"></picture><figcaption>Starfield</figcaption></figure><figure><picture class="led"><source srcset="art/strip/clock-266f4e5a.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/clock-266f4e5a.gif" data-still="art/strip/clock-266f4e5a.png" alt="The panel&#x27;s big clock with the date underneath" width="128" height="32" decoding="async" loading="lazy"></picture><figcaption>The clock</figcaption></figure><figure><picture class="led"><source srcset="art/strip/rotozoom-floor-6b212bf0.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/rotozoom-floor-6b212bf0.gif" data-still="art/strip/rotozoom-floor-6b212bf0.png" alt="A Mode 7 floor sweeping past under a colour-cycling sky" width="128" height="32" decoding="async" loading="lazy"></picture><figcaption>Mode 7 rotozoom</figcaption></figure><figure><picture class="led"><source srcset="art/strip/tunnel-ice-77368afe.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/tunnel-ice-77368afe.gif" data-still="art/strip/tunnel-ice-77368afe.png" alt="A checkered tunnel in icy blues" width="128" height="32" decoding="async" loading="lazy"></picture><figcaption>Tunnel, ice palette</figcaption></figure><figure><picture class="led"><source srcset="art/strip/wire-morph-ad77008b.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/wire-morph-ad77008b.gif" data-still="art/strip/wire-morph-ad77008b.png" alt="A wireframe shape morphing between solids" width="128" height="32" decoding="async" loading="lazy"></picture><figcaption>Wireframe morph</figcaption></figure></div>
 <p class="tiles-note">Recorded from the simulator: the panel's own effects and live items, and the CC0 Kenney Pixel Platformer sprites. Bring your own GIFs, or make them with Create Art.</p>
@@ -77,6 +78,8 @@ installer asks for your WiFi and puts the board on it; the web app is then at
   changing the file.</li>
 <li><strong>Live items and effects</strong> a clock, scrolling text, a tunnel, Mode 7 rotozoom, a starfield
   and wireframe shapes, all drawn on the panel and usable in any playlist.</li>
+<li><strong>Formulas</strong> a few lines of maths that draw the panel's pixels: plasma, fire, rain, a clock.
+  Remix an example, drag a number and watch, share it as a link, or save it as a GIF.</li>
 <li><strong>Looks</strong> full colour or a single amber, red, green, blue or white, with optional phosphor glow.</li>
 <li><strong>Schedules</strong> a playlist or brightness for parts of the week, and a night mode that turns the
   panel off or dims it.</li>
@@ -122,8 +125,8 @@ installer asks for your WiFi and puts the board on it; the web app is then at
 <ul>
 <li><a href="guide/hardware.html">What you need</a>, <a href="install/index.html">Install</a> and
   <a href="guide/updating.html">Updating</a></li>
-<li><a href="guide/web-app.html">The web app</a>, <a href="guide/create-art.html">Create Art</a> and
-  <a href="guide/effects.html">Effects and live items</a></li>
+<li><a href="guide/web-app.html">The web app</a>, <a href="guide/create-art.html">Create Art</a>,
+  <a href="guide/effects.html">Effects and live items</a> and <a href="guide/formulas.html">Formulas</a></li>
 <li><a href="guide/card.html">The SD card</a>: where GIFs go and how their names are read</li>
 <li><a href="guide/troubleshooting.html">Troubleshooting</a></li>
 <li><a href="dev/index.html">For developers</a>: building from source, the crates, the
@@ -139,6 +142,11 @@ dual licensed the same way.</p>
 pixel font under the <a href="fonts/OFL.txt">SIL Open Font License 1.1</a>. A small
 subset of it is bundled with the web app and the setup page, so they work without the
 internet, and published with the site.</p>
+<p>The firmware and the web app are built on other open-source software (ESP-IDF, FreeRTOS,
+lwIP, Mbed TLS and the Rust crates among it), listed with each licence's full text in
+<a href="licenses/THIRD-PARTY-LICENSES-firmware.txt">the firmware's</a> and
+<a href="licenses/THIRD-PARTY-LICENSES-web.txt">the web app's</a> third-party notices. Each release and
+the player itself carry them (Settings › Device › About › Open-source licences).</p>
 <p>OpenDMD comes with no GIFs. The animations on a DMDoS card are third-party content that this
 project can't relicense or redistribute: get the DMDoS GIF pack from
 <a href="https://dmdos.net/">dmdos.net</a>, or make your own with Create Art. The animations on the
@@ -149,7 +157,8 @@ CC0 <a href="https://kenney.nl/assets/pixel-platformer">Kenney Pixel Platformer<
 <a href="https://dmdos.net/">DMDoS</a>: the display, its board (by <a href="https://mortaca.com">MORTACA</a>),
 the build guide and the GIF pack all come from dmdos.net. The animations on this site are recordings of
 OpenDMD's own effects and the CC0 <a href="https://kenney.nl/assets/pixel-platformer">Kenney</a> sprites.
-Code under <a href="LICENSE-MIT.txt">MIT</a> or <a href="LICENSE-APACHE.txt">Apache 2.0</a>.</p></footer>
+Code under <a href="LICENSE-MIT.txt">MIT</a> or <a href="LICENSE-APACHE.txt">Apache 2.0</a>;
+<a href="licenses/">third-party licences</a>.</p></footer>
 </div>
 </body>
 </html>

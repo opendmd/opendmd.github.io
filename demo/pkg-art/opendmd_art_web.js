@@ -295,6 +295,26 @@ export class Studio {
         return Studio.__wrap(ret[0]);
     }
     /**
+     * Frames drawn by the page — a formula's, by the Psi module: `n`
+     * frames of 128x32 RGB888 at `delayMs` each, `first` now and the rest
+     * by `push` (`cut`: they are not a whole loop). Throws on a frame of
+     * the wrong size.
+     * @param {Uint8Array} first
+     * @param {number} n
+     * @param {number} delay_ms
+     * @param {boolean} cut
+     * @returns {Studio}
+     */
+    static fromFrames(first, n, delay_ms, cut) {
+        const ptr0 = passArray8ToWasm0(first, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.studio_fromFrames(ptr0, len0, n, delay_ms, cut);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return Studio.__wrap(ret[0]);
+    }
+    /**
      * An animated GIF: its header and first frame read (throws if it does
      * not decode); `decode` reads the rest.
      * @param {Uint8Array} bytes
@@ -393,6 +413,17 @@ export class Studio {
         const ptr0 = passStringToWasm0(fit, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         wasm.studio_prepare(this.__wbg_ptr, ptr0, len0, lift);
+    }
+    /**
+     * The next of `fromFrames`' frames; true once all are in.
+     * @param {Uint8Array} rgb
+     * @returns {boolean}
+     */
+    push(rgb) {
+        const ptr0 = passArray8ToWasm0(rgb, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.studio_push(this.__wbg_ptr, ptr0, len0);
+        return ret !== 0;
     }
     /**
      * The GIF: `motion` `"still"`/`"pan"`/`"scroll"` from window (`x`, `y`),

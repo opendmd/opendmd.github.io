@@ -13,125 +13,81 @@
 <a class="skip" href="#main">Skip to the page</a>
 <div class="banner" role="note"><strong>Preview.</strong> OpenDMD isn't publicly launched yet: what's here works, but it may change, and the source code isn't public yet.</div>
 <div class="wrap">
-<nav aria-label="Site"><a class="brand" href="../index.html"><picture class="led" style="--cols:70;--rows:16"><img src="../art/wordmark.png" alt="OpenDMD" width="70" height="16"></picture></a><div class="links"><a href="../index.html">Overview</a><a href="../demo/" class='demo'>Try the demo</a><h4>Guide</h4><a href="../guide/hardware.html">What you need</a><a href="../install/index.html">Install</a><a href="../guide/web-app.html">The web app</a><a href="../guide/create-art.html">Create Art</a><a href="../guide/effects.html">Effects and live items</a><a href="../guide/card.html">The SD card</a><a href="../guide/updating.html">Updating</a><a href="../guide/troubleshooting.html">Troubleshooting</a><h4>For developers</h4><a href="index.html">Building from source</a><a href="api.html">HTTP API</a><a href="simulator.html" class='on'>The simulator</a><a href="effects.html">Writing an effect</a><a href="pinout.html">Hardware pinout</a></div></nav>
+<nav aria-label="Site"><a class="brand" href="../index.html"><picture class="led" style="--cols:70;--rows:16"><img src="../art/wordmark.png" alt="OpenDMD" width="70" height="16"></picture></a><div class="links"><a href="../index.html">Overview</a><a href="../demo/" class='demo'>Try the demo</a><h4>Guide</h4><a href="../guide/hardware.html">What you need</a><a href="../install/index.html">Install</a><a href="../guide/web-app.html">The web app</a><a href="../guide/create-art.html">Create Art</a><a href="../guide/effects.html">Effects and live items</a><a href="../guide/formulas.html">Formulas</a><a href="../guide/card.html">The SD card</a><a href="../guide/updating.html">Updating</a><a href="../guide/troubleshooting.html">Troubleshooting</a><h4>For developers</h4><a href="index.html">Building from source</a><a href="api.html">HTTP API</a><a href="simulator.html" class='on'>The simulator</a><a href="effects.html">Writing an effect</a><a href="pinout.html">Hardware pinout</a></div></nav>
 <main id="main">
 <h1 id="the-simulator">The simulator<a class="headerlink" href="#the-simulator" title="Permanent link">#</a></h1>
-<p><code>opendmd-sim</code> plays a card in a desktop window through the same
-<code>opendmd-core</code> engine the firmware runs. It opens a <code>128 * scale</code> by
-<code>32 * scale</code> window: 1280x320 at the default scale of 10.</p>
-<h2 id="download">Download<a class="headerlink" href="#download" title="Permanent link">#</a></h2>
-<table><thead><tr><th>Platform</th><th>Download (OpenDMD 1.0.0-beta.2)</th><th>Size</th></tr></thead><tbody><tr><td>macOS (Apple silicon and Intel)</td><td><a href="../downloads/opendmd-sim-1.0.0-beta.2-macos-universal.zip"><code>opendmd-sim-1.0.0-beta.2-macos-universal.zip</code></a></td><td>2.3 MB</td></tr><tr><td>Windows (x86-64)</td><td><a href="../downloads/opendmd-sim-1.0.0-beta.2-windows-x86_64.zip"><code>opendmd-sim-1.0.0-beta.2-windows-x86_64.zip</code></a></td><td>1.2 MB</td></tr><tr><td>Linux (x86-64)</td><td><a href="../downloads/opendmd-sim-1.0.0-beta.2-linux-x86_64.tar.gz"><code>opendmd-sim-1.0.0-beta.2-linux-x86_64.tar.gz</code></a></td><td>1.5 MB</td></tr></tbody></table>
-<p>Checksums: <a href="../downloads/SHA256SUMS">SHA256SUMS</a>. To link to whichever release is newest: <a href="../downloads/opendmd-sim-macos-universal.zip"><code>opendmd-sim-macos-universal.zip</code></a>, <a href="../downloads/opendmd-sim-windows-x86_64.zip"><code>opendmd-sim-windows-x86_64.zip</code></a>, <a href="../downloads/opendmd-sim-linux-x86_64.tar.gz"><code>opendmd-sim-linux-x86_64.tar.gz</code></a>.</p>
-
-<p>Each archive holds the program, a short README, the licences and the
-third-party notices for the open-source crates it is built from. Unpack it
-and double-click <code>opendmd-sim</code>: a folder picker opens. Choose a card (a
-folder with <code>filelist.txt</code> in it) or any folder of GIFs; cancel it for the
-built-in demo of the panel's effects and live items. On Windows you can
-also drop a folder, or a GIF, onto <code>opendmd-sim.exe</code>. From a terminal,
-<code>opendmd-sim &lt;folder or GIF&gt;</code> does the same, and <code>opendmd-sim --help</code> lists
-the options below.</p>
-<p>The builds aren't signed with a paid developer certificate, so the first
-start needs one extra step:</p>
-<ul>
-<li><strong>macOS:</strong> Control-click (or right-click) <code>opendmd-sim</code>, choose <strong>Open</strong>,
-  then <strong>Open</strong> again. Where macOS offers no Open button (macOS 15 and
-  later), try to open it once, then click <strong>Open Anyway</strong> in System
-  Settings &gt; Privacy &amp; Security. Or, in Terminal: <code>xattr -d
-  com.apple.quarantine opendmd-sim</code>. It runs in a Terminal window, which
-  shows what is playing.</li>
-<li><strong>Windows:</strong> if SmartScreen says it protected your PC, click <strong>More
-  info</strong>, then <strong>Run anyway</strong>. The console window beside the simulator
-  shows what is playing.</li>
-<li><strong>Linux:</strong> it needs glibc 2.34 or newer (Ubuntu 22.04, Debian 12,
-  Fedora 35 and later) and an X11 or Wayland desktop: <code>libX11</code> and
-  <code>libXcursor</code>, or <code>libwayland-client</code> and <code>libxkbcommon</code>, which every
-  desktop already has. The folder picker is the desktop's own, through
-  <code>xdg-desktop-portal</code>, or <code>zenity</code>; with neither, the demo plays, and a
-  folder can be given on the command line.</li>
-</ul>
-<h2 id="build-it">Build it<a class="headerlink" href="#build-it" title="Permanent link">#</a></h2>
-<pre><code class="language-bash">make sim ARGS=&quot;--root /path/to/card --platforms MD,SNES&quot;
-make sim-dist     # this platform's download archive, in target/sim-dist/
+<p><code>opendmd-sim</code> plays a card, or any folder of GIFs, in a desktop window drawn
+as the panel's LEDs: the same <code>opendmd-core</code> engine the firmware runs, with
+a renderer that models the real P4 panel's dots and glow instead of flat
+squares. It is a tool for developers (checking an effect, a transition or a
+card without a board on the desk).</p>
+<p><strong>Most people want the web demo instead.</strong> It runs in any browser, with
+nothing to install, and plays a demo card on the same engine:
+<a href="https://opendmd.github.io/demo/">opendmd.github.io/demo</a>.</p>
+<p><img alt="The simulator playing a fire tunnel effect" src="../docs/images/sim-tunnel.png" /></p>
+<h2 id="run-it-from-source">Run it from source<a class="headerlink" href="#run-it-from-source" title="Permanent link">#</a></h2>
+<p>You need a stable <a href="https://rustup.rs/">Rust toolchain</a> and a desktop to
+open the window on. From a checkout:</p>
+<pre><code class="language-bash">make sim                                  # a folder picker opens
+make sim ARGS=&quot;/path/to/card&quot;             # a card: a folder with filelist.txt
+make sim ARGS=&quot;/path/to/gifs&quot;             # any folder of GIFs, in name order
+make sim ARGS=&quot;/path/to/one.gif&quot;          # a single GIF
+make sim ARGS=&quot;--demo&quot;                    # the built-in demo, no files needed
 </code></pre>
-<p><code>make sim</code> needs a display.</p>
-<h2 id="what-it-draws">What it draws<a class="headerlink" href="#what-it-draws" title="Permanent link">#</a></h2>
-<p>By default the simulator doesn't draw pixels, it draws <strong>LEDs</strong>, because a P4
-HUB75 panel looks nothing like a grid of flat squares. The model in
-<code>opendmd-render/src/lib.rs</code> is measured off a close-up photo of the real panel
-(<code>hardware/IMG_0495.jpeg</code>), in units of the 4 mm LED pitch:</p>
-<ul>
-<li>a lit emitter is an anti-aliased disc of ~0.42 pitch across (measured FWHM
-  0.40 horizontally, 0.44 vertically — the package makes it slightly tall);</li>
-<li>a soft bloom around it falls to the mask level by ~0.75 pitch, so bright
-  neighbours' halos overlap, exactly as they do in the photo;</li>
-<li>the mask between LEDs is near black (5/255), and an unlit LED is a
-  barely-there square at 10/255 over half a pitch;</li>
-<li>the panel is driven linearly (BCM/PWM), so canvas bytes are decoded to
-  linear light, accumulated there, and re-encoded on the way out. That is why
-  mid greys look brighter here than a naive blit makes them.</li>
-</ul>
-<p>Everything that depends only on the scale — the per-LED kernel, the backdrop,
-the gamma tables — is built once, and the float accumulator is reused, so a
-frame is a fixed ~1.6 M multiply-adds at scale 10 with no allocation.</p>
-<h2 id="options">Options<a class="headerlink" href="#options" title="Permanent link">#</a></h2>
-<pre><code>&lt;CARD&gt;                    a card (a folder holding filelist.txt), any folder
-                          of GIFs (played in name order; a cache/ folder is
-                          skipped), or one GIF
---root &lt;dir&gt;              card root, holding gifs/ and filelist.txt
---demo                    the built-in demo: effects, the clock and
-                          scrolling text, no card needed
---manifest &lt;path&gt;         default &lt;root&gt;/filelist.txt
---platforms MD,SNES       comma-separated platform prefixes
---title &lt;substr&gt;          repeatable, matched against the normalized title
---exclude-flag INVERT     repeatable
---category / --exclude-category   repeatable, matched against gifs/&lt;Category&gt;
---shuffle --seed &lt;u64&gt;    reproducible weighted shuffle
---scale &lt;u32&gt;             pixels per LED, default 10
---min-dwell / --max-dwell seconds, default 3 and 30
---transition kind[:ms]    how files come in: dissolve (default, 400 ms),
-                          wipe_left, wipe_right, wipe_down, wipe_up, blinds,
-                          push, fade or none; ms 20..2000
---flat                    flat squares with a 1 px gutter, the old renderer
---gamma &lt;f32&gt;             canvas byte -&gt; linear light, default 2.2
---led-gain &lt;f32&gt;          scales LED intensity, default 1.0 — match the panel
-                          brightness by eye
---bloom &lt;f32&gt;             halo strength around each lit LED, default 0.22
-                          (fitted by eye to the photo — the knob to tune)
---screenshot &lt;out.png&gt;    render the first frame of the first scheduled GIF
-                          and exit, without opening a window
---screenshot-canvas &lt;out.png&gt;   the same frame as the raw 128x32 canvas
-                          (after --look)
---look &lt;name&gt;             colour (default), amber, red, green, blue or white
---glow off|short|long     phosphor glow, default off
---play &lt;path&gt;             play just this: a card path or a live item,
-                          e.g. '@clock?date=1', '@text?msg=Hello',
-                          '@fx:tunnel?palette=chrono&amp;cycle=1'
---screenshot-at &lt;ms&gt;      take the screenshot that far into the file (an
-                          effect mid-loop), default 0
+<p>(<code>cd opendmd-sim &amp;&amp; cargo run --release -- &lt;options&gt;</code> does the same.) With
+no argument a folder picker opens, and the demo plays if you cancel it. A
+folder or GIF dropped onto the program counts as the argument.
+<code>opendmd-sim --help</code> lists every option: filters for a card (<code>--platforms</code>,
+<code>--title</code>, <code>--category</code>), <code>--shuffle</code>, <code>--scale</code> (pixels per LED, default
+10), <code>--transition</code>, <code>--look</code> (the panel's tints), <code>--glow</code>, and
+<code>--play '@clock?date=1'</code> for a single live item or effect.</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Space</code></td>
+<td>next GIF</td>
+</tr>
+<tr>
+<td><code>P</code></td>
+<td>pause / resume</td>
+</tr>
+<tr>
+<td><code>L</code></td>
+<td>LED or flat squares</td>
+</tr>
+<tr>
+<td><code>Esc</code></td>
+<td>quit</td>
+</tr>
+</tbody>
+</table>
+<p><img alt="The clock live item" src="../docs/images/sim-clock.png" /></p>
+<p>The demo and the web demo's card use only OpenDMD's own effects and
+<a href="https://kenney.nl/assets/pixel-platformer">Kenney</a> sprites (CC0).</p>
+<h2 id="screenshots-without-a-window">Screenshots without a window<a class="headerlink" href="#screenshots-without-a-window" title="Permanent link">#</a></h2>
+<p><code>--screenshot out.png</code> renders one frame and exits, so it works on a
+headless machine; <code>--screenshot-at &lt;ms&gt;</code> picks the moment, and
+<code>--screenshot-canvas out.png</code> writes the raw 128x32 canvas. This is how the
+pictures on this page were made:</p>
+<pre><code class="language-bash">make sim ARGS=&quot;--demo --screenshot demo.png --screenshot-at 500&quot;
+make sim ARGS=&quot;--play '@clock?style=big&amp;date=1' --screenshot clock.png&quot;
 </code></pre>
-<p>With no card, <code>--root</code> or <code>--play</code>, a folder picker opens, and the demo
-plays if it is cancelled (or when there is no desktop to show it on). With
-<code>--screenshot</code> and no card, the demo is played without asking. Started
-from the desktop, with no options, the simulator also shows an error in a
-dialog, since the console it prints to may close with it.</p>
-<p>Below <code>--scale 6</code> there are too few window pixels per LED for a dot and a
-bloom, so the flat renderer is used automatically and says so in the log.</p>
-<p>Keys: <code>Space</code> next, <code>P</code> pause/resume, <code>L</code> toggle LED/flat (the title bar shows
-which), <code>Esc</code> quit. Each new GIF prints
-<code>[n/total] /gifs/Consoles/SNES_Plok_08.gif</code>; startup prints the filter summary.</p>
-<p>The two <code>--screenshot*</code> flags are the only way to look at the renderer on a
-headless box, where <code>minifb</code> cannot open a window:</p>
-<pre><code class="language-bash">cd opendmd-sim &amp;&amp; cargo run --release -- --root /path/to/card \
-    --platforms SNES,MD --seed 7 --screenshot /tmp/led.png \
-    --screenshot-canvas /tmp/canvas.png
-</code></pre>
+<p><img alt="Kenney sprites, a scene from the demo card" src="../docs/images/sim-sprites.png" /></p>
+<p>How the LEDs are drawn (their size, bloom and gamma) is modelled in
+<code>opendmd-render/src/lib.rs</code>, measured from a close-up photo of the real panel.</p>
 </main>
 <footer><p>OpenDMD is an independent, open-source project. It is not made by or affiliated with
 <a href="https://dmdos.net/">DMDoS</a>: the display, its board (by <a href="https://mortaca.com">MORTACA</a>),
 the build guide and the GIF pack all come from dmdos.net. The animations on this site are recordings of
 OpenDMD's own effects and the CC0 <a href="https://kenney.nl/assets/pixel-platformer">Kenney</a> sprites.
-Code under <a href="../LICENSE-MIT.txt">MIT</a> or <a href="../LICENSE-APACHE.txt">Apache 2.0</a>.</p></footer>
+Code under <a href="../LICENSE-MIT.txt">MIT</a> or <a href="../LICENSE-APACHE.txt">Apache 2.0</a>;
+<a href="../licenses/">third-party licences</a>.</p></footer>
 </div>
 </body>
 </html>

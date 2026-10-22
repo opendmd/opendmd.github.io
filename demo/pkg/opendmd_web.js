@@ -169,6 +169,16 @@ export class Preview {
         wasm.preview_setTransition(this.__wbg_ptr, ptr0, len0, ms);
     }
     /**
+     * Show one 128 × 32 RGB888 frame (a formula's, drawn by the Psi
+     * module) instead of a file, in this preview's look.
+     * @param {Uint8Array} rgb
+     */
+    showRgb(rgb) {
+        const ptr0 = passArray8ToWasm0(rgb, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.preview_showRgb(this.__wbg_ptr, ptr0, len0);
+    }
+    /**
      * The panel was `elapsed_ms` into this file at `at_ms` on this page's
      * `performance.now()` clock, advancing `rate` ms per ms: follow it from
      * now on (see `Player::sync_to`). Returns the drift before correction,
