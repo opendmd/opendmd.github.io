@@ -1,4 +1,4 @@
-// Settings → Advanced → Firmware: "Check for updates" (imported on the first
+// Settings › Device › Firmware: "Check for updates" (imported on the first
 // click; its own size line). Reads the published release, `release.json` on
 // the project site (HTTPS, which GitHub Pages serves with CORS; `?updates=<url>`
 // or localStorage `odmd.updates` points elsewhere, for testing), and compares

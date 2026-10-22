@@ -6,6 +6,7 @@
 <meta name="color-scheme" content="dark">
 <meta name="description" content="OpenDMD: open firmware and a web app for the DMDoS LED dot-matrix display.">
 <title>The simulator · OpenDMD</title>
+<link rel="preload" href="../fonts/silkscreen.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="../site.css">
 </head>
 <body>
@@ -16,11 +17,44 @@
 <main id="main">
 <h1 id="the-simulator">The simulator<a class="headerlink" href="#the-simulator" title="Permanent link">#</a></h1>
 <p><code>opendmd-sim</code> plays a card in a desktop window through the same
-<code>opendmd-core</code> engine the firmware runs.</p>
+<code>opendmd-core</code> engine the firmware runs. It opens a <code>128 * scale</code> by
+<code>32 * scale</code> window: 1280x320 at the default scale of 10.</p>
+<h2 id="download">Download<a class="headerlink" href="#download" title="Permanent link">#</a></h2>
+<table><thead><tr><th>Platform</th><th>Download (OpenDMD 1.0.0-beta.2)</th><th>Size</th></tr></thead><tbody><tr><td>macOS (Apple silicon and Intel)</td><td><a href="../downloads/opendmd-sim-1.0.0-beta.2-macos-universal.zip"><code>opendmd-sim-1.0.0-beta.2-macos-universal.zip</code></a></td><td>2.3 MB</td></tr><tr><td>Windows (x86-64)</td><td><a href="../downloads/opendmd-sim-1.0.0-beta.2-windows-x86_64.zip"><code>opendmd-sim-1.0.0-beta.2-windows-x86_64.zip</code></a></td><td>1.2 MB</td></tr><tr><td>Linux (x86-64)</td><td><a href="../downloads/opendmd-sim-1.0.0-beta.2-linux-x86_64.tar.gz"><code>opendmd-sim-1.0.0-beta.2-linux-x86_64.tar.gz</code></a></td><td>1.5 MB</td></tr></tbody></table>
+<p>Checksums: <a href="../downloads/SHA256SUMS">SHA256SUMS</a>. To link to whichever release is newest: <a href="../downloads/opendmd-sim-macos-universal.zip"><code>opendmd-sim-macos-universal.zip</code></a>, <a href="../downloads/opendmd-sim-windows-x86_64.zip"><code>opendmd-sim-windows-x86_64.zip</code></a>, <a href="../downloads/opendmd-sim-linux-x86_64.tar.gz"><code>opendmd-sim-linux-x86_64.tar.gz</code></a>.</p>
+
+<p>Each archive holds the program, a short README, the licences and the
+third-party notices for the open-source crates it is built from. Unpack it
+and double-click <code>opendmd-sim</code>: a folder picker opens. Choose a card (a
+folder with <code>filelist.txt</code> in it) or any folder of GIFs; cancel it for the
+built-in demo of the panel's effects and live items. On Windows you can
+also drop a folder, or a GIF, onto <code>opendmd-sim.exe</code>. From a terminal,
+<code>opendmd-sim &lt;folder or GIF&gt;</code> does the same, and <code>opendmd-sim --help</code> lists
+the options below.</p>
+<p>The builds aren't signed with a paid developer certificate, so the first
+start needs one extra step:</p>
+<ul>
+<li><strong>macOS:</strong> Control-click (or right-click) <code>opendmd-sim</code>, choose <strong>Open</strong>,
+  then <strong>Open</strong> again. Where macOS offers no Open button (macOS 15 and
+  later), try to open it once, then click <strong>Open Anyway</strong> in System
+  Settings &gt; Privacy &amp; Security. Or, in Terminal: <code>xattr -d
+  com.apple.quarantine opendmd-sim</code>. It runs in a Terminal window, which
+  shows what is playing.</li>
+<li><strong>Windows:</strong> if SmartScreen says it protected your PC, click <strong>More
+  info</strong>, then <strong>Run anyway</strong>. The console window beside the simulator
+  shows what is playing.</li>
+<li><strong>Linux:</strong> it needs glibc 2.34 or newer (Ubuntu 22.04, Debian 12,
+  Fedora 35 and later) and an X11 or Wayland desktop: <code>libX11</code> and
+  <code>libXcursor</code>, or <code>libwayland-client</code> and <code>libxkbcommon</code>, which every
+  desktop already has. The folder picker is the desktop's own, through
+  <code>xdg-desktop-portal</code>, or <code>zenity</code>; with neither, the demo plays, and a
+  folder can be given on the command line.</li>
+</ul>
+<h2 id="build-it">Build it<a class="headerlink" href="#build-it" title="Permanent link">#</a></h2>
 <pre><code class="language-bash">make sim ARGS=&quot;--root /path/to/card --platforms MD,SNES&quot;
+make sim-dist     # this platform's download archive, in target/sim-dist/
 </code></pre>
-<p><code>make sim</code> needs a display; the simulator opens a <code>128 * scale</code> by
-<code>32 * scale</code> window — 1280x320 at the default scale of 10.</p>
+<p><code>make sim</code> needs a display.</p>
 <h2 id="what-it-draws">What it draws<a class="headerlink" href="#what-it-draws" title="Permanent link">#</a></h2>
 <p>By default the simulator doesn't draw pixels, it draws <strong>LEDs</strong>, because a P4
 HUB75 panel looks nothing like a grid of flat squares. The model in
@@ -41,7 +75,12 @@ HUB75 panel looks nothing like a grid of flat squares. The model in
 the gamma tables — is built once, and the float accumulator is reused, so a
 frame is a fixed ~1.6 M multiply-adds at scale 10 with no allocation.</p>
 <h2 id="options">Options<a class="headerlink" href="#options" title="Permanent link">#</a></h2>
-<pre><code>--root &lt;dir&gt;              card root, holding gifs/ and filelist.txt (required)
+<pre><code>&lt;CARD&gt;                    a card (a folder holding filelist.txt), any folder
+                          of GIFs (played in name order; a cache/ folder is
+                          skipped), or one GIF
+--root &lt;dir&gt;              card root, holding gifs/ and filelist.txt
+--demo                    the built-in demo: effects, the clock and
+                          scrolling text, no card needed
 --manifest &lt;path&gt;         default &lt;root&gt;/filelist.txt
 --platforms MD,SNES       comma-separated platform prefixes
 --title &lt;substr&gt;          repeatable, matched against the normalized title
@@ -71,6 +110,11 @@ frame is a fixed ~1.6 M multiply-adds at scale 10 with no allocation.</p>
 --screenshot-at &lt;ms&gt;      take the screenshot that far into the file (an
                           effect mid-loop), default 0
 </code></pre>
+<p>With no card, <code>--root</code> or <code>--play</code>, a folder picker opens, and the demo
+plays if it is cancelled (or when there is no desktop to show it on). With
+<code>--screenshot</code> and no card, the demo is played without asking. Started
+from the desktop, with no options, the simulator also shows an error in a
+dialog, since the console it prints to may close with it.</p>
 <p>Below <code>--scale 6</code> there are too few window pixels per LED for a dot and a
 bloom, so the flat renderer is used automatically and says so in the log.</p>
 <p>Keys: <code>Space</code> next, <code>P</code> pause/resume, <code>L</code> toggle LED/flat (the title bar shows

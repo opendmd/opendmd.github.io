@@ -92,11 +92,20 @@ export function glyphs(o) {
   return g.length ? h('span.ov', g.map(([t, title, c]) => h('i.' + c, { title }, t))) : null;
 }
 
-let open = null;
-export function closeMenu() { open?.remove(); open = null; }
+// The element that had the focus when a menu opened gets it back on close.
+let open = null, opener = null;
+export function closeMenu() {
+  if (!open) return;
+  open.remove();
+  open = null;
+  if (opener?.isConnected) opener.focus({ preventScroll: true });
+  opener = null;
+}
 addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
 addEventListener('pointerdown', (e) => { if (open && !open.contains(e.target)) closeMenu(); }, true);
-addEventListener('resize', closeMenu);
+// (Not a phone keyboard coming up: only a change of width.)
+let wide = innerWidth;
+addEventListener('resize', () => { if (wide != (wide = innerWidth)) closeMenu(); });
 
 // The menu for one GIF, at (x, y) — a sheet along the bottom on a phone.
 // `extra`: an optional [text, action] item at the end (Playlists' Remove);
@@ -110,16 +119,19 @@ export function menu(ov, path, x, y, extra) {
   const loops = h('input', { type: 'number', min: 1, max: 1000, placeholder: '×', id: 'ov-loops', value: o.loops || '', style: 'width:64px' });
   const item = (id, on, text, act) => h('button.mi' + (on ? '.on' : ''), { id, onclick: act }, h('span.ck', on ? '✓' : ''), text);
   const e = app.wasm.parsePath(path);
-  open = h('div.menu', { id: 'ov-menu', role: 'menu' },
-    h('div.mh', h('b', label(e)), ov.path && h('span.muted', ` in “${ov.name}”`)),
+  const head = h('div.mh', h('b', label(e)), ov.path && h('span.muted', ` in “${ov.name}”`));
+  // Play longer and Loop: their fields in a second step of the same menu.
+  const longer = () => open.replaceChildren(head,
+    item('ov-2x', o.dwell_x === 2, 'Twice as long', () => put({ dwell_x: o.dwell_x === 2 ? null : 2, dwell: null })),
+    h('div.mr', h('span', 'Play for'), secs, h('span.muted', 'seconds'),
+      h('button.sm', { id: 'ov-secs-set', onclick: () => { const v = +secs.value; if (v >= 1 && v <= 86400) put({ dwell: Math.round(v), dwell_x: null }); else toast('seconds: 1 to 86400', 'bad'); } }, 'Set')),
+    h('div.mr', h('span', 'Loop'), loops, h('span.muted', 'times'),
+      h('button.sm', { id: 'ov-loops-set', onclick: () => { const v = +loops.value; if (v >= 1 && v <= 1000) put({ loops: Math.round(v) }); else toast('loops: 1 to 1000', 'bad'); } }, 'Set')));
+  open = h('div.menu', { id: 'ov-menu', role: 'menu' }, head,
     ov.path && [item('ov-fav', o.w > 1, '★ Favourite — plays more often', () => put(fav(o))),
     item('ov-less', o.w != null && o.w < 1, '▽ Play less often', () => put({ w: o.w != null && o.w < 1 ? null : LESS, never: null })),
     item('ov-hide', o.never, '⊘ Hide from this playlist', () => put({ never: o.never ? null : true, w: null })),
-    h('div.mr', h('span', 'Play longer'),
-      h('button.sm' + (o.dwell_x === 2 ? '.on' : ''), { id: 'ov-2x', onclick: () => put({ dwell_x: o.dwell_x === 2 ? null : 2, dwell: null }) }, '2×'),
-      secs, h('button.sm', { id: 'ov-secs-set', onclick: () => { const v = +secs.value; if (v >= 1 && v <= 86400) put({ dwell: Math.round(v), dwell_x: null }); else toast('seconds: 1 to 86400', 'bad'); } }, 'Set')),
-    h('div.mr', h('span', 'Loop'), loops, h('span.muted', 'times'),
-      h('button.sm', { id: 'ov-loops-set', onclick: () => { const v = +loops.value; if (v >= 1 && v <= 1000) put({ loops: Math.round(v) }); else toast('loops: 1 to 1000', 'bad'); } }, 'Set')),
+    item('ov-longer', o.dwell || o.dwell_x || o.loops, '◔ Play longer or loop…', longer),
     item('ov-reset', false, 'Reset', () => put({ never: null, w: null, dwell: null, dwell_x: null, loops: null }))],
     extra && item('ov-extra', false, extra[0], () => { closeMenu(); extra[1](); }));
   const r = open.querySelector('#ov-reset');
@@ -131,8 +143,12 @@ export function menu(ov, path, x, y, extra) {
 // phone; one at a time, closed by Escape or a tap elsewhere.
 export function popup(el, x, y) {
   if (open !== el) closeMenu();
+  opener ??= document.activeElement;
   open = el;
   document.body.append(el);
+  // Focus inside: the first control, or (a touch screen: no keyboard popping up) the sheet itself.
+  el.tabIndex = -1;
+  (matchMedia('(pointer:coarse)').matches ? el : el.querySelector('input,select,button:not(:disabled)') || el).focus({ preventScroll: true });
   if (innerWidth > 600) {
     const r = el.getBoundingClientRect();
     el.style.left = Math.max(8, Math.min(x, innerWidth - r.width - 8)) + 'px';

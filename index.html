@@ -6,6 +6,7 @@
 <meta name="color-scheme" content="dark">
 <meta name="description" content="OpenDMD: open firmware and a web app for the DMDoS LED dot-matrix display.">
 <title> · OpenDMD</title>
+<link rel="preload" href="fonts/silkscreen.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="site.css">
 </head>
 <body>
@@ -32,7 +33,8 @@ it is, and adds a web app to manage it.</p>
   app over WiFi.</li>
 <li><strong>The web app</strong> at <code>http://opendmd.local/</code> works in any browser, on a phone or a computer.
   Previews and GIF preparation run right in the browser, using the same engine as the player.</li>
-<li><strong>The simulator</strong> plays a card in a desktop window, drawn as LEDs rather than flat pixels.</li>
+<li><strong>The simulator</strong> plays a card in a desktop window, drawn as LEDs rather than flat pixels
+  (<a href="dev/simulator.html#download">downloads</a> for macOS, Windows and Linux).</li>
 </ul>
 <div class="tiles"><figure><picture class="led"><source srcset="art/strip/press-start-f8773fd4.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/press-start-f8773fd4.gif" data-still="art/strip/press-start-f8773fd4.png" alt="PRESS START scrolling across the panel in pink" width="128" height="32" decoding="async" loading="lazy"></picture><figcaption>Scrolling text</figcaption></figure><figure><picture class="led"><source srcset="art/strip/tunnel-fire-5cafe7ed.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/tunnel-fire-5cafe7ed.gif" data-still="art/strip/tunnel-fire-5cafe7ed.png" alt="A twisting tunnel of fiery rings" width="128" height="32" decoding="async" loading="lazy"></picture><figcaption>Tunnel, fire palette</figcaption></figure><figure><picture class="led"><source srcset="art/strip/kenney-walk-2df5a3fc.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/kenney-walk-2df5a3fc.gif" data-still="art/strip/kenney-walk-2df5a3fc.png" alt="Pixel-art characters walking across the panel" width="128" height="32" decoding="async" loading="lazy"></picture><figcaption>Kenney Pixel Platformer sprites (CC0)</figcaption></figure><figure><picture class="led"><source srcset="art/strip/wire-torus-2dd0022a.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/wire-torus-2dd0022a.gif" data-still="art/strip/wire-torus-2dd0022a.png" alt="A spinning wireframe torus in cyan" width="128" height="32" decoding="async" loading="lazy"></picture><figcaption>Wireframe torus</figcaption></figure><figure><picture class="led"><source srcset="art/strip/starfield-ca098c44.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/starfield-ca098c44.gif" data-still="art/strip/starfield-ca098c44.png" alt="Stars flying towards the viewer" width="128" height="32" decoding="async" loading="lazy"></picture><figcaption>Starfield</figcaption></figure><figure><picture class="led"><source srcset="art/strip/clock-266f4e5a.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/clock-266f4e5a.gif" data-still="art/strip/clock-266f4e5a.png" alt="The panel&#x27;s big clock with the date underneath" width="128" height="32" decoding="async" loading="lazy"></picture><figcaption>The clock</figcaption></figure><figure><picture class="led"><source srcset="art/strip/rotozoom-floor-6b212bf0.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/rotozoom-floor-6b212bf0.gif" data-still="art/strip/rotozoom-floor-6b212bf0.png" alt="A Mode 7 floor sweeping past under a colour-cycling sky" width="128" height="32" decoding="async" loading="lazy"></picture><figcaption>Mode 7 rotozoom</figcaption></figure><figure><picture class="led"><source srcset="art/strip/tunnel-ice-77368afe.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/tunnel-ice-77368afe.gif" data-still="art/strip/tunnel-ice-77368afe.png" alt="A checkered tunnel in icy blues" width="128" height="32" decoding="async" loading="lazy"></picture><figcaption>Tunnel, ice palette</figcaption></figure><figure><picture class="led"><source srcset="art/strip/wire-morph-ad77008b.png" media="(prefers-reduced-motion: reduce)"><img src="art/strip/wire-morph-ad77008b.gif" data-still="art/strip/wire-morph-ad77008b.png" alt="A wireframe shape morphing between solids" width="128" height="32" decoding="async" loading="lazy"></picture><figcaption>Wireframe morph</figcaption></figure></div>
 <p class="tiles-note">Recorded from the simulator: the panel's own effects and live items, and the CC0 Kenney Pixel Platformer sprites. Bring your own GIFs, or make them with Create Art.</p>
@@ -113,7 +115,8 @@ installer asks for your WiFi and puts the board on it; the web app is then at
 </tbody>
 </table>
 <p>The demo card in these screenshots holds the panel's own effects and the
-<a href="https://kenney.nl/assets/pixel-platformer">Kenney Pixel Platformer</a> sprites (CC0).</p>
+<a href="https://kenney.nl/assets/pixel-platformer">Kenney Pixel Platformer</a> sprites (CC0);
+<code>make screenshots</code> takes them again (<code>tools/screenshots.py</code>).</p>
 <h2 id="documentation">Documentation<a class="headerlink" href="#documentation" title="Permanent link">#</a></h2>
 <p>The documentation is also at <strong><a href="https://opendmd.github.io/">opendmd.github.io</a></strong>.</p>
 <ul>
@@ -132,6 +135,10 @@ the toolchains, the common targets and the crates.</p>
 <h2 id="license">License<a class="headerlink" href="#license" title="Permanent link">#</a></h2>
 <p>Either <a href="LICENSE-APACHE.txt">Apache 2.0</a> or <a href="LICENSE-MIT.txt">MIT</a>, at your option. Contributions are
 dual licensed the same way.</p>
+<p>The headings use <a href="https://github.com/googlefonts/silkscreen">Silkscreen</a> by Jason Kottke, a
+pixel font under the <a href="fonts/OFL.txt">SIL Open Font License 1.1</a>. A small
+subset of it is bundled with the web app and the setup page, so they work without the
+internet, and published with the site.</p>
 <p>OpenDMD comes with no GIFs. The animations on a DMDoS card are third-party content that this
 project can't relicense or redistribute: get the DMDoS GIF pack from
 <a href="https://dmdos.net/">dmdos.net</a>, or make your own with Create Art. The animations on the

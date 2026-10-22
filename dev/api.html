@@ -6,6 +6,7 @@
 <meta name="color-scheme" content="dark">
 <meta name="description" content="OpenDMD: open firmware and a web app for the DMDoS LED dot-matrix display.">
 <title>OpenDMD HTTP API · OpenDMD</title>
+<link rel="preload" href="../fonts/silkscreen.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="../site.css">
 </head>
 <body>
@@ -240,7 +241,7 @@ curl -s -X POST &quot;$DMD/api/skip?back=1&quot;
 <h3 id="get-apistat">GET /api/stat<a class="headerlink" href="#get-apistat" title="Permanent link">#</a></h3>
 <p><code>?path=&lt;card path&gt;</code>: whether a file or directory exists, its size.</p>
 <p>Reply: <code>{"path","exists","size","is_dir"}</code>; <code>size</code> in bytes, null for a
-directory or a miss. One scan of the parent directory.</p>
+directory or a miss.</p>
 <p>Errors: <code>400</code> no <code>path=</code>, or not card-absolute.</p>
 <pre><code class="language-sh">curl -s &quot;$DMD/api/stat?path=/filelist.txt&quot;
 </code></pre>
@@ -253,8 +254,7 @@ Bench test hooks: <code>?sd_fail=N</code> (next N card mounts fail),
 </code></pre>
 <h3 id="post-apicardformat">POST /api/card/format<a class="headerlink" href="#post-apicardformat" title="Permanent link">#</a></h3>
 <p>Formats the card FAT32, erasing it: <code>{"confirm":true}</code>, only for a card
-that mounts but cannot be read (<code>sd.readable</code> false: exFAT, as most cards
-over 32 GB come). <code>202</code> <code>{"ok":true,"formatting":true}</code>; <code>sd.formatting</code>
+that mounts but cannot be read (<code>sd.readable</code> false: exFAT). <code>202</code> <code>{"ok":true,"formatting":true}</code>; <code>sd.formatting</code>
 until done (~a minute for 64 GB), then <code>sd.readable</code> true or
 <code>sd.format_error</code>. <code>400</code> no <code>confirm</code>; <code>409</code> no card, a readable one, or a
 format running.</p>
@@ -396,7 +396,9 @@ format running.</p>
 <code>wifi_pass</code>, and <code>follow_code</code>, <code>""</code> clearing it). Applied at once:
 brightness, look and glow repaint the panel; a transition applies from the
 next file; a new <code>set</code>, <code>platforms</code> or <code>shuffle</code> rebuilds the playlist in
-place. WiFi and hostname changes take effect after a reboot.</p>
+place; a new <code>hostname</code> at once (mDNS re-announces, status <code>mdns</code> says the
+name it took; DHCP sends it from the next lease renewal). WiFi changes take
+effect after a reboot.</p>
 <p>Panel timing is tried: a <code>panel</code> object (any of its fields) runs for 60 s,
 then reverts unless <code>"panel_confirm":true</code> keeps it (<code>false</code> undoes it; with
 <code>panel</code>, it saves at once). <code>clk_phase</code> and <code>latch_blanking</code> apply live; the
@@ -404,12 +406,12 @@ others at a restart, and revert with one. <code>"panel":null</code> saves the de
 <p>Reply: <code>{"ok":true, entries, index, index_ms, overrides, hidden,
 "brightness", "max_brightness", "reboot_required", "panel", …}</code> (the
 playlist fields as in "Fields that recur", the panel ones as above;
-<code>reboot_required</code>: a WiFi, hostname or panel change waits for a reboot).</p>
+<code>reboot_required</code>: a WiFi or panel change waits for a reboot).</p>
 <p>Errors (nothing saved): <code>400</code> a value out of range or not one of the names
 (the message says which), e.g. <code>brightness N is above the maximum M; raise
 Maximum brightness first</code> (lowering <code>max_brightness</code> below the saved
 <code>brightness</code> lowers it too); <code>404 {"error":"set not found"}</code> the playlist
-does not open; <code>409</code> a confirm with no trial; <code>413</code> over 8 KB. With a
+does not open; <code>409</code> a confirm with no trial, or a taken <code>hostname</code> (below); <code>413</code> over 8 KB. With a
 card in, a new <code>platforms</code> (or a <code>set</code> change with a filter kept) is checked
 against the playlist that would be in force (a schedule rule's <code>set</code> if one
 applies) before anything is saved: one that would leave it empty is a <code>400</code>
@@ -421,6 +423,12 @@ Clear filter.</p>
 curl -s -X PUT $DMD/api/config --json '{&quot;set&quot;:&quot;consoles&quot;,&quot;shuffle&quot;:true}'
 curl -s -X PUT $DMD/api/config --json '{&quot;panel&quot;:{&quot;clk_phase&quot;:false}}'
 </code></pre>
+<h3 id="get-apiname-check">GET /api/name-check<a class="headerlink" href="#get-apiname-check" title="Permanent link">#</a></h3>
+<p><code>?name=kitchen</code>: does another device answer to <code>kitchen.local</code>? Asked over
+mDNS (≤ 1.2 s): <code>{"name","valid","taken","by"}</code> (<code>by</code> its address;
+<code>taken</code> null if it could not ask: an invalid name, setup mode, the network
+busy; never for this player's own name). A taken <code>hostname</code> in <code>PUT
+/api/config</code> is a <code>409</code> <code>{"error":"name taken: …","name","by"}</code>.</p>
 <h3 id="post-apipaneltest">POST /api/panel/test<a class="headerlink" href="#post-apipaneltest" title="Permanent link">#</a></h3>
 <p>The guided panel-timing test: the panel shows four test pictures, each
 under A then B (2 s each, the letter in the bottom-right corner), and
@@ -683,7 +691,7 @@ browser), not someone on the same WiFi: it is plain HTTP.</p>
 <ul>
 <li>A <code>POST</code>/<code>PUT</code>/<code>DELETE</code> whose <code>Origin</code> is another host than its <code>Host</code>
   is a <code>403</code> (no <code>Origin</code>, as from curl, is fine).</li>
-<li><strong>API key</strong> (Settings → Advanced → Security): with <code>api_key</code> set (<code>PUT
+<li><strong>API key</strong> (Settings → Device → Security): with <code>api_key</code> set (<code>PUT
   /api/config</code>, 8..64 of <code>A-Z a-z 0-9 . _ ~ -</code>, <code>""</code> = off; <code>GET</code> shows
   <code>api_key_set</code>), the API and the card's files need <code>Authorization: Bearer
   &lt;key&gt;</code> or <code>?key=&lt;key&gt;</code>, else <code>401</code>. Not the web app's files or <code>/setup</code>,
@@ -737,8 +745,7 @@ line of the card's <code>/update/log.txt</code> and its last ≤ 1 KB of whole l
 <p>The bundle as the body (<code>411</code> no length, <code>413</code> too big). Header, size,
 SHA-256 and Ed25519 signature are checked: a failure is a <code>422</code> with the
 reason, nothing staged; cut short <code>408</code>; no card <code>503</code>. Another key's
-bundle is refused once the 140-byte header is in (curl stops sending; the
-device reads off what is in flight for up to 2 s, then closes). Any validly
+bundle is refused once the 140-byte header is in. Any validly
 signed bundle is accepted, older ones too. Then
 <code>{"ok":true,"version":"…","rebooting":true}</code>; the panel is dark ~45 s from
 the end of the upload to playback while it installs.</p>

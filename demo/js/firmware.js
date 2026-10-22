@@ -1,4 +1,4 @@
-// Settings → Advanced → Firmware and Security (imported when Advanced is
+// Settings › Device › Firmware and Security (imported when the Device tab is
 // first open; its own size line). Firmware: the running version (GET
 // /api/firmware), the updater's log behind "Update log", and "Update from
 // file…": a signed bundle (.odfw, docs/ota.md) checked here for its header

@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
 <title>OpenDMD</title>
+<link rel="preload" href="./fonts/silkscreen.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="./app.css">
 </head>
 <body>
@@ -13,17 +14,17 @@
   <span id="where" class="muted">Connecting…</span>
 </header>
 <nav id="nav">
-  <a href="#now" data-view="now"><i>▶</i><span>Now</span></a>
-  <a href="#library" data-view="library"><i>☰</i><span>Library</span></a>
-  <a href="#create" data-view="create" id="nav-art"><i>✎</i><span>Create Art</span></a>
-  <a href="#sets" data-view="sets"><i>≡</i><span>Playlists</span></a>
-  <a href="#settings" data-view="settings"><i>⚙</i><span>Settings</span></a>
+  <a href="#now" data-view="now"><i>▶&#xFE0E;</i><span>Now</span></a>
+  <a href="#library" data-view="library"><i>▦</i><span>Library</span></a>
+  <a href="#sets" data-view="sets"><i>☰</i><span>Playlists</span></a>
+  <a href="#create" data-view="create" id="nav-art"><i>✎&#xFE0E;</i><span>Create Art</span></a>
+  <a href="#settings" data-view="settings"><i>⚙&#xFE0E;</i><span>Settings</span></a>
 </nav>
 <main id="main">
   <section id="view-now" class="view"></section>
   <section id="view-library" class="view"></section>
-  <section id="view-create" class="view"></section>
   <section id="view-sets" class="view"></section>
+  <section id="view-create" class="view"></section>
   <section id="view-settings" class="view"></section>
 </main>
 <div id="toasts" aria-live="polite"></div>

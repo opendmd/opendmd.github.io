@@ -98,6 +98,11 @@ export async function mount(el) {
   const search = h('input', { type: 'search', id: 'lib-search', placeholder: 'Search GIFs', enterKeyHint: 'search', oninput: () => apply() });
   const count = h('span.muted', { id: 'lib-count' });
   const tabs = h('div.tabs', { id: 'lib-cats', role: 'tablist' });
+  // On a phone the categories are a select (the tabs would clip).
+  const csel = h('select', { id: 'lib-csel', 'aria-label': 'Category', onchange: () => { cat = csel.value; renderTabs(); load(); } });
+  // Checkboxes only in Select mode (the button, or a long press on a row).
+  let selecting = false;
+  const selBtn = h('button.sm', { id: 'lib-select', onclick: () => selMode(!selecting) }, 'Select');
   const chips = h('div.chips.scroll', { id: 'lib-chips' });
   const addInput = h('input', { type: 'file', multiple: true, accept: '.gif,image/gif', hidden: true, id: 'lib-add-files', onchange: () => { addGifs([...addInput.files]); addInput.value = ''; } });
   const addBtn = app.device && h('button', { id: 'lib-add-btn', onclick: () => addInput.click() }, '+ Add GIFs');
@@ -112,12 +117,12 @@ export async function mount(el) {
   const addCard = h('div.lib-progress', { id: 'lib-add', hidden: true }, h('div.bar', addBar), h('div.cap', addMsg), addErr);
 
   const selCount = h('b');
-  const selbar = h('div.selbar.row.sp', { hidden: true, id: 'lib-selbar' },
-    h('span', selCount, ' selected'),
-    h('div.row',
-      h('button.txt', { id: 'lib-all', onclick: selectAll }, 'Select shown'),
-      h('button.txt', { onclick: () => { app.selection.clear(); sync(); } }, 'Clear'),
-      h('button', { id: 'lib-to-set', onclick: toSet }, 'Add to playlist')));
+  const toSetBtn = h('button.pri', { id: 'lib-to-set', onclick: toSet }, 'Add to playlist');
+  const selbar = h('div.selbar.row', { hidden: true, id: 'lib-selbar' },
+    h('span.grow', selCount, ' selected'),
+    h('button', { id: 'lib-all', onclick: selectAll }, 'Select all shown'),
+    toSetBtn,
+    h('button', { id: 'lib-sel-done', onclick: () => selMode(false) }, 'Done'));
 
   const ov = new Overrides();
   ov.onChange = () => list.refresh();
@@ -125,7 +130,7 @@ export async function mount(el) {
   const list = new VList({
     rowHeight: 44,
     render(row, it) {
-      const box = h('input', { type: 'checkbox', checked: app.selection.has(it.path), 'aria-label': 'select', onclick: (e) => { e.stopPropagation(); toggle(it.path, box.checked); } });
+      const box = selecting && h('input', { type: 'checkbox', checked: app.selection.has(it.path), 'aria-label': 'select', onclick: (e) => { e.stopPropagation(); toggle(it.path, box.checked); } });
       const o = ov.get(it.path), cv = thumbs && it.path[0] != '@' && h('canvas.th', { width: 128, height: 32 });
       clear(row, box, cv, h('span.t', label(it.e)), glyphs(o), it.e.platform && h('span.tag', it.e.platform), moreButton(ov, it.path));
       if (cv) thumb(cv, it.path);
@@ -133,8 +138,9 @@ export async function mount(el) {
       row.classList.toggle('hid', !!o?.never);
       row.dataset.path = it.path;
     },
-    onClick: (it) => preview(it),
+    onClick: (it) => (selecting ? toggle(it.path, !app.selection.has(it.path)) : preview(it)),
     onMenu: (it, _i, x, y) => menu(ov, it.path, x, y),
+    onHold: (it) => { selMode(true); toggle(it.path, true); },
   });
   list.el.id = 'lib-list';
 
@@ -174,7 +180,7 @@ export async function mount(el) {
   const grid = h('div.libgrid',
     h('div',
       h('div.card.libhead',
-        h('div.lib-q', search), count, addBtn, addInput,
+        h('div.lib-q', search), csel, count, selBtn, addBtn, addInput,
         r2, addCard),
       webHint, list.el, selbar),
     side);
@@ -239,17 +245,26 @@ export async function mount(el) {
     sync();
   }
   function selectAll() { for (const it of shown) app.selection.add(it.path); sync(); }
+  function selMode(v) {
+    selecting = v;
+    if (!v) app.selection.clear();
+    selBtn.classList.toggle('on', v);
+    sync();
+  }
   function sync() {
+    if (app.selection.size) selecting = true;
     selCount.textContent = app.selection.size;
-    selbar.hidden = !app.selection.size;
+    selbar.hidden = !selecting;
+    toSetBtn.disabled = !app.selection.size;
     list.refresh();
   }
   function toSet() {
-    const have = new Set(app.draft.paths);
+    const have = new Set(app.draft.paths), n = app.selection.size;
     for (const p of app.selection) if (!have.has(p)) app.draft.paths.push(p);
-    toast(`${app.selection.size} entries added to the playlist being edited`, 'ok');
+    toast(`${n} GIF${n > 1 ? 's' : ''} added to “${app.draft.path ? playlistLabel(app.draft.path) : app.draft.name || 'New playlist'}”`, 'ok');
+    selMode(false);
     emit('draft');
-    app.go('sets');
+    app.go('sets/edit');
   }
 
   const real = () => cats.filter(([v]) => v[0] != '@').map(([v]) => v);
@@ -267,9 +282,12 @@ export async function mount(el) {
       role: 'tab', 'data-cat': v, 'aria-selected': String(v === cat),
       onclick: () => { if (v !== cat) { cat = v; renderTabs(); load(); } },
     }, t)));
-    const on = tabs.querySelector('.on');
-    if (on) for (const s of [tabs, tabs.parentNode]) s.scrollLeft = on.offsetLeft - s.offsetLeft - 24;
+    clear(csel, cats.map(([v, t]) => h('option', { value: v }, t)));
+    csel.value = cat;
+    scrollTab();
   }
+  // The open tab in view (in the next frame: after a hidden view shows).
+  const scrollTab = () => requestAnimationFrame(() => { const on = tabs.querySelector('.on'); if (on) for (const s of [tabs, r2]) s.scrollLeft = on.offsetLeft - s.offsetLeft - 24; });
 
   async function load() {
     store.set('lib.cat', cat);
@@ -421,6 +439,7 @@ export async function mount(el) {
   return {
     show() {
       thumbs = thumbsOn();
+      scrollTab();
       sync();
       playlists();
       if (dirty) { dirty = false; const was = current; categories().then(() => { const it = was && current === was && items.find((x) => x.path === was.path); if (it) preview(it); }); }

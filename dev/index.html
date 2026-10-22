@@ -6,6 +6,7 @@
 <meta name="color-scheme" content="dark">
 <meta name="description" content="OpenDMD: open firmware and a web app for the DMDoS LED dot-matrix display.">
 <title>For developers · OpenDMD</title>
+<link rel="preload" href="../fonts/silkscreen.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="../site.css">
 </head>
 <body>
@@ -34,6 +35,7 @@ make clippy                  # clippy -D warnings, every crate
 make sim ARGS=&quot;--root /path/to/card&quot;
 make web &amp;&amp; make web-mock ROOT=/path/to/card   # the web app against a fake device on :8080
 make web-smoke               # headless Chromium through every view
+make font                    # the headings' pixel font (Silkscreen): subset it again
 make fw-build                # the firmware (the first build fetches ESP-IDF)
 make fw-flash PORT=/dev/ttyUSB0   # bench build over USB, then the serial monitor
 </code></pre>
@@ -43,7 +45,8 @@ make flasher                 # the browser installer with dist/ on http://localh
 make improv-check            # the real Improv Serial host library against the firmware's framing (node, npm)
 make fw-ota HOST=opendmd.local     # firmware over WiFi (signed bundle)
 make www-push HOST=opendmd.local   # web app only, over WiFi
-make site                    # this site, with dist/'s release under install/
+make sim-dist                # the simulator's download archive for this platform (release.yml builds all three)
+make site                    # this site, with dist/'s release under install/ (and target/sim-dist/'s simulators)
 </code></pre>
 <p>A release build has no WiFi credentials in it: the installer gives it
 your WiFi over USB (Improv Serial), or the player starts its
@@ -97,7 +100,8 @@ layout, recovery and the update flow in detail.</p>
 <ul>
 <li><a href="api.html">HTTP API</a>: every route the player answers, with <code>curl</code>
   examples. Anything the web app does, a script can do too.</li>
-<li><a href="simulator.html">The simulator</a>: its options and how it draws LEDs.</li>
+<li><a href="simulator.html">The simulator</a>: the downloads, its options and how it
+  draws LEDs.</li>
 <li><a href="effects.html">Writing an effect</a>: how the panel's effects work,
   their limits on the ESP32, and adding a new one, with a worked example.</li>
 <li><a href="pinout.html">Hardware pinout</a>: the DMDoS carrier board's

@@ -1,7 +1,7 @@
 [
 {
 "path": "/filelist.txt",
-"size": 767
+"size": 785
 },
 {
 "path": "/gifs/Demoscene/FX_Rotozoom_Chrono_01.gif",
@@ -48,15 +48,15 @@
 "size": 27408
 },
 {
-"path": "/gifs/Kenney/PIXEL_PLATFORMER_Pan_01_kenney.gif",
+"path": "/gifs/Kenney/OTHER_Pixel_Platformer_Pan_01_kenney.gif",
 "size": 391943
 },
 {
-"path": "/gifs/Kenney/PIXEL_PLATFORMER_Scroll_01_kenney.gif",
+"path": "/gifs/Kenney/OTHER_Pixel_Platformer_Scroll_01_kenney.gif",
 "size": 520038
 },
 {
-"path": "/gifs/Kenney/PIXEL_PLATFORMER_Walk_01_kenney.gif",
+"path": "/gifs/Kenney/OTHER_Pixel_Platformer_Walk_01_kenney.gif",
 "size": 181276
 },
 {
@@ -65,6 +65,6 @@
 },
 {
 "path": "/sets/Sprites and Clock.txt",
-"size": 177
+"size": 195
 }
 ]

@@ -8,18 +8,20 @@
 import { app } from './state.js';
 import { h } from './util.js';
 
-const CLOCKS = [['@clock', 'hours and minutes'], ['@clock?seconds=1', 'with seconds'], ['@clock?date=1', 'with the date'],
-  ['@clock?style=small&seconds=1&date=1', 'small, seconds and date']];
+// Each its own row title (the player's title for all of them is "Clock").
+const CLOCKS = [['@clock', 'hours and minutes', 'Clock'], ['@clock?seconds=1', 'with seconds', 'Clock with seconds'], ['@clock?date=1', 'with the date', 'Clock with date'],
+  ['@clock?style=small&seconds=1&date=1', 'small, seconds and date', 'Small clock with seconds and date']];
 
 // The items, and the text's form in `box`; `preview(item)` shows one,
 // `refresh()` redraws the list after the text changed.
 export function items(box, preview, refresh) {
-  const item = (path, name) => {
+  const item = (path, name, t) => {
     const e = app.wasm.parsePath(path);
+    if (t) e.title = t;
     return { path, e, name, norm: app.wasm.normalizeTitle(e.title) };
   };
   const msg = h('input', { type: 'text', id: 'live-msg', value: 'OpenDMD', maxLength: 200 });
-  const speed = h('select', { id: 'live-speed' }, [[60, 'slow'], [40, 'normal'], [25, 'fast']].map(([v, l]) => h('option', { value: v }, l)));
+  const speed = h('select', { id: 'live-speed' }, [[60, 'Slow'], [40, 'Normal'], [25, 'Fast']].map(([v, l]) => h('option', { value: v }, l)));
   speed.value = 40;
   const text = {};
   const set = () => Object.assign(text, item(`@text?msg=${encodeURIComponent(msg.value.trim() || 'OpenDMD')}${speed.value != 40 ? '&speed=' + speed.value : ''}`, 'scrolling text'));
@@ -32,7 +34,7 @@ export function items(box, preview, refresh) {
   set();
   box.replaceChildren(h('div.form', { style: 'margin-top:12px' }, h('label.stack', 'Scrolling text', msg), h('label.stack', 'Speed', speed)),
     h('p.cap', 'The clock shows the player’s own time; add these to a playlist like any GIF'));
-  return [...CLOCKS.map(([p, n]) => item(p, n)), text];
+  return [...CLOCKS.map(([p, n, t]) => item(p, n, t)), text];
 }
 
 // Effects: each row's controls (shown when it is picked) are its options;
@@ -57,7 +59,7 @@ export function effects(box, preview, refresh) {
   return FX.map(([fx, name, opts]) => {
     const it = { name };
     const sels = Object.entries(opts).map(([label, [vals, def, key = label]]) => {
-      const s = h('select', { 'data-key': key, 'data-def': def }, vals.map((v) => { const [val, text = val] = [].concat(v); return h('option', { value: val }, text); }));
+      const s = h('select', { 'data-key': key, 'data-def': def }, vals.map((v) => { const [val, text = val] = [].concat(v); return h('option', { value: val }, cap(String(text))); }));
       s.value = def;
       s.onchange = () => { set(); refresh(); preview(it); };
       return h('label.stack', cap(label), s);

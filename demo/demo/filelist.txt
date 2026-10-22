@@ -1,12 +1,12 @@
 @fx:tunnel?palette=fire&texture=rings&twist=2
 @text?msg=OpenDMD%20-%20open%20firmware%20for%20LED%20dot-matrix%20displays&speed=30&color=ffaa00
-/gifs/Kenney/PIXEL_PLATFORMER_Walk_01_kenney.gif
+/gifs/Kenney/OTHER_Pixel_Platformer_Walk_01_kenney.gif
 @fx:rotozoom?floor=1&palette=chrono&cycle=1
 @fx:wire?shape=tesseract&color=ff66cc
-/gifs/Kenney/PIXEL_PLATFORMER_Pan_01_kenney.gif
+/gifs/Kenney/OTHER_Pixel_Platformer_Pan_01_kenney.gif
 @clock?style=big&date=1
 @fx:starfield?palette=ice&density=3
-/gifs/Kenney/PIXEL_PLATFORMER_Scroll_01_kenney.gif
+/gifs/Kenney/OTHER_Pixel_Platformer_Scroll_01_kenney.gif
 @fx:tunnel?palette=chrono&cycle=1&drift=1
 @text?msg=Made%20in%20the%20browser&speed=30&color=00ccff
 /gifs/Demoscene/FX_Tunnel_Chrono_01.gif

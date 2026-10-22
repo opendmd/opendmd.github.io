@@ -11,12 +11,12 @@ import { PanelPreview, lookControls } from './preview.js';
 import { bannerFor } from './schedule.js';
 import { followLine } from './follow.js';
 import { Overrides, moreButton, fav } from './overrides.js';
-import { h, clear, on, store, debounce, toast, bytes, uptime, label, niceName, flagName, brightSlider } from './util.js';
+import { h, clear, on, store, debounce, toast, label, niceName, flagName, brightSlider } from './util.js';
 
 const POLL_MS = 500;
 
 // "Exolon2 · Spectrum · Slide": the platform, category and flags by name.
-const tags = (e) => [e.platform, e.category && niceName(e.category), ...e.flags.map(flagName)].filter(Boolean).map((t) => ' · ' + t).join('');
+const tags = (e) => [e.platform, e.category && niceName(e.category), ...e.flags.map(flagName)].filter(Boolean).join(' · ');
 
 // ★: the GIF on screen a favourite in the playlist playing (not live items).
 function favButton() {
@@ -43,7 +43,7 @@ function recentCard(prev, pick, fb) {
     prev.disabled = at + 1 >= paths.length;
     clear(list, paths.map((p, k) => {
       const e = app.wasm.parsePath(p);
-      return h('div' + (k === at ? '.cur' : ''), { onclick: () => pick(p), 'data-path': p }, h('span.grow', label(e)), h('span.muted', tags(e).slice(3)),
+      return h('div' + (k === at ? '.cur' : ''), { onclick: () => pick(p), 'data-path': p }, h('span.grow', label(e)), h('span.muted', tags(e)),
         fb.ov.path && p[0] != '@' && moreButton(fb.ov, p));
     }));
   };
@@ -56,7 +56,8 @@ export async function mount(el) {
 
 function mountDevice(el) {
   const canvas = h('canvas.panel', { id: 'now-panel' });
-  const follow = h('input', { type: 'checkbox', id: 'now-follow', checked: store.get('follow', true) });
+  // Settings › Look › Mirror the panel (this browser's choice).
+  const mirror = () => store.get('follow', true);
   const cap = h('div.cap', { id: 'now-cap' });
   const drift = h('span.mono.muted', { id: 'now-drift' });
   const title = h('b', { id: 'now-title' }, '…');
@@ -68,16 +69,12 @@ function mountDevice(el) {
   const ord = h('span', { id: 'now-ord' });
   const pauseBtn = h('button', { id: 'now-pause', onclick: togglePause }, 'Pause');
   const prevBtn = h('button', { id: 'now-prev', hidden: true, onclick: back }, 'Previous');
-  const againBtn = h('button', { id: 'now-again', onclick: () => pick(app.status?.now_playing?.path) }, 'Play again');
+  const againBtn = h('button', { id: 'now-again', onclick: () => pick(app.status?.now_playing?.path) }, 'Replay');
   const fb = favButton();
   const rc = recentCard(prevBtn, pick, fb);
   const bright = brightSlider('now-bright', app.config?.brightness ?? 96);
   bright.ceil(app.config?.max_brightness);
-  const grid = h('span.figs', { id: 'now-stats' });
-  const facts = h('dl.facts', { id: 'now-facts', style: 'margin-top:16px' });
   const conn = h('span.dot', { id: 'now-conn' });
-  const more = h('details.card', { id: 'now-more', open: store.get('health', false), ontoggle: () => store.set('health', more.open) },
-    h('summary', grid, h('span.muted', 'More')), facts);
 
   const banner = h('div.banner', { id: 'now-banner', hidden: true });
   // A card the panel can't read (exFAT, as most cards over 32 GB come): say
@@ -88,12 +85,10 @@ function mountDevice(el) {
   el.append(
     banner,
     h('div.card', canvas, cap, sdLine,
-      h('div.row.capl', h('span.grow', title, ' ', fb, ' ', unfilter, h('span.muted', tagsEl, ' · ', ord), ' ', followEl, ' ', conn, meta),
-        h('label.cap', follow, 'Follow the panel')),
-      h('div.row', { style: 'margin-top:12px' }, prevBtn, againBtn, pauseBtn, h('button.pri', { id: 'now-skip', onclick: skip }, 'Skip'),
-        h('label', 'Brightness', bright.el))),
+      h('div.nowt', h('div', title, ' ', fb, ' ', unfilter), h('div.muted', tagsEl, ' ', followEl), h('div.muted', ord, ' ', conn), meta),
+      h('div.transport', h('button.pri', { id: 'now-skip', onclick: skip }, 'Skip'), pauseBtn, prevBtn, againBtn),
+      h('label', { style: 'margin-top:12px' }, 'Brightness', bright.el)),
     rc,
-    more,
     lookControls(drift));
 
   const preview = new PanelPreview(canvas, { wrap: el, onError: (m) => { cap.textContent = 'Preview: ' + m; } });
@@ -105,7 +100,8 @@ function mountDevice(el) {
   let base = null;   // this file's first sample, for the rate its position runs at
   let recentOrd = -1; // the file `recent` was fetched with; -2: firmware without it
 
-  follow.onchange = () => { store.set('follow', follow.checked); if (follow.checked) render(app.status); else { preview.clear(); shownPath = ''; } };
+  let mirrored = mirror();
+  if (!mirrored) cap.textContent = 'Not mirroring the panel (Settings › Look)';
   const sendBright = debounce(async (v) => {
     try { await app.src.putConfig({ brightness: v }); if (app.config) app.config.brightness = v; } catch (e) { toast('brightness: ' + e.message, 'bad'); }
   }, 300);
@@ -131,7 +127,7 @@ function mountDevice(el) {
   // fetching from gifs/Consoles costs the device a ~330 ms directory scan
   // that the panel feels; a copy's small directory costs ~6 ms.
   async function follow_(path) {
-    if (!follow.checked || !path || path === shownPath) return;
+    if (!mirror() || !path || path === shownPath) return;
     shownPath = path;
     cap.textContent = 'Loading…';
     try {
@@ -171,17 +167,6 @@ function mountDevice(el) {
     drift.textContent = `Drift ${Math.round(d)} ms · RTT ${Math.round(best.rtt)} ms`;
   }
 
-  const stat = (name, value) => h('span.stat', h('b', value), h('span', name));
-  // Late frames a person could see (5 ms or more), playing on and at a GIF
-  // change (the new file's first frame and transition); every late frame,
-  // any size, only under More. Firmware before 0.3.12 has just the total.
-  // (One line on a laptop, two on a phone.)
-  const late = (m, n) => m?.steady === undefined ? n.toLocaleString()
-    : [h('span', `${m.steady.toLocaleString()} during play`), h('span.sep', ' · '), h('span', `${m.switch.toLocaleString()} at GIF changes`)];
-  const lateTip = (m) => m?.threshold_ms === undefined ? ''
-    : `Frames ${m.threshold_ms} ms or more late. GIF changes: the new GIF's first frame, its transition and its first ${m.window_ms / 1000} s`;
-  const fact = (name, value, bad) => [h('dt', name), h('dd' + (bad ? '.bad' : ''), value)];
-
   function render(s) {
     if (!s) return;
     const np = s.now_playing;
@@ -208,18 +193,6 @@ function mountDevice(el) {
     banner.hidden = !b;
     banner.dataset.mode = s.mode || 'normal';
     if (b) clear(banner, b);
-    clear(grid,
-      stat('Uptime', uptime(s.uptime_secs)),
-      stat('Free memory', bytes(s.heap.free)),
-      Object.assign(stat('Late frames', late(s.misses, s.deadline_misses)), { id: 'now-late', className: 'stat w', title: lateTip(s.misses) }));
-    clear(facts,
-      fact('Address', s.ip || '–'),
-      fact('Lowest free memory', bytes(s.heap.floor), s.heap.floor < 20000),
-      fact('Refresh', s.refresh_hz + ' Hz'),
-      fact('Late frames, any size', `${s.deadline_misses.toLocaleString()} · worst ${s.worst_lateness_ms} ms`),
-      fact('Files started', s.gifs_started.toLocaleString()),
-      fact('Playlist', playlistLabel(s.manifest)),
-      fact('Card', !s.sd.mounted ? 'Not mounted' : s.sd.formatting ? 'Formatting…' : s.sd.readable === false ? 'Not readable: needs FAT32' : bytes(s.sd.capacity_bytes), s.sd.readable === false || !s.sd.mounted));
     sdLine.hidden = !s.sd.mounted || s.sd.readable !== false;
     sdText.textContent = s.sd.formatting ? 'Formatting the card…' : 'This card can’t be read: it needs FAT32';
     if (preview.paused !== s.paused) preview.setPaused(s.paused);
@@ -258,7 +231,12 @@ function mountDevice(el) {
 
   render(app.status);
   return {
-    show() { if (fb.ov.path) fb.ov.load(fb.ov.path); poll(); clearInterval(timer); timer = setInterval(poll, POLL_MS); }, // the Library may have changed it
+    show() {
+      if (fb.ov.path) fb.ov.load(fb.ov.path); // the Library may have changed it
+      // Mirroring switched in Settings since.
+      if (mirrored !== (mirrored = mirror())) { preview.clear(); shownPath = ''; cap.textContent = mirrored ? '' : 'Not mirroring the panel (Settings › Look)'; }
+      poll(); clearInterval(timer); timer = setInterval(poll, POLL_MS);
+    },
     hide() { clearInterval(timer); },
   };
 }

@@ -1,4 +1,4 @@
-// Settings → Advanced → Panel timing (loaded with Advanced; its own size
+// Settings › Device › Panel timing (loaded with the Device tab; its own size
 // line): /api/config `panel`, each change a trial (docs/firmware.md).
 
 import { app } from './state.js';

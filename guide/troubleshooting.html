@@ -6,6 +6,7 @@
 <meta name="color-scheme" content="dark">
 <meta name="description" content="OpenDMD: open firmware and a web app for the DMDoS LED dot-matrix display.">
 <title>Troubleshooting · OpenDMD</title>
+<link rel="preload" href="../fonts/silkscreen.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="../site.css">
 </head>
 <body>
@@ -44,9 +45,9 @@
   until you rename it. When a second one joins your network with the same
   name, one of them moves to <code>opendmd-2.local</code> (and it may be the one you
   had first). Open <code>opendmd-2.local</code> or the display's address,
-  then give each display its own name in <strong>Settings → Advanced → Network</strong>
-  and reboot it. <strong>Settings → About</strong> shows the address a display really
-  has.</li>
+  then give each display its own name in <strong>Settings → Device → Network</strong>
+  (a name another display already has is refused). <strong>Settings → Device →
+  About</strong> shows the address a display really has.</li>
 </ul>
 <h2 id="the-panel-says-theres-no-card-or-the-card-cant-be-read">The panel says there's no card, or the card can't be read<a class="headerlink" href="#the-panel-says-theres-no-card-or-the-card-cant-be-read" title="Permanent link">#</a></h2>
 <ul>
@@ -60,10 +61,10 @@
 <h2 id="the-display-resets-or-flickers-when-its-bright">The display resets or flickers when it's bright<a class="headerlink" href="#the-display-resets-or-flickers-when-its-bright" title="Permanent link">#</a></h2>
 <p>The power supply can't keep up at high brightness, especially on mostly
 white pictures. Lower the brightness, or lower <strong>Maximum brightness</strong> in
-<strong>Settings → Power</strong> if you raised it.</p>
+<strong>Settings → Playback</strong> if you raised it.</p>
 <h2 id="some-leds-show-the-wrong-colours-on-certain-pictures">Some LEDs show the wrong colours on certain pictures<a class="headerlink" href="#some-leds-show-the-wrong-colours-on-certain-pictures" title="Permanent link">#</a></h2>
 <p>If a few dots come out the wrong colour on some pictures but not others,
-the panel may be fussy about timing. Open <strong>Settings → Advanced → Panel
+the panel may be fussy about timing. Open <strong>Settings → Device → Panel
 timing</strong> and press <strong>Test panel timing</strong>. The panel shows some test
 pictures, switching between <strong>A</strong> and <strong>B</strong> (the letter is in the bottom
 corner): pick the one that looks clean and it is saved. If both have dots,

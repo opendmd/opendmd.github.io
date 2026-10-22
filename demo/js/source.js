@@ -23,7 +23,7 @@ async function check(res) {
   throw new HttpError(res.status, `${res.status}: ${msg}`);
 }
 
-// The API key (Settings → Advanced → Security) goes with every request; a
+// The API key (Settings › Device › Security) goes with every request; a
 // 401 asks for it (js/firmware.js; once for all callers, Cancel: not again)
 // and retries.
 let asking;

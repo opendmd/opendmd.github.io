@@ -3,8 +3,10 @@
 import { h } from './util.js';
 
 export class VList {
-  // onMenu(item, index, x, y): right-click, or a long press on a touch screen.
-  constructor({ rowHeight = 40, render, onClick, onMenu }) {
+  // onMenu(item, index, x, y): right-click, or a long press on a touch
+  // screen — unless there is onHold(item, index), which the long press is then.
+  // Rows take the focus; Enter is a click.
+  constructor({ rowHeight = 40, render, onClick, onMenu, onHold }) {
     this.rh = rowHeight;
     this.render = render;
     this.items = [];
@@ -12,25 +14,33 @@ export class VList {
     this.el = h('div.vlist', { onscroll: () => this.draw() }, this.inner);
     this.pool = [];
     let pressed = 0, t0 = null;
-    const fire = (row, x, y) => { pressed = Date.now(); onMenu(this.items[row._i], row._i, x, y); };
+    // A touch's long press may come as a contextmenu too (Android): once.
+    let touch = false;
+    const fire = (row, x, y, menu) => {
+      if (Date.now() - pressed < 700) return;
+      pressed = Date.now();
+      (!menu && onHold || onMenu)(this.items[row._i], row._i, x, y);
+    };
     this.el.addEventListener('click', (e) => {
       const row = e.target.closest('.vrow');
       if (Date.now() - pressed < 700) return; // the tap that ended a long press
       if (row && onClick) onClick(this.items[row._i], row._i, e);
     });
+    this.el.addEventListener('keydown', (e) => { if (e.key == 'Enter' && e.target.classList.contains('vrow')) e.target.click(); });
     if (onMenu) {
       this.el.addEventListener('contextmenu', (e) => {
         const row = e.target.closest('.vrow');
         if (!row) return;
         e.preventDefault();
-        if (Date.now() - pressed > 700) fire(row, e.clientX, e.clientY);
+        fire(row, e.clientX, e.clientY, !touch);
       });
       // iOS has no contextmenu on a long press.
       let timer = 0;
       const cancel = () => clearTimeout(timer);
       this.el.addEventListener('pointerdown', (e) => {
         const row = e.target.closest('.vrow');
-        if (e.pointerType !== 'touch' || !row || e.target.closest('button,input')) return;
+        touch = e.pointerType === 'touch';
+        if (!touch || !row || e.target.closest('button,input')) return;
         t0 = [e.clientX, e.clientY];
         timer = setTimeout(() => fire(row, t0[0], t0[1]), 550);
       });
@@ -60,7 +70,7 @@ export class VList {
     if (!force && first === this.first && last === this.last) return;
     this.first = first; this.last = last;
     while (this.pool.length < last - first) {
-      const r = h('div.vrow', { style: `height:${this.rh}px` });
+      const r = h('div.vrow', { style: `height:${this.rh}px`, tabIndex: 0 });
       this.pool.push(r);
       this.inner.append(r);
     }

@@ -1,8 +1,9 @@
-// Settings → Advanced → Panel timing → Test panel timing (its own size
+// Settings › Device › Panel timing › Test panel timing (its own size
 // line, imported on the first click): POST /api/panel/test shows the
 // device's test pictures with one live setting switching between A and B;
 // the pick is saved through /api/config. The device ends a test after
-// 120 s, so an open box starts it again every 100 s.
+// 120 s, so an open box starts it again every 100 s; leaving the Device
+// tab or Settings ends it (`app.endPanelTest`, called by device.js).
 
 import { app } from './state.js';
 import { auth } from './source.js';
@@ -19,7 +20,7 @@ addEventListener('pagehide', () => close && fetch('/api/panel/test', {
 
 export function panelTest(box) {
   let again = 0;
-  const say = (...k) => { clearInterval(again); close = null; box.hidden = !k[0]; clear(box, ...k); };
+  const say = (...k) => { clearInterval(again); close = app.endPanelTest = null; box.hidden = !k[0]; clear(box, ...k); };
   const b = (t, fn) => h('button.sm', { onclick: fn }, t);
   const stop = (m) => { say(m && h('p', m)); post({ stop: true }).catch(() => {}); };
   async function run(k, more) {
@@ -43,6 +44,7 @@ export function panelTest(box) {
           : stop('Neither helped. Try Driver chip below, then switch the player off and on. If the dots stay, it may be the panel.'))),
         b('Stop', () => stop())));
     close = () => say();
+    app.endPanelTest = () => stop();
     again = setInterval(() => post({ setting: k }).catch(() => {}), 100000);
   }
   // These chips always use the rising edge: only the blanking can change.

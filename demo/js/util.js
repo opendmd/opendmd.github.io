@@ -80,8 +80,10 @@ export function uptime(s) {
 // A manifest's non-blank lines, tolerant like the core (BOM, CRLF, trailing blanks).
 export const lines = (text) => text.replace(/^﻿/, '').split('\n').map((l) => l.trimEnd()).filter(Boolean);
 
-// The display name of an entry: "Title 03" plus nothing else.
-export const label = (e) => (e.title || base(e.path)) + (e.variant != null ? ' ' + String(e.variant).padStart(2, '0') : '');
+// The display name of an entry: "Title 03" plus nothing else; a name with
+// no title (or only a number: N64_LOGO_01.gif) reads "N64 Logo 01".
+export const label = (e) => ((!e.title || /^\d\d?$/.test(e.title) ? [e.platform, ...(e.flags || []).filter(isFlag).map(flagName), e.title].filter(Boolean).join(' ') : e.title) || base(e.path))
+  + (e.variant != null ? ' ' + String(e.variant).padStart(2, '0') : '');
 
 export function confirmBox(msg) { return window.confirm(msg); }
 
@@ -110,17 +112,19 @@ export const note = (text, more) => h('p.cap', text, more && h('span.q', { title
 
 // Settings apply as they change: saver(heading) returns run(fn), which
 // runs saves in order (fn returning false: nothing to save) and shows
-// "✓ Saved" in the heading for 2 s, or "Couldn't save: why".
+// "Saved ✓" in the heading, fading out over 2.5 s, or "Couldn't save: why".
 export function saver(head) {
-  const tick = head.appendChild(h('span.tick'));
+  const tick = head.querySelector('.tick') || head.appendChild(h('span.tick'));
   let q, t;
   return (fn) => (q = Promise.resolve(q).then(fn).then((r) => {
     if (r === false) return;
     tick.dataset.n = -~tick.dataset.n;
     tick.className = 'tick';
-    tick.textContent = '✓ Saved';
+    void tick.offsetWidth; // restart the fade
+    tick.className = 'tick ok';
+    tick.textContent = 'Saved ✓';
     clearTimeout(t);
-    t = setTimeout(() => { tick.textContent = ''; }, 2000);
+    t = setTimeout(() => { tick.textContent = ''; }, 2500);
   }, (e) => { clearTimeout(t); tick.className = 'tick bad'; tick.textContent = 'Couldn’t save: ' + e.message; }));
 }
 

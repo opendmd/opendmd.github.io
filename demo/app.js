@@ -9,37 +9,46 @@ import init from './pkg/opendmd_web.js';
 import { app } from './js/state.js';
 import { detect, demoCard, LocalSource } from './js/source.js';
 import { $, h, clear, emit, toast } from './js/util.js';
+import { closeMenu } from './js/overrides.js';
 
 await init();
 
-const VIEWS = ['now', 'library', 'create', 'sets', 'settings'];
+const VIEWS = ['now', 'library', 'sets', 'create', 'settings'];
 const MODULE = { create: 'studio' };
-const mounted = {};
-let current = '';
+// name -> the mount promise; ready[name] once it has resolved.
+const mounted = {}, ready = {};
+let current = '', shown = '';
 
+// `#view` or `#view/sub` (Settings' tabs, the Playlists editor): a view's
+// `show(sub)` runs when it comes up, `sub(sub)` on every route to it. A
+// hash change while a view is still mounting (or before the source is
+// known) mounts whatever the hash says once it can.
 async function route() {
   if (location.hash === '#studio') { location.replace('#create'); return; }
-  const name = VIEWS.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'now';
-  if (name === current) return;
-  if (current) mounted[current]?.hide?.();
-  // Safari keeps focus (and the keyboard) in a field a nav tap hides.
-  document.activeElement?.blur?.();
-  current = name;
-  for (const v of VIEWS) $('#view-' + v).classList.toggle('on', v === name);
-  for (const a of document.querySelectorAll('#nav a')) a.classList.toggle('on', a.dataset.view === name);
-  if (!app.src) return;
-  if (!mounted[name]) {
-    const mod = await import(`./js/${MODULE[name] || name}.js`);
-    mounted[name] = await mod.mount($('#view-' + name));
+  const [v, sub = ''] = location.hash.slice(1).split('/');
+  const name = VIEWS.includes(v) ? v : 'now';
+  if (name !== current) {
+    if (shown) ready[shown]?.hide?.();
+    shown = '';
+    closeMenu(); // a menu or sheet belongs to the view it opened in
+    // Safari keeps focus (and the keyboard) in a field a nav tap hides.
+    document.activeElement?.blur?.();
+    current = name;
+    for (const x of VIEWS) $('#view-' + x).classList.toggle('on', x === name);
+    for (const a of document.querySelectorAll('#nav a')) a.classList.toggle('on', a.dataset.view === name);
   }
-  mounted[name].show?.();
+  if (!app.src) return;
+  const m = await (mounted[name] ??= import(`./js/${MODULE[name] || name}.js`).then((mod) => mod.mount($('#view-' + name))).then((r) => (ready[name] = r || {})));
+  if (current !== name || app.src == null) return;
+  if (shown !== name) { shown = name; m.show?.(sub); }
+  m.sub?.(sub);
 }
 
 function setSource(src) {
   app.src = src;
-  for (const k of Object.keys(mounted)) delete mounted[k];
+  for (const k of Object.keys(mounted)) delete mounted[k], delete ready[k];
   for (const v of VIEWS) clear($('#view-' + v));
-  current = '';
+  current = shown = '';
   emit('source', src);
   route();
 }
