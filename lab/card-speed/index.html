@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Card speed test</title>
+<style>
+  :root { --bg: #fff; --fg: #1a1a1a; --muted: #666; --line: #ddd; --accent: #c2410c; --box: #f6f6f6; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg: #141414; --fg: #eee; --muted: #999; --line: #333; --accent: #fb923c; --box: #1f1f1f; }
+  }
+  :root[data-theme="dark"] { --bg: #141414; --fg: #eee; --muted: #999; --line: #333; --accent: #fb923c; --box: #1f1f1f; }
+  body { background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, sans-serif; margin: 0; padding: 24px 16px; }
+  main { max-width: 680px; margin: 0 auto; }
+  h1 { font-size: 1.4rem; margin: 0 0 8px; }
+  p, li { color: var(--fg); }
+  .muted { color: var(--muted); font-size: .9rem; }
+  button { font: inherit; padding: 8px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--box); color: var(--fg); cursor: pointer; }
+  button.pri { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  label { display: block; margin: 8px 0; }
+  select, input { font: inherit; padding: 4px 6px; background: var(--box); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; }
+  #log { white-space: pre-wrap; background: var(--box); border: 1px solid var(--line); border-radius: 6px; padding: 12px; font: 13px/1.4 ui-monospace, monospace; overflow-x: auto; min-height: 3em; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
+  progress { width: 100%; }
+</style>
+</head>
+<body>
+<main>
+<h1>Card speed test</h1>
+<p>Measures how fast this browser can write files to an SD card. It writes made-up test files (random bytes) into a <code>speedtest</code> folder on the card and reports the timings. Needs Chrome or Edge on a computer.</p>
+<ol>
+  <li>Put the card in the reader. Use a card you don't mind writing to.</li>
+  <li>Press <b>Pick the card</b> and choose the card itself (its top level, not a folder on it). Allow editing when the browser asks.</li>
+  <li>When it finishes, eject the card the normal way and time how long ejecting takes. Type the seconds below.</li>
+  <li>Press <b>Copy results</b> and paste them back.</li>
+</ol>
+<label>Files to write
+  <select id="n">
+    <option value="500">500 (quick, ~40 MB)</option>
+    <option value="2000" selected>2,000 (~160 MB)</option>
+    <option value="11000">11,000 (a full card's worth, ~900 MB)</option>
+  </select>
+</label>
+<label>Parallel writers
+  <select id="w"><option>1</option><option selected>4</option><option>8</option></select>
+</label>
+<div class="row">
+  <button class="pri" id="go">Pick the card</button>
+  <button id="clean" disabled>Remove test files</button>
+</div>
+<progress id="bar" value="0" max="1"></progress>
+<label>Seconds the eject took <input id="eject" type="number" min="0" step="1" style="width:6em"></label>
+<div class="row"><button id="copy" disabled>Copy results</button></div>
+<div id="log">Not started.</div>
+<p class="muted">Nothing is uploaded: the files are made in your browser and the results stay on this page until you copy them.</p>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const log = (s) => { $('log').textContent = s; };
+let root = null, results = null;
+
+const WORKER = `
+let dir; const dirs = new Map();
+async function dirFor(parts) {
+  let d = dir, k = '';
+  for (const p of parts) {
+    k += '/' + p;
+    if (dirs.has(k)) { d = dirs.get(k); continue; }
+    d = await d.getDirectoryHandle(p, { create: true }); dirs.set(k, d);
+  }
+  return d;
+}
+let seed = 0x9e3779b9;
+function fill(buf) { // xorshift32: fast, incompressible enough for a card
+  const u = new Uint32Array(buf.buffer, 0, buf.length >> 2);
+  for (let i = 0; i < u.length; i++) { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; u[i] = seed; }
+}
+self.onmessage = async (ev) => {
+  const m = ev.data;
+  if (m.type === 'init') { dir = m.dir; seed ^= m.id * 2654435761; self.postMessage({ type: 'ready' }); return; }
+  const res = [], err = [];
+  for (const [path, size] of m.items) {
+    try {
+      const bytes = new Uint8Array((size + 3) & ~3); fill(bytes);
+      const parts = path.split('/'); const name = parts.pop();
+      const a = performance.now();
+      const d = await dirFor(parts);
+      const b = performance.now();
+      const fh = await d.getFileHandle(name, { create: true });
+      const w = await fh.createWritable();
+      const c = performance.now();
+      await w.write(bytes.subarray(0, size));
+      const e = performance.now();
+      await w.close();
+      const f = performance.now();
+      res.push([b - a, c - b, e - c, f - e, f - a, size]);
+    } catch (e) { err.push(path + ': ' + e.name + ': ' + e.message); }
+  }
+  self.postMessage({ type: 'batch', res, err });
+};`;
+
+// Sizes like a card's prepared GIFs: log-normal, median ~55 KB, 2 KB..2 MB.
+function sizes(n) {
+  let s = 12345; const rnd = () => (s = (s * 1103515245 + 12345) >>> 0) / 4294967296;
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const z = Math.sqrt(-2 * Math.log(rnd() || 1e-9)) * Math.cos(2 * Math.PI * rnd());
+    out.push(Math.max(2048, Math.min(2 << 20, Math.round(55000 * Math.exp(0.9 * z)))));
+  }
+  return out;
+}
+const pct = (a, p) => { const s = [...a].sort((x, y) => x - y); return +s[Math.min(s.length - 1, Math.floor(p * s.length))].toFixed(1); };
+const env = () => ({ ua: navigator.userAgent, platform: navigator.userAgentData?.platform || navigator.platform, cores: navigator.hardwareConcurrency });
+
+$('go').onclick = async () => {
+  if (!window.showDirectoryPicker) { log('This browser has no folder access. Use Chrome or Edge on a computer.'); return; }
+  results = { env: env(), picked: null };
+  try {
+    root = await showDirectoryPicker({ id: 'card', mode: 'readwrite' });
+  } catch (e) { results.picked = { error: e.name + ': ' + e.message }; log('Picking failed: ' + e.name + ': ' + e.message); $('copy').disabled = false; return; }
+  results.picked = { name: root.name };
+  const n = +$('n').value, nw = +$('w').value;
+  const sz = sizes(n), total = sz.reduce((a, b) => a + b, 0);
+  const items = sz.map((s, i) => ['speedtest/' + (i % 256).toString(16).padStart(2, '0') + '/test_' + i + '_some_longer_name.gif', s]);
+  $('go').disabled = true; $('bar').max = n; $('bar').value = 0;
+  log(`Writing ${n} files (${(total / 1e6).toFixed(0)} MB) to "${root.name}" with ${nw} writers…`);
+  const url = URL.createObjectURL(new Blob([WORKER], { type: 'text/javascript' }));
+  const all = [], errs = [];
+  const t0 = performance.now();
+  let next = 0;
+  await Promise.all(Array.from({ length: nw }, (_, id) => new Promise((done) => {
+    const w = new Worker(url);
+    const feed = () => {
+      if (next >= items.length) { w.terminate(); done(); return; }
+      const batch = items.slice(next, next + 16); next += 16;
+      w.postMessage({ type: 'work', items: batch });
+    };
+    w.onmessage = (ev) => {
+      if (ev.data.type === 'ready') return feed();
+      all.push(...ev.data.res); errs.push(...ev.data.err);
+      $('bar').value = all.length + errs.length;
+      const secs = (performance.now() - t0) / 1000;
+      log(`${all.length + errs.length} of ${n} files, ${secs.toFixed(0)} s, ${(all.length / secs).toFixed(1)} files/s`);
+      feed();
+    };
+    w.onerror = (e) => { errs.push('worker: ' + e.message); w.terminate(); done(); };
+    w.postMessage({ type: 'init', dir: root, id });
+  })));
+  const secs = (performance.now() - t0) / 1000;
+  const col = (i) => all.map((r) => r[i]);
+  results.run = {
+    files: n, ok: all.length, errors: errs.length, first_errors: errs.slice(0, 5), writers: nw,
+    mb: +(total / 1e6).toFixed(1), seconds: +secs.toFixed(1),
+    files_per_s: +(all.length / secs).toFixed(1), mb_per_s: +(total / 1e6 / secs).toFixed(2),
+    ms_total_p50_p95_max: [pct(col(4), .5), pct(col(4), .95), pct(col(4), 1)],
+    ms_close_p50_p95_max: [pct(col(3), .5), pct(col(3), .95), pct(col(3), 1)],
+    ms_create_p50_p95_max: [pct(col(1), .5), pct(col(1), .95), pct(col(1), 1)],
+  };
+  log(`Done: ${all.length} files in ${secs.toFixed(1)} s (${results.run.files_per_s} files/s, ${results.run.mb_per_s} MB/s), ${errs.length} errors.\n\nNow eject the card and time how long it takes, type the seconds above, then press Copy results.\n(Or remove the test files first, then eject.)`);
+  $('copy').disabled = false; $('clean').disabled = false; $('go').disabled = false;
+};
+
+$('clean').onclick = async () => {
+  $('clean').disabled = true;
+  const t0 = performance.now();
+  try { await root.removeEntry('speedtest', { recursive: true }); log(`Test files removed (${((performance.now() - t0) / 1000).toFixed(1)} s).`); if (results) results.remove_seconds = +((performance.now() - t0) / 1000).toFixed(1); }
+  catch (e) { log('Removing failed: ' + e.name + ': ' + e.message); $('clean').disabled = false; }
+};
+
+$('copy').onclick = async () => {
+  if ($('eject').value !== '') results.eject_seconds = +$('eject').value;
+  const text = JSON.stringify(results, null, 1);
+  try { await navigator.clipboard.writeText(text); log('Copied. Paste it back in the chat.\n\n' + text); }
+  catch { log('Copy failed; select and copy this:\n\n' + text); }
+};
+</script>
+</body>
+</html>
