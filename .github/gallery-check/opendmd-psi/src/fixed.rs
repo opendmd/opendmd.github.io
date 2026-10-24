@@ -368,7 +368,11 @@ pub fn noise(x: i32, y: i32, z: i32) -> i32 {
         ((y >> 16) as u32).wrapping_mul(P2),
         ((z >> 16) as u32).wrapping_mul(P3),
     );
-    let (x1, y1, z1) = (x0.wrapping_add(P1), y0.wrapping_add(P2), z0.wrapping_add(P3));
+    let (x1, y1, z1) = (
+        x0.wrapping_add(P1),
+        y0.wrapping_add(P2),
+        z0.wrapping_add(P3),
+    );
     let (fx, fy, fz) = (fade15(x & 0xffff), fade15(y & 0xffff), fade15(z & 0xffff));
     let a = lerp15(corner(x0, y0, z0), corner(x1, y0, z0), fx);
     let b = lerp15(corner(x0, y1, z0), corner(x1, y1, z0), fx);
@@ -443,4 +447,58 @@ pub fn hsv(h: i32, s: i32, v: i32) -> [u8; 3] {
 pub fn pal(p: &[[u8; 3]; 32], k: i32) -> [u8; 3] {
     let i = (clamp(k, 0, ONE) >> 11).min(31) as usize;
     p[i]
+}
+
+// --- Layers: what is under, and blending ------------------------------------
+
+/// A byte 0..255 as Q16 0..1, exactly: 255 is 1.0 and `chan` of the result
+/// is the byte again (`b·257 + b/128`: 0, 257, …, 65,536).
+#[inline(always)]
+pub fn byte(b: u8) -> i32 {
+    (b as i32) * 257 + (b as i32 >> 7)
+}
+
+/// Rec. 601 luminance of an RGB888 pixel, as the panel's tint works it out
+/// (`opendmd_core::look::luma`: `(77 R + 150 G + 29 B + 128) / 256`).
+#[inline(always)]
+pub fn luma(r: u8, g: u8, b: u8) -> u8 {
+    ((77 * r as u32 + 150 * g as u32 + 29 * b as u32 + 128) >> 8) as u8
+}
+
+/// `a · b / 255`, rounded (exact for every pair of bytes).
+#[inline(always)]
+pub fn mul255(a: u8, b: u8) -> u8 {
+    let p = a as u32 * b as u32 + 128;
+    ((p + (p >> 8)) >> 8) as u8
+}
+
+/// Blend modes, in the order of `layer`'s names (`over add multiply screen
+/// max min`).
+pub const BLEND_OVER: u8 = 0;
+pub const BLEND_ADD: u8 = 1;
+pub const BLEND_MULTIPLY: u8 = 2;
+pub const BLEND_SCREEN: u8 = 3;
+pub const BLEND_MAX: u8 = 4;
+pub const BLEND_MIN: u8 = 5;
+pub const BLENDS: usize = 6;
+
+/// One channel of a layer `s` blended onto what is below it, `d`.
+#[inline(always)]
+pub fn blend(mode: u8, d: u8, s: u8) -> u8 {
+    match mode {
+        BLEND_ADD => d.saturating_add(s),
+        BLEND_MULTIPLY => mul255(d, s),
+        BLEND_SCREEN => d.saturating_add(s - mul255(d, s)),
+        BLEND_MAX => d.max(s),
+        BLEND_MIN => d.min(s),
+        _ => s,
+    }
+}
+
+/// `d` moved towards `r` by the coverage `a` (Q16, clamped to 0..1):
+/// `d + (r − d)·a`, rounded; `a` = 1 is exactly `r`, 0 exactly `d`.
+#[inline(always)]
+pub fn cover(d: u8, r: u8, a: i32) -> u8 {
+    let a = clamp(a, 0, ONE);
+    (d as i32 + (((r as i32 - d as i32) * a + 0x8000) >> 16)) as u8
 }

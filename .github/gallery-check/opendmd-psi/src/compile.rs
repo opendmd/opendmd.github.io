@@ -358,9 +358,13 @@ enum Input {
     A,
     B,
     C,
+    Ur,
+    Ug,
+    Ub,
+    Ul,
 }
 
-const INPUTS: [(&str, Input, &str); 12] = [
+const INPUTS: [(&str, Input, &str); 16] = [
     ("x", Input::X, "the pixel's position across, 0 to 1"),
     (
         "y",
@@ -377,6 +381,26 @@ const INPUTS: [(&str, Input, &str); 12] = [
     ("a", Input::A, "slider a"),
     ("b", Input::B, "slider b"),
     ("c", Input::C, "slider c"),
+    (
+        "ur",
+        Input::Ur,
+        "the red of the picture under the formula, 0 to 1",
+    ),
+    (
+        "ug",
+        Input::Ug,
+        "the green of the picture under the formula, 0 to 1",
+    ),
+    (
+        "ub",
+        Input::Ub,
+        "the blue of the picture under the formula, 0 to 1",
+    ),
+    (
+        "ul",
+        Input::Ul,
+        "the brightness of the picture under the formula, 0 to 1",
+    ),
 ];
 
 /// `w` and `h`: constants.
@@ -433,7 +457,18 @@ const PALETTES: [(&str, u8); 7] = [
     ("gray", 255),
 ];
 
-const KEYWORDS: [&str; 2] = ["loop", "frame"];
+const KEYWORDS: [&str; 3] = ["loop", "frame", "layer"];
+
+/// How a layer goes onto what is below it (`layer add { … }`; `over` when
+/// none is named).
+const BLENDS: [(&str, u8); fixed::BLENDS] = [
+    ("over", fixed::BLEND_OVER),
+    ("add", fixed::BLEND_ADD),
+    ("multiply", fixed::BLEND_MULTIPLY),
+    ("screen", fixed::BLEND_SCREEN),
+    ("max", fixed::BLEND_MAX),
+    ("min", fixed::BLEND_MIN),
+];
 
 /// Optimal string alignment distance (edits, adjacent swaps count one).
 fn distance(a: &str, b: &str) -> usize {
@@ -589,6 +624,29 @@ impl Dag {
     }
 
     fn input(&mut self, inp: Input, at: (usize, usize)) -> Result<Id, Error> {
+        let why = INPUTS.iter().position(|e| e.1 == inp).unwrap_or(0) as u8;
+        // What is under the formula: loaded into a lane by a step of its own.
+        let under = match inp {
+            Input::Ur => Some(code::U_R),
+            Input::Ug => Some(code::U_G),
+            Input::Ub => Some(code::U_B),
+            Input::Ul => Some(code::U_L),
+            _ => None,
+        };
+        if let Some(c) = under {
+            return self.push(
+                Node {
+                    code: c,
+                    a: 0,
+                    b: 0,
+                    c: 0,
+                    val: 0,
+                    level: LV_PIXEL,
+                    why,
+                },
+                at,
+            );
+        }
         let (val, level) = match inp {
             Input::X => ((LANE | L_X) as i32, LV_PIXEL),
             Input::Px => ((LANE | L_PX) as i32, LV_PIXEL),
@@ -602,8 +660,8 @@ impl Dag {
             Input::A => (S_A as i32, LV_FRAME),
             Input::B => (S_B as i32, LV_FRAME),
             Input::C => (S_C as i32, LV_FRAME),
+            Input::Ur | Input::Ug | Input::Ub | Input::Ul => (0, LV_PIXEL),
         };
-        let why = INPUTS.iter().position(|e| e.1 == inp).unwrap_or(0) as u8;
         self.push(
             Node {
                 code: K_INPUT,
@@ -701,6 +759,8 @@ struct Local<'s> {
     /// local it made a long formula quadratic).
     at: usize,
     in_frame: bool,
+    /// 0: the whole formula's; k: the `k`th layer's own.
+    scope: u16,
 }
 
 struct Parser<'s> {
@@ -710,13 +770,19 @@ struct Parser<'s> {
     dag: Dag,
     locals: Vec<Local<'s>>,
     depth: usize,
+    /// The layer being read (0: outside the layers) and the last one's.
+    scope: u16,
+    layers: u16,
 }
 
-/// The colour: an `OUT_*` code, its arguments, the palette.
+/// A colour: an `OUT_*` code, its arguments, the palette, how much of the
+/// pixel it covers (`None`: all of it) and how it goes onto what is below.
 struct Colour {
     code: u8,
     args: [Id; 3],
     pal: u8,
+    alpha: Option<Id>,
+    blend: u8,
 }
 
 const BP_TERNARY: u8 = 1;
@@ -868,13 +934,23 @@ impl<'s> Parser<'s> {
         Ok(lhs)
     }
 
+    /// Names set in another layer are that layer's own.
+    fn visible(&self, l: &Local) -> bool {
+        l.scope == 0 || l.scope == self.scope
+    }
+
     /// The candidates for a misspelt value name.
     fn value_names(&self) -> impl Iterator<Item = &str> + '_ {
         INPUTS
             .iter()
             .map(|e| e.0)
             .chain(CONSTS.iter().map(|e| e.0))
-            .chain(self.locals.iter().map(|l| l.name))
+            .chain(
+                self.locals
+                    .iter()
+                    .filter(|l| self.visible(l))
+                    .map(|l| l.name),
+            )
     }
 
     fn name(&mut self, t: Token) -> Result<Id, Error> {
@@ -898,7 +974,10 @@ impl<'s> Parser<'s> {
             if COLOURS.iter().any(|e| e.0 == name) {
                 return self.err(
                     t,
-                    format!("`{name}(…)` makes the colour, so it can only be the whole last line"),
+                    format!(
+                        "`{name}(…)` makes the colour, so it can only be the whole last line \
+                         (of the formula, or of a layer)"
+                    ),
                 );
             }
             if self.lookup_value(name).is_some() {
@@ -930,7 +1009,11 @@ impl<'s> Parser<'s> {
     }
 
     fn lookup_value(&mut self, name: &str) -> Option<Result<Id, Error>> {
-        if let Some(l) = self.locals.iter().find(|l| l.name == name) {
+        if let Some(l) = self
+            .locals
+            .iter()
+            .find(|l| l.name == name && self.visible(l))
+        {
             return Some(Ok(l.id));
         }
         if let Some(&(_, inp, _)) = INPUTS.iter().find(|e| e.0 == name) {
@@ -944,13 +1027,27 @@ impl<'s> Parser<'s> {
 
     /// `( a, b, … )` with exactly `n` values.
     fn args(&mut self, f: Token, name: &str, n: usize) -> Result<[Id; 3], Error> {
+        let (a, _) = self.args_or_cover(f, name, n, false)?;
+        Ok([a[0], a[1], a[2]])
+    }
+
+    /// `( a, b, … )` with `n` values, or with `cover` also `n + 1` (a
+    /// colour's last: how much of the pixel it covers); the values and how
+    /// many.
+    fn args_or_cover(
+        &mut self,
+        f: Token,
+        name: &str,
+        n: usize,
+        cover: bool,
+    ) -> Result<([Id; 4], usize), Error> {
         let open = self.expect(Tok::LParen, "`(`")?;
-        let mut out = [0 as Id; 3];
+        let mut out = [0 as Id; 4];
         let mut k = 0;
         if self.peek().tok != Tok::RParen {
             loop {
                 let e = self.expr(0)?;
-                if k < 3 {
+                if k < 4 {
                     out[k] = e;
                 }
                 k += 1;
@@ -973,17 +1070,22 @@ impl<'s> Parser<'s> {
             );
         }
         self.next();
-        if k != n {
+        if k != n && !(cover && k == n + 1) {
             let span = Error::new(f.start, close.end, "");
+            let s = if n == 1 { "" } else { "s" };
             return Err(Error {
-                msg: format!(
-                    "`{name}` takes {n} value{}, but got {k}",
-                    if n == 1 { "" } else { "s" }
-                ),
+                msg: if cover {
+                    format!(
+                        "`{name}` takes {n} value{s} (or {}: the last is how much of the pixel it covers, 0 to 1), but got {k}",
+                        n + 1
+                    )
+                } else {
+                    format!("`{name}` takes {n} value{s}, but got {k}")
+                },
                 ..span
             });
         }
-        Ok(out)
+        Ok((out, k))
     }
 
     /// The colour call at `t` (its name): `rgb(r, g, b)`, `hsv(h, s, v)`,
@@ -992,11 +1094,13 @@ impl<'s> Parser<'s> {
         let name = self.text(t);
         let &(_, ar, c) = COLOURS.iter().find(|e| e.0 == name).unwrap_or(&COLOURS[0]);
         if c != code::OUT_PAL {
-            let args = self.args(t, name, ar)?;
+            let (a, k) = self.args_or_cover(t, name, ar, true)?;
             return Ok(Colour {
                 code: c,
-                args,
+                args: [a[0], a[1], a[2]],
                 pal: 0,
+                alpha: (k > ar).then_some(a[ar]),
+                blend: fixed::BLEND_OVER,
             });
         }
         self.expect(Tok::LParen, "`(`")?;
@@ -1021,29 +1125,33 @@ impl<'s> Parser<'s> {
         };
         self.expect(Tok::Comma, "`,` (as in `pal(fire, k)`)")?;
         let k = self.expr(0)?;
+        let mut alpha = None;
+        if self.peek().tok == Tok::Comma {
+            self.next();
+            alpha = Some(self.expr(0)?);
+        }
         let close = self.peek();
         if close.tok != Tok::RParen {
             return self.err(
                 close,
                 format!(
-                    "`pal` takes a palette and one value; found {}",
+                    "`pal` takes a palette and one value (and how much of the pixel it covers, 0 to 1, if you like); found {}",
                     self.found(close)
                 ),
             );
         }
         self.next();
-        Ok(if pal == 255 {
-            Colour {
-                code: code::OUT_GRAY,
-                args: [k, 0, 0],
-                pal: 0,
-            }
+        let (code, pal) = if pal == 255 {
+            (code::OUT_GRAY, 0)
         } else {
-            Colour {
-                code: code::OUT_PAL,
-                args: [k, 0, 0],
-                pal,
-            }
+            (code::OUT_PAL, pal)
+        };
+        Ok(Colour {
+            code,
+            args: [k, 0, 0],
+            pal,
+            alpha,
+            blend: fixed::BLEND_OVER,
         })
     }
 
@@ -1093,7 +1201,11 @@ impl<'s> Parser<'s> {
                 format!("`{name}` is a palette's name; pick another name"),
             );
         }
-        if let Some(l) = self.locals.iter().find(|l| l.name == name) {
+        if let Some(l) = self
+            .locals
+            .iter()
+            .find(|l| l.name == name && self.visible(l))
+        {
             return self.err(
                 t,
                 format!(
@@ -1126,6 +1238,7 @@ impl<'s> Parser<'s> {
             id,
             at: t.start,
             in_frame,
+            scope: self.scope,
         });
         self.end_of_statement()
     }
@@ -1133,13 +1246,183 @@ impl<'s> Parser<'s> {
     fn is_assignment(&self) -> bool {
         self.peek().tok == Tok::Name && self.toks[self.pos + 1].tok == Tok::Assign
     }
+
+    /// The word starting the statement at the cursor, if it is a keyword
+    /// used as one (`loop = 3` is an assignment, and refused as such).
+    fn keyword(&self) -> &'s str {
+        let t = self.peek();
+        if t.tok != Tok::Name || self.toks[self.pos + 1].tok == Tok::Assign {
+            return "";
+        }
+        let w = self.text(t);
+        if KEYWORDS.contains(&w) {
+            w
+        } else {
+            ""
+        }
+    }
+
+    /// `frame { name = value … }` at `t` (one per formula, and one per
+    /// layer).
+    fn frame_block(&mut self, t: Token, seen: &mut bool) -> Result<(), Error> {
+        self.next();
+        if *seen {
+            return self.err(
+                t,
+                if self.scope == 0 {
+                    "there can be one `frame { }` block"
+                } else {
+                    "a layer can have one `frame { }` block"
+                },
+            );
+        }
+        *seen = true;
+        self.expect(Tok::LBrace, "`{` (as in `frame { … }`)")?;
+        self.skip_newlines();
+        while self.peek().tok != Tok::RBrace {
+            if self.peek().tok == Tok::Eof {
+                let t = self.peek();
+                return self.err(t, "`frame {` is never closed: add `}`");
+            }
+            if !self.is_assignment() {
+                let t = self.peek();
+                return self.err(t, "only `name = value` lines can go inside frame { }");
+            }
+            self.assignment(true)?;
+            self.skip_newlines();
+        }
+        self.next();
+        self.end_of_statement()
+    }
+
+    /// A colour line at `t` (its name), or a bare value as the last line
+    /// of the formula (`end` Eof) or of a layer (`end` RBrace): its gray.
+    fn colour_or_value(&mut self, t: Token, end: Tok) -> Result<Colour, Error> {
+        let word = if t.tok == Tok::Name { self.text(t) } else { "" };
+        if t.tok == Tok::Name
+            && COLOURS.iter().any(|e| e.0 == word)
+            && self.toks[self.pos + 1].tok == Tok::LParen
+        {
+            self.next();
+            let c = self.colour(t)?;
+            self.end_of_statement()?;
+            return Ok(c);
+        }
+        let id = self.expr(0)?;
+        self.end_of_statement()?;
+        self.skip_newlines();
+        if self.peek().tok != end {
+            return Err(Error::new(
+                t.start,
+                self.toks[self.pos.saturating_sub(1)].start.max(t.end),
+                if end == Tok::Eof {
+                    "only the last line can be a bare value (the colour) — did you mean `name = …`?"
+                } else {
+                    "only a layer's last line can be a bare value (its colour) — did you mean `name = …`?"
+                },
+            ));
+        }
+        Ok(Colour {
+            code: code::OUT_GRAY,
+            args: [id, 0, 0],
+            pal: 0,
+            alpha: None,
+            blend: fixed::BLEND_OVER,
+        })
+    }
+
+    /// `layer [blend] { … }` at `kw`: its own values (and `frame { }`),
+    /// ending in its colour.
+    fn layer(&mut self, kw: Token) -> Result<(Colour, Token), Error> {
+        self.next();
+        let mut blend = fixed::BLEND_OVER;
+        let b = self.peek();
+        if b.tok == Tok::Name {
+            let name = self.text(b);
+            let Some(&(_, m)) = BLENDS.iter().find(|e| e.0 == name) else {
+                let s = suggest(name, BLENDS.iter().map(|e| e.0));
+                return self.err(
+                    b,
+                    format!(
+                        "unknown blend `{name}`{} (a layer goes over, add, multiply, screen, max or min)",
+                        did_you_mean(s)
+                    ),
+                );
+            };
+            self.next();
+            blend = m;
+        }
+        let open = self.peek();
+        if open.tok != Tok::LBrace {
+            return self.err(
+                open,
+                format!(
+                    "expected `{{` here (as in `layer add {{ … }}`), found {}",
+                    self.found(open)
+                ),
+            );
+        }
+        self.next();
+        self.layers += 1;
+        self.scope = self.layers;
+        let mut seen_frame = false;
+        let mut colour: Option<(Colour, Token)> = None;
+        self.skip_newlines();
+        loop {
+            let t = self.peek();
+            match t.tok {
+                Tok::RBrace => break,
+                Tok::Eof => return self.err(kw, "this `layer {` is never closed — add `}`"),
+                _ => {}
+            }
+            if let Some((_, ct)) = &colour {
+                let ct = *ct;
+                return self.err(
+                    ct,
+                    "the colour has to be the layer's last line (move this to just before `}`)",
+                );
+            }
+            match self.keyword() {
+                "loop" => {
+                    return self.err(
+                        t,
+                        "`loop` is the whole formula's: put it on a line of its own, outside the layers",
+                    )
+                }
+                "layer" => {
+                    return self.err(
+                        t,
+                        "a layer can't go inside another — close this one with `}` first",
+                    )
+                }
+                "frame" => self.frame_block(t, &mut seen_frame)?,
+                _ if self.is_assignment() => self.assignment(false)?,
+                _ => colour = Some((self.colour_or_value(t, Tok::RBrace)?, t)),
+            }
+            self.skip_newlines();
+        }
+        self.next();
+        self.scope = 0;
+        let Some((mut c, ct)) = colour else {
+            return self.err(
+                kw,
+                "this layer has no colour: end it with `rgb(…)`, `hsv(…)`, `pal(…)` or `gray(…)`",
+            );
+        };
+        c.blend = blend;
+        self.end_of_statement()?;
+        Ok((c, ct))
+    }
 }
 
 /// What a compile also reports.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Info {
-    /// Values set inside `frame { }`.
+    /// Values set inside `frame { }` blocks.
     pub frame_values: usize,
+    /// `layer` blocks written (0: the formula is one picture, its last
+    /// line).
+    pub layers: usize,
 }
 
 /// Compile `src` into `prog` (which is cleared first). On an error `prog`
@@ -1172,8 +1455,12 @@ fn compile_inner(src: &str, prog: &mut Program) -> Result<Info, Error> {
         },
         locals: Vec::new(),
         depth: 0,
+        scope: 0,
+        layers: 0,
     };
+    // The last line's colour, or the layers' (bottom to top).
     let mut colour: Option<(Colour, Token)> = None;
+    let mut layers: Vec<(Colour, Token)> = Vec::new();
     let mut seen_loop = false;
     let mut seen_frame = false;
     p.skip_newlines();
@@ -1190,76 +1477,45 @@ fn compile_inner(src: &str, prog: &mut Program) -> Result<Info, Error> {
                 "the colour has to be the last line (move this to the end)",
             ));
         }
-        let word = if t.tok == Tok::Name { p.text(t) } else { "" };
-        let next = p.toks[p.pos + 1].tok;
-        if word == "loop" && next != Tok::Assign {
-            p.next();
-            if seen_loop {
-                return p.err(t, "`loop` is already set");
-            }
-            seen_loop = true;
-            let n = p.next();
-            let Tok::Num(v) = n.tok else {
-                return p.err(n, "`loop` takes a number of seconds, e.g. `loop 8`");
-            };
-            if !(ONE / 10..=3600 * ONE).contains(&v) {
-                return p.err(n, "the loop must be between 0.1 and 3600 seconds");
-            }
-            prog.loop_ms = ((v as i64 * 1000 + ONE as i64 / 2) >> 16) as u32;
-            p.end_of_statement()?;
-        } else if word == "frame" && next != Tok::Assign {
-            p.next();
-            if seen_frame {
-                return p.err(t, "there can be one `frame { }` block");
-            }
-            seen_frame = true;
-            p.expect(Tok::LBrace, "`{` (as in `frame { … }`)")?;
-            p.skip_newlines();
-            while p.peek().tok != Tok::RBrace {
-                if p.peek().tok == Tok::Eof {
-                    let t = p.peek();
-                    return p.err(t, "`frame {` is never closed: add `}`");
+        match p.keyword() {
+            "loop" => {
+                p.next();
+                if seen_loop {
+                    return p.err(t, "`loop` is already set");
                 }
-                if !p.is_assignment() {
-                    let t = p.peek();
-                    return p.err(t, "only `name = value` lines can go inside frame { }");
+                seen_loop = true;
+                let n = p.next();
+                let Tok::Num(v) = n.tok else {
+                    return p.err(n, "`loop` takes a number of seconds, e.g. `loop 8`");
+                };
+                if !(ONE / 10..=3600 * ONE).contains(&v) {
+                    return p.err(n, "the loop must be between 0.1 and 3600 seconds");
                 }
-                p.assignment(true)?;
-                p.skip_newlines();
+                prog.loop_ms = ((v as i64 * 1000 + ONE as i64 / 2) >> 16) as u32;
+                p.end_of_statement()?;
             }
-            p.next();
-            p.end_of_statement()?;
-        } else if p.is_assignment() {
-            p.assignment(false)?;
-        } else if t.tok == Tok::Name && COLOURS.iter().any(|e| e.0 == word) && next == Tok::LParen {
-            p.next();
-            let c = p.colour(t)?;
-            p.end_of_statement()?;
-            colour = Some((c, t));
-        } else {
-            // A bare value: only allowed as the last line (shown as gray).
-            let id = p.expr(0)?;
-            p.end_of_statement()?;
-            p.skip_newlines();
-            if p.peek().tok != Tok::Eof {
-                return Err(Error::new(
-                    t.start,
-                    p.toks[p.pos.saturating_sub(1)].start.max(t.end),
-                    "only the last line can be a bare value (the colour) — did you mean `name = …`?",
-                ));
+            "frame" => p.frame_block(t, &mut seen_frame)?,
+            "layer" => layers.push(p.layer(t)?),
+            _ if p.is_assignment() => p.assignment(false)?,
+            _ => {
+                let c = p.colour_or_value(t, Tok::Eof)?;
+                if !layers.is_empty() {
+                    return Err(Error::new(
+                        t.start,
+                        p.toks[p.pos.saturating_sub(1)].end.max(t.end),
+                        "with layers, every colour goes inside one: put this line in `layer { … }`",
+                    ));
+                }
+                colour = Some((c, t));
             }
-            colour = Some((
-                Colour {
-                    code: code::OUT_GRAY,
-                    args: [id, 0, 0],
-                    pal: 0,
-                },
-                t,
-            ));
         }
         p.skip_newlines();
     }
-    let Some((colour, ct)) = colour else {
+    let n_layers = layers.len();
+    if let Some(c) = colour {
+        layers.push(c);
+    }
+    if layers.is_empty() {
         let at = src.len();
         let msg = if p.locals.is_empty() {
             "empty: write a colour, e.g. `hsv(x + t/4, 1, 1)`"
@@ -1267,26 +1523,83 @@ fn compile_inner(src: &str, prog: &mut Program) -> Result<Info, Error> {
             "the last line should be the colour, e.g. `rgb(r, g, b)`, `hsv(h, s, v)` or `pal(fire, k)`"
         };
         return Err(Error::new(at, at, msg));
-    };
+    }
     let frame_values = p.locals.iter().filter(|l| l.in_frame).count();
+    // A layer under one that covers everything (`over`, coverage 1) is never
+    // seen: from the topmost such layer up. If it is the bottom one it is
+    // written straight over the pixels (as v0's last line); otherwise the
+    // picture under the formula shows through and every layer is blended.
+    let dag = &p.dag;
+    let opaque = |c: &Colour| {
+        c.blend == fixed::BLEND_OVER
+            && c.alpha
+                .is_none_or(|a| dag.konst(a).is_some_and(|v| v >= ONE))
+    };
+    if let Some(k) = layers.iter().rposition(|(c, _)| opaque(c)) {
+        layers.drain(..k);
+    }
+    let backdrop = !opaque(&layers[0].0);
+    let ct = layers[layers.len() - 1].1;
+    let mut steps = Vec::with_capacity(layers.len());
+    for (k, (c, _)) in layers.iter().enumerate() {
+        let plain = k == 0 && !backdrop;
+        let alpha = match (plain, c.alpha) {
+            (true, _) => None,
+            (false, Some(a)) => Some(a),
+            (false, None) => Some(p.dag.constant(ONE, (ct.start, ct.end))?),
+        };
+        steps.push(Step {
+            code: if plain {
+                c.code
+            } else {
+                code::OUT_LAYER + (c.code - code::OUT_RGB) + 4 * c.blend
+            },
+            args: c.args,
+            pal: c.pal,
+            alpha,
+        });
+    }
     // A limit hit while laying out the steps is the formula's as a whole:
-    // point at its colour line.
-    emit(&p.dag, &colour, prog).map_err(|e| Error {
+    // point at its (top) colour line.
+    emit(&p.dag, &steps, backdrop, prog).map_err(|e| Error {
         start: ct.start,
         end: ct.end,
         ..e
     })?;
-    Ok(Info { frame_values })
+    Ok(Info {
+        frame_values,
+        layers: n_layers,
+    })
+}
+
+/// A colour step to lay out: its code (plain or a layer's), its values,
+/// the palette and the coverage (a layer's).
+struct Step {
+    code: u8,
+    args: [Id; 3],
+    pal: u8,
+    alpha: Option<Id>,
+}
+
+impl Step {
+    /// What it reads, in operand order (the coverage last).
+    fn reads(&self) -> impl Iterator<Item = Id> + '_ {
+        self.args[..code::arity(self.code)]
+            .iter()
+            .copied()
+            .chain(self.alpha)
+    }
 }
 
 /// Lay the reachable nodes out as steps: scalar slots for the constants
 /// and the per-frame and per-row values, lane registers for the per-pixel
 /// ones (linear scan: a register is free again after its value's last
-/// use, and a step never writes a register it reads).
-fn emit(dag: &Dag, colour: &Colour, prog: &mut Program) -> Result<(), Error> {
+/// use, and a step never writes a register it reads). The per-pixel values
+/// go in the order the layers need them: each layer's colour step right
+/// after the values it is the first to read.
+fn emit(dag: &Dag, steps: &[Step], backdrop: bool, prog: &mut Program) -> Result<(), Error> {
     let nodes = &dag.nodes;
     let n = nodes.len();
-    let nargs = code::arity(colour.code);
     let too_long = |steps: usize| {
         Error::new(
             0,
@@ -1296,28 +1609,29 @@ fn emit(dag: &Dag, colour: &Colour, prog: &mut Program) -> Result<(), Error> {
             ),
         )
     };
-    // Reachability and last use (children always precede their parents).
-    let mut live = alloc::vec![false; n];
-    let mut last_use = alloc::vec![0usize; n];
-    for &a in &colour.args[..nargs] {
-        live[a as usize] = true;
-        last_use[a as usize] = n; // the colour reads after every node
+    // Reachability, and the first colour step each value is needed for
+    // (children always precede their parents).
+    const NONE: usize = usize::MAX;
+    let mut need = alloc::vec![NONE; n];
+    for (k, st) in steps.iter().enumerate() {
+        for a in st.reads() {
+            need[a as usize] = need[a as usize].min(k);
+        }
     }
     for i in (0..n).rev() {
-        if !live[i] {
+        let m = &nodes[i];
+        if need[i] == NONE || m.code >= K_CONST {
             continue;
         }
-        let m = &nodes[i];
-        if m.code < K_CONST {
-            for &x in [m.a, m.b, m.c][..code::arity(m.code)].iter() {
-                live[x as usize] = true;
-                last_use[x as usize] = last_use[x as usize].max(i);
-            }
+        for &x in [m.a, m.b, m.c][..code::arity(m.code)].iter() {
+            need[x as usize] = need[x as usize].min(need[i]);
         }
     }
-    let steps = (0..n).filter(|&i| live[i] && nodes[i].code < K_CONST).count() + 1;
-    if steps > MAX_OPS {
-        return Err(too_long(steps));
+    let live = |i: usize| need[i] != NONE;
+    let is_op = |i: usize| live(i) && nodes[i].code < K_CONST;
+    let total = (0..n).filter(|&i| is_op(i)).count() + steps.len();
+    if total > MAX_OPS {
+        return Err(too_long(total));
     }
     // Where each node's value lives.
     let mut loc = alloc::vec![0u8; n];
@@ -1337,20 +1651,29 @@ fn emit(dag: &Dag, colour: &Colour, prog: &mut Program) -> Result<(), Error> {
         Ok((next_slot - 1) as u8)
     };
     for i in 0..n {
-        if live[i] && nodes[i].code == K_CONST {
+        if live(i) && nodes[i].code == K_CONST {
             loc[i] = new_slot(Some(nodes[i].val), prog)?;
-        } else if live[i] && nodes[i].code == K_INPUT {
+        } else if live(i) && nodes[i].code == K_INPUT {
             loc[i] = nodes[i].val as u8;
             if nodes[i].val as u8 == LANE | L_I {
                 prog.uses |= USES_I;
             }
+        } else if is_op(i) && (code::U_R..=code::U_L).contains(&nodes[i].code) {
+            prog.uses |= UNDER;
         }
+    }
+    if backdrop {
+        prog.uses |= BACKDROP;
     }
     let mut ops: Vec<Op> = Vec::new();
     let mk = |m: &Node, d: u8, loc: &[u8]| Op {
         code: m.code,
         d,
-        a: loc[m.a as usize],
+        a: if code::arity(m.code) > 0 {
+            loc[m.a as usize]
+        } else {
+            0
+        },
         b: if code::arity(m.code) > 1 {
             loc[m.b as usize]
         } else {
@@ -1365,7 +1688,7 @@ fn emit(dag: &Dag, colour: &Colour, prog: &mut Program) -> Result<(), Error> {
     for level in [LV_FRAME, LV_ROW] {
         for i in 0..n {
             let m = &nodes[i];
-            if live[i] && m.code < K_CONST && m.level == level {
+            if is_op(i) && m.level == level {
                 let d = new_slot(None, prog)?;
                 loc[i] = d;
                 ops.push(mk(m, d, &loc));
@@ -1377,62 +1700,91 @@ fn emit(dag: &Dag, colour: &Colour, prog: &mut Program) -> Result<(), Error> {
             prog.row_end = ops.len().min(MAX_OPS) as u16;
         }
     }
-    // Per pixel: registers by linear scan.
+    // Per pixel: the order (a value, or colour step k), each value's last
+    // reader in it, then registers by linear scan.
+    #[derive(Clone, Copy)]
+    enum Item {
+        Value(usize),
+        Colour(usize),
+    }
+    let mut seq: Vec<Item> = Vec::new();
+    for k in 0..steps.len() {
+        for i in 0..n {
+            if is_op(i) && nodes[i].level == LV_PIXEL && need[i] == k {
+                seq.push(Item::Value(i));
+            }
+        }
+        seq.push(Item::Colour(k));
+    }
+    let mut last_use = alloc::vec![0usize; n];
+    for (at, item) in seq.iter().enumerate() {
+        match *item {
+            Item::Value(i) => {
+                let m = &nodes[i];
+                for &x in [m.a, m.b, m.c][..code::arity(m.code)].iter() {
+                    last_use[x as usize] = at;
+                }
+            }
+            Item::Colour(k) => {
+                for x in steps[k].reads() {
+                    last_use[x as usize] = at;
+                }
+            }
+        }
+    }
     let mut free: Vec<u8> = (0..REGS as u8).rev().collect();
     let mut holder: [Option<usize>; REGS] = [None; REGS];
     let mut used = 0usize;
-    for i in 0..n {
-        let m = &nodes[i];
-        if !(live[i] && m.code < K_CONST && m.level == LV_PIXEL) {
-            continue;
-        }
-        let Some(r) = free.pop() else {
-            return Err(Error::new(
-                0,
-                0,
-                format!(
-                    "this formula keeps too many values at once (more than {REGS}) — simplify it"
-                ),
-            ));
+    for (at, item) in seq.iter().enumerate() {
+        let wrote = match *item {
+            Item::Value(i) => {
+                let Some(r) = free.pop() else {
+                    return Err(Error::new(
+                        0,
+                        0,
+                        format!(
+                            "this formula keeps too many values at once (more than {REGS}) — simplify it"
+                        ),
+                    ));
+                };
+                used = used.max(REGS - free.len());
+                let d = LANE | (L_REG0 + r);
+                loc[i] = d;
+                ops.push(mk(&nodes[i], d, &loc));
+                holder[r as usize] = Some(i);
+                Some(i)
+            }
+            Item::Colour(k) => {
+                let st = &steps[k];
+                let l = |x: Id| loc[x as usize];
+                let (kind, _) = code::colour_parts(st.code);
+                let cover = st.alpha.map_or(0, l);
+                let rgb = kind == code::OUT_RGB || kind == code::OUT_HSV;
+                ops.push(Op {
+                    code: st.code,
+                    d: if rgb { cover } else { st.pal },
+                    a: l(st.args[0]),
+                    b: if rgb { l(st.args[1]) } else { cover },
+                    c: if rgb { l(st.args[2]) } else { 0 },
+                });
+                None
+            }
         };
-        used = used.max(REGS - free.len());
-        let d = LANE | (L_REG0 + r);
-        loc[i] = d;
-        ops.push(mk(m, d, &loc));
-        holder[r as usize] = Some(i);
         // Free the registers whose values this step read for the last time
         // (after picking the destination, so it is never one of them).
         for (reg, h) in holder.iter_mut().enumerate() {
             if let Some(v) = *h {
-                if v != i && last_use[v] <= i {
+                if Some(v) != wrote && last_use[v] <= at {
                     *h = None;
                     free.push(reg as u8);
                 }
             }
         }
-        if ops.len() >= MAX_OPS {
-            return Err(too_long(ops.len() + 1));
+        if ops.len() > MAX_OPS {
+            return Err(too_long(ops.len()));
         }
     }
     prog.pixel_end = ops.len() as u16;
-    if ops.len() + 1 > MAX_OPS {
-        return Err(too_long(ops.len() + 1));
-    }
-    ops.push(Op {
-        code: colour.code,
-        d: colour.pal,
-        a: loc[colour.args[0] as usize],
-        b: if nargs > 1 {
-            loc[colour.args[1] as usize]
-        } else {
-            0
-        },
-        c: if nargs > 2 {
-            loc[colour.args[2] as usize]
-        } else {
-            0
-        },
-    });
     prog.ops[..ops.len()].copy_from_slice(&ops);
     prog.n_scalars = next_slot as u8;
     prog.regs = used as u8;

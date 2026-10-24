@@ -38,8 +38,9 @@ there:</p>
 </ul>
 <p>If you leave the editor without saving, the gallery offers <strong>Continue
 editing</strong> at the top, and the app asks before anything replaces it.</p>
-<p>Formulas play here in the browser for now. To play one on the panel, save
-it as a GIF.</p>
+<p>On your player, <strong>Show on panel</strong> plays a formula there until the
+playlist moves on; save it as a GIF to keep it. Formulas that draw over a
+GIF have their own section, <a href="#over-a-gif">Over a GIF</a>.</p>
 <h2 id="the-editor">The editor<a class="headerlink" href="#the-editor" title="Permanent link">#</a></h2>
 <p>The preview is on top (on a phone it stays in view while you scroll) and
 the formula underneath; the preview follows as you type. Under it, a line
@@ -241,10 +242,82 @@ everything that moves should come back to where it started: use <code>t/N</code>
 <code>t*2/N</code> and so on with the loop's own <code>N</code>. Values inside <code>frame { … }</code>
 are worked out once a frame rather than for every pixel; they can't use
 the pixel's position.</p>
+<p><strong>Layers.</strong> A formula can be a stack of layers, bottom to top, each with
+its own names and its own colour on its last line:</p>
+<pre><code>loop 4
+layer {
+  wave = sin(x*2 + t/4) + sin(y*1.5 - t/2)
+  hsv(wave/4 + t/4, 0.9, 1)
+}
+layer multiply { gray(py % 2 ? 1 : 0.6) }
+</code></pre>
+<p>The word after <code>layer</code> says how it goes onto what is below it: <code>over</code>
+(the default: it covers it), <code>add</code> (lighter), <code>multiply</code> (darker: white
+leaves it as it was), <code>screen</code> (lighter, softly), <code>max</code> or <code>min</code>. Names
+set outside the layers can be used in all of them; names set inside a
+layer are its own, so two layers can each have a <code>v</code>, and you can paste a
+whole formula into a <code>layer { … }</code> to combine it with another. <code>loop</code> goes
+on its own line outside the layers.</p>
+<p><strong>How much it covers.</strong> Every colour takes one more value, if you like:
+how much of the pixel it covers, from 0 to 1 — <code>rgb(r, g, b, k)</code>,
+<code>hsv(h, s, v, k)</code>, <code>gray(v, k)</code>, <code>pal(fire, v, k)</code>. Where it covers less
+than all, what is below shows through.</p>
 <p><strong>Limits.</strong> A formula can be 4,096 characters and 256 steps (the editor
 shows the count). Numbers go from −32,768 to 32,767; past that they stop
 at the end instead of wrapping round, and dividing by zero gives the
 biggest number of the right sign rather than an error.</p>
+<h2 id="over-a-gif">Over a GIF<a class="headerlink" href="#over-a-gif" title="Permanent link">#</a></h2>
+<p>A formula can draw over a GIF instead of replacing it: scanlines, a colour
+grade, a vignette, sparkles, a clock in the corner. Four values say what
+is under it at the pixel:</p>
+<table>
+<thead>
+<tr>
+<th>name</th>
+<th>what</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ur</code>, <code>ug</code>, <code>ub</code></td>
+<td>the red, green and blue under the formula, 0 to 1</td>
+</tr>
+<tr>
+<td><code>ul</code></td>
+<td>how bright it is there, 0 to 1</td>
+</tr>
+</tbody>
+</table>
+<p>The bottom layer, and any colour that covers less than all of a pixel,
+let it show through. For example, a sepia tone:</p>
+<pre><code>l = ul
+rgb(l*1.1 + 0.08, l*0.92 + 0.04, l*0.65)
+</code></pre>
+<p>or scanlines, which keep the GIF and darken every other row:</p>
+<pre><code>layer multiply { gray(py % 2 ? 1 : 0.55) }
+</code></pre>
+<p>The examples' <strong>Over a GIF</strong> section has more. In the editor and in a
+formula's details, such a formula is drawn over a sample picture; <strong>Pick a
+GIF…</strong> draws it over one of your GIFs (from the playlist) or a GIF file
+from your computer instead, moving as the GIF does. <strong>Save as GIF…</strong> then
+saves the formula over that GIF. A formula played on its own has nothing
+under it: <code>ur</code>, <code>ug</code>, <code>ub</code> and <code>ul</code> are 0 (black).</p>
+<p>On your player:</p>
+<ul>
+<li><strong>Show over the panel’s GIF</strong> draws it over whatever the panel is
+  playing, until the playlist moves on (changes you make follow it there).
+  Press it again to take it off.</li>
+<li><strong>Use as the look</strong> keeps it over every GIF the panel plays, before the
+  colour and the phosphor glow. Settings › Look shows which formula it is
+  (<strong>Formula over every GIF</strong>) and turns it off (<strong>None</strong>).</li>
+</ul>
+<p>A formula that would hide the GIF entirely (it reads none of <code>ur</code>, <code>ug</code>,
+<code>ub</code>, <code>ul</code> and nothing shows through it), or that is too heavy to draw over
+GIFs (more than about 8 ms a frame on the panel), is refused with a
+sentence saying so; Settings only lists formulas that let the GIF show
+through. When the player is
+short of memory (several downloads at once, say) it shows the GIFs without
+the formula for a while.</p>
 <h2 id="keeping-them-fast">Keeping them fast<a class="headerlink" href="#keeping-them-fast" title="Permanent link">#</a></h2>
 <p>Formulas are made to run on the panel's own small processor too, which
 draws every pixel 50 times a second. The editor rates each one <strong>light</strong>,
@@ -259,6 +332,8 @@ milliseconds); all the examples are light or medium.</p>
   several add up.</li>
 <li>Anything that doesn't depend on the pixel (<code>hour/12</code>, <code>sin(t/8)</code>) is
   worked out once a frame, whatever line it's on.</li>
+<li>Each layer costs about as much as a <code>smoothstep</code>; <code>screen</code> and colours
+  that cover only part of a pixel a little more.</li>
 </ul>
 <h2 id="sharing">Sharing<a class="headerlink" href="#sharing" title="Permanent link">#</a></h2>
 <p><strong>Copy share link</strong> gives a link to the formula's own page on the OpenDMD
@@ -303,9 +378,9 @@ like any other GIF and goes in playlists.</p>
 <p>Formulas you save are kept in this browser. Another browser, or a cleared
 browser, won't have them: share a link to yourself to move one.</p>
 <h2 id="coming-next">Coming next<a class="headerlink" href="#coming-next" title="Permanent link">#</a></h2>
-<p>Playing formulas live on the panel, in playlists next to the effects, is
-coming. A formula then runs on the player itself, follows the clock and
-loops forever without the size of a GIF.</p>
+<p>Formulas in playlists, next to the effects, are coming: a formula then
+runs on the player itself, follows the clock and loops forever without the
+size of a GIF.</p>
 </main>
 <footer><p>OpenDMD is an independent, open-source project. It is not made by or affiliated with
 <a href="https://dmdos.net/">DMDoS</a>: the display, its board (by <a href="https://mortaca.com">MORTACA</a>),

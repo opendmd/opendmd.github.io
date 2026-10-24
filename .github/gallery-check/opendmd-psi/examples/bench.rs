@@ -3,15 +3,24 @@
 //! 128, the step counts (frame / row / pixel) and the registers used;
 //! `--list` the step listings, `--ppm DIR` frame 0 and a mid-loop frame of
 //! each as PPM images. Then the compile time of the worst formulas a
-//! panel accepts (`opendmd_psi::worst`), 200 compiles each.
+//! panel accepts (`opendmd_psi::worst`), 200 compiles each, and the cost
+//! of layers and of reading what is under (`golden::picture`), per pixel
+//! over `gray(x)` and as a multiple of one `add`.
+//! A formula that reads what is under it is drawn over `golden::picture`.
 
-use opendmd_psi::{compile, compile_into, render_with, sketches, worst, Inputs, Program, Scratch, H, OWN, W};
+use opendmd_psi::{
+    compile, compile_into, golden, render_rows, sketches, worst, Inputs, Program, Scratch, H, OWN,
+    W,
+};
 use std::hint::black_box;
 use std::time::Instant;
 
 fn bench<const N: usize>(p: &Program, frames: u32) -> (f64, f64) {
     let mut s = Scratch::<N>::new();
     let mut out = vec![0u8; W * H * 3];
+    let mut under = vec![0u8; W * H * 3];
+    golden::picture(&mut under);
+    let under = p.over().then_some(under.as_slice());
     let loop_ms = p.loop_ms();
     let mut times = Vec::with_capacity(frames as usize);
     for f in 0..frames {
@@ -23,7 +32,15 @@ fn bench<const N: usize>(p: &Program, frames: u32) -> (f64, f64) {
             ..Default::default()
         };
         let t0 = Instant::now();
-        render_with::<N>(black_box(p), &mut s, &inputs, &OWN, &mut out);
+        render_rows::<N>(
+            black_box(p),
+            &mut s,
+            &inputs,
+            &OWN,
+            under,
+            u32::MAX,
+            &mut out,
+        );
         times.push(t0.elapsed().as_nanos() as f64);
         black_box(&out);
     }
@@ -66,7 +83,7 @@ fn main() {
         let (a50, a90) = bench::<64>(&p, frames);
         let (b50, b90) = bench::<128>(&p, frames);
         println!(
-            "{name:<12} {:>5} {:>14} {:>5} {:>9.1} µs {:>9.1} µs {:>9.1} µs {:>9.1} µs   (compile {:.1} µs)",
+            "{name:<12} {:>5} {:>14} {:>5} {:>9.1} µs {:>9.1} µs {:>9.1} µs {:>9.1} µs   (compile {:.1} µs, ESP32 est {} µs)",
             p.len(),
             format!("{f}/{r}/{px}"),
             p.regs(),
@@ -74,7 +91,8 @@ fn main() {
             a90 / 1e3,
             b50 / 1e3,
             b90 / 1e3,
-            ct.as_secs_f64() * 1e6
+            ct.as_secs_f64() * 1e6,
+            p.esp32_us()
         );
         if list {
             print!("{}", p.listing());
@@ -89,7 +107,10 @@ fn main() {
                     minute: 9,
                     ..Default::default()
                 };
-                render_with::<128>(&p, &mut s, &inputs, &OWN, &mut out);
+                let mut under = vec![0u8; W * H * 3];
+                golden::picture(&mut under);
+                let u = p.over().then_some(under.as_slice());
+                render_rows::<128>(&p, &mut s, &inputs, &OWN, u, u32::MAX, &mut out);
                 let mut f = format!("P6\n{W} {H}\n255\n").into_bytes();
                 f.extend_from_slice(&out);
                 let base = std::path::Path::new(&name)
@@ -100,6 +121,44 @@ fn main() {
                 std::fs::write(format!("{dir}/{base}-{k}.ppm"), f).expect("write ppm");
             }
         }
+    }
+    // Layers and what is under: ns a pixel over `gray(x)` (p50 of the
+    // frame), and that as a multiple of one per-pixel `add`.
+    let base = bench::<128>(&compile("gray(x)").unwrap(), frames).0;
+    let add = bench::<128>(&compile("gray(x + px)").unwrap(), frames).0 - base;
+    let px = (W * H) as f64;
+    println!(
+        "\nper pixel over gray(x) ({:.2} ns): one add = {:.2} ns",
+        base / px,
+        add / px
+    );
+    for (what, src) in [
+        ("add", "gray(x + px)"),
+        ("ur (one channel)", "gray(ur)"),
+        ("ul (luminance)", "gray(ul)"),
+        ("rgb(ur, ug, ub)", "rgb(ur, ug, ub)"),
+        ("bottom shows through", "gray(x, 0.5)"),
+        ("+ layer over, cover 0.5", "layer { gray(x) }\nlayer { gray(px, 0.5) }"),
+        ("+ layer add", "layer { gray(x) }\nlayer add { gray(px) }"),
+        ("+ layer multiply", "layer { gray(x) }\nlayer multiply { gray(px) }"),
+        ("+ layer screen", "layer { gray(x) }\nlayer screen { gray(px) }"),
+        ("+ layer max", "layer { gray(x) }\nlayer max { gray(px) }"),
+        ("+ layer add, hsv", "layer { gray(x) }\nlayer add { hsv(px, 1, 1) }"),
+        ("+ layer add, cover lane", "layer { gray(x) }\nlayer add { gray(px, x) }"),
+        ("4 layers over the GIF", "layer multiply { gray(y) }\nlayer add { gray(x) }\nlayer screen { gray(px) }\nlayer max { gray(py) }"),
+    ] {
+        let p = compile(src).unwrap();
+        let t = bench::<128>(&p, frames).0 - base;
+        // The `px` lanes and the second gray: the layer's own cost is
+        // what is left after the bottom `gray(x)` (in `base`).
+        println!(
+            "  {what:<26} {:>6.2} ns/px  = {:>4.1} adds  ({} steps, {} layers{})",
+            t / px,
+            t / add,
+            p.len(),
+            p.layers(),
+            if p.over() { ", over" } else { "" }
+        );
     }
     let mut p = Program::default();
     for (name, f) in worst::ALL {
@@ -114,6 +173,10 @@ fn main() {
             Ok(_) => format!("{} steps, est {} µs", p.len(), p.esp32_us()),
             Err(e) => e.msg,
         };
-        println!("compile {name:<15} {} B source, {} B path: {us:.1} µs ({what})", src.len(), worst::path_len(&src));
+        println!(
+            "compile {name:<15} {} B source, {} B path: {us:.1} µs ({what})",
+            src.len(),
+            worst::path_len(&src)
+        );
     }
 }

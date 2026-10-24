@@ -16,7 +16,7 @@
 <nav aria-label="Site"><a class="brand" href="../index.html"><picture class="led" style="--cols:70;--rows:16"><img src="../art/wordmark.png" alt="OpenDMD" width="70" height="16"></picture></a><div class="links"><a href="../index.html">Overview</a><a href="../demo/" class='demo'>Try the demo</a><a href="../formulas/index.html">Formula gallery</a><h4>Guide</h4><a href="../guide/hardware.html">What you need</a><a href="../install/index.html">Install</a><a href="../guide/web-app.html">The web app</a><a href="../guide/create-art.html">Create Art</a><a href="../guide/effects.html">Effects and live items</a><a href="../guide/formulas.html">Formulas</a><a href="../guide/card.html">The SD card</a><a href="../guide/updating.html">Updating</a><a href="../guide/troubleshooting.html">Troubleshooting</a><h4>For developers</h4><a href="index.html">Building from source</a><a href="api.html" class='on'>HTTP API</a><a href="simulator.html">The simulator</a><a href="effects.html">Writing an effect</a><a href="pinout.html">Hardware pinout</a></div></nav>
 <main id="main">
 <h1 id="opendmd-http-api">OpenDMD HTTP API<a class="headerlink" href="#opendmd-http-api" title="Permanent link">#</a></h1>
-<p class="vers">The latest docs. The API of a particular release: <a href="api/v1.0.0-beta.6.html">1.0.0-beta.6</a></p>
+<p class="vers">The latest docs. The API of a particular release: <a href="api/v1.0.0-beta.7.html">1.0.0-beta.7</a> · <a href="api/v1.0.0-beta.6.html">1.0.0-beta.6</a></p>
 
 <p>Everything the web app does goes through this API, and a script can do the
 same. The source of truth is <code>firmware/src/http.rs</code>. In the examples <code>$DMD</code>
@@ -86,8 +86,15 @@ that file at the root, any other name is <code>/sets/&lt;name&gt;.txt</code>. No
 one), then the playlist carries on.</p>
 <p>Body: <code>{"path": string}</code>, a card-absolute GIF path or a live item (see
 "Live items"). <code>"live":true</code>: only replace a formula on screen (<code>409</code> if
-none is; <code>400</code> for any other path).</p>
-<p>Reply: <code>{"ok":true,"path":"…"}</code>.</p>
+none is; <code>400</code> for any other path). <code>"over":true</code> with a formula: draw it
+over the file on screen instead of playing it, until the playlist moves on
+to another file (in place of the <code>look_formula</code> meanwhile); with <code>"live"</code>
+it changes that formula (<code>409</code> once the playlist has moved on); <code>"path":""</code>
+takes it off. <code>"over"</code> skips the card-path check (the path is a formula or
+<code>""</code>); with no playlist running it is a <code>503</code>; a formula that covers the GIF
+entirely (it reads none of <code>ur ug ub ul</code> and nothing shows through it) or is
+too heavy to draw over GIFs is a <code>400</code> with the reason.</p>
+<p>Reply: <code>{"ok":true,"path":"…"}</code> (with <code>"over":true</code> when drawn over).</p>
 <p>Errors: <code>400</code> neither card-absolute nor a live item, or a bad formula;
 <code>404</code> the file does not open (what was playing carries on); <code>415</code> not a
 GIF, or a live item this firmware does not know (<code>@fx:nonsense</code>); <code>503</code> no
@@ -167,7 +174,7 @@ curl -s -X POST &quot;$DMD/api/skip?back=1&quot;
 </tr>
 <tr>
 <td><code>heap</code></td>
-<td><code>{free, floor, idf_min}</code>, bytes: now, lowest, the system's lowest</td>
+<td><code>{free, floor, idf_min, transitions_cut}</code>: bytes now, lowest, the system's lowest; transitions the heap gate cut since boot (a probe build adds <code>main_stack</code>, the main task's stack bytes never used, and <code>pushed</code>, pixels pushed to the panel)</td>
 </tr>
 <tr>
 <td><code>heap_floor_at</code></td>
@@ -228,6 +235,10 @@ curl -s -X POST &quot;$DMD/api/skip?back=1&quot;
 <tr>
 <td><code>look</code>, <code>glow</code>, <code>glow_held</code></td>
 <td>tint and glow as applied; bytes the glow holds</td>
+</tr>
+<tr>
+<td><code>formula_look</code></td>
+<td>null, or the formula drawn over what plays: <code>{"source": "setting"\|"over_gif", "held": bytes (0: no room, the picture goes up as it is), "frame_us": mean render, "frame_ms": its own frame time (0: it follows the picture)}</code>, with <code>"error"</code> when the saved <code>look_formula</code> can no longer be drawn (e.g. after a firmware change)</td>
 </tr>
 <tr>
 <td><code>attract_live</code></td>
@@ -374,6 +385,16 @@ format running.</p>
 <td><code>glow</code></td>
 <td><code>off</code></td>
 <td>phosphor glow: <code>off</code>, <code>short</code>, <code>long</code></td>
+</tr>
+<tr>
+<td><code>look_formula</code></td>
+<td><code>""</code></td>
+<td>a formula drawn over everything that plays, before the tint and glow: <code>""</code> or its <code>@fx:psi?src=…</code> path (≤ 2,048 B, else <code>413</code>; one that does not compile or is too heavy to draw over GIFs is a <code>400</code> with the reason, nothing saved)</td>
+</tr>
+<tr>
+<td><code>look_formula_name</code></td>
+<td><code>""</code></td>
+<td>its name, for display (≤ 60 characters, one line)</td>
 </tr>
 <tr>
 <td><code>boot_show</code></td>

@@ -307,7 +307,9 @@ macro_rules! outt {
 }
 
 /// Render one frame of `prog` into `out` (128 × 32 RGB888, row-major from
-/// the top), with lanes of `N` pixels. Writes every byte.
+/// the top), with lanes of `N` pixels, with nothing under it (`ur ug ub ul`
+/// read 0; a layer that lets something show through shows black). Writes
+/// every byte.
 pub fn render_with<const N: usize>(
     prog: &Program,
     scratch: &mut Scratch<N>,
@@ -315,7 +317,28 @@ pub fn render_with<const N: usize>(
     tables: &Tables,
     out: &mut [u8],
 ) {
+    render_rows::<N>(prog, scratch, inputs, tables, None, u32::MAX, out)
+}
+
+/// Render the rows of `prog`'s frame that `rows` has a bit for (bit `k`:
+/// row `k` from the top) into `out` (128 × 32 RGB888, row-major from the
+/// top), over `under` (the picture under the formula, the same layout: what
+/// `ur ug ub ul` read and what shows through its layers; `None`: black).
+/// The rest of `out` is left as it was. A row's bytes are the same whichever
+/// other rows are drawn with it.
+pub fn render_rows<const N: usize>(
+    prog: &Program,
+    scratch: &mut Scratch<N>,
+    inputs: &Inputs,
+    tables: &Tables,
+    under: Option<&[u8]>,
+    rows: u32,
+    out: &mut [u8],
+) {
     assert_eq!(out.len(), W * H * 3);
+    if let Some(u) = under {
+        assert_eq!(u.len(), W * H * 3);
+    }
     let ns = prog.n_scalars as usize;
     scratch.sc[..ns].copy_from_slice(&prog.init[..ns]);
     let sc = &mut scratch.sc;
@@ -336,7 +359,11 @@ pub fn render_with<const N: usize>(
         scalar(sc, op, sin);
     }
     let uses_i = prog.uses & USES_I != 0;
+    let backdrop = prog.uses & BACKDROP != 0;
     for row in 0..H {
+        if rows & (1 << row) == 0 {
+            continue;
+        }
         // y and py count from the bottom (y = 0 is the bottom row).
         let py = ((H - 1 - row) as i32) << 16;
         scratch.sc[S_PY as usize] = py;
@@ -344,18 +371,31 @@ pub fn render_with<const N: usize>(
         for op in &prog.ops[fe..re] {
             scalar(&mut scratch.sc, op, sin);
         }
-        let row_bytes = &mut out[row * W * 3..(row + 1) * W * 3];
+        let span = row * W * 3..(row + 1) * W * 3;
+        let row_bytes = &mut out[span.clone()];
+        let under_row = under.map(|u| &u[span.clone()]);
         for base in (0..W).step_by(N) {
             if uses_i {
                 for (k, v) in scratch.lanes[0].iter_mut().enumerate() {
                     *v = ((row * W + base + k) as i32) << 16;
                 }
             }
-            for op in &prog.ops[re..pe] {
-                lane_op(scratch, op, base, tables);
+            let lane = base * 3..(base + N) * 3;
+            let ul = under_row.map(|u| &u[lane.clone()]);
+            let px = row_bytes[lane].as_chunks_mut::<3>().0;
+            if backdrop {
+                match ul {
+                    Some(u) => px.as_flattened_mut().copy_from_slice(u),
+                    None => px.fill([0; 3]),
+                }
             }
-            let px = row_bytes[base * 3..(base + N) * 3].as_chunks_mut::<3>().0;
-            colour(scratch, &prog.ops[pe], base, tables, px);
+            for op in &prog.ops[re..pe] {
+                if code::is_colour(op.code) {
+                    colour_step(scratch, op, base, tables, px);
+                } else {
+                    lane_op(scratch, op, base, tables, ul);
+                }
+            }
         }
     }
 }
@@ -383,7 +423,13 @@ impl<const N: usize> Scratch<N> {
     }
 }
 
-fn lane_op<const N: usize>(s: &mut Scratch<N>, op: &Op, base: usize, t: &Tables) {
+fn lane_op<const N: usize>(
+    s: &mut Scratch<N>,
+    op: &Op,
+    base: usize,
+    t: &Tables,
+    under: Option<&[u8]>,
+) {
     use code::*;
     let (a, b, c) = (s.arg(op.a, base), s.arg(op.b, base), s.arg(op.c, base));
     // The destination is a register the compiler never also reads in the
@@ -430,7 +476,105 @@ fn lane_op<const N: usize>(s: &mut Scratch<N>, op: &Op, base: usize, t: &Tables)
         MIX => tern!(fast3, d, a, b, c, fixed::mix),
         SMOOTH => tern!(run3, d, a, b, c, fixed::smooth),
         NOISE => tern!(run3, d, a, b, c, fixed::noise),
+        U_R..=U_L => load_under(d, under, op.code - U_R),
         _ => {}
+    }
+}
+
+/// A channel of what is under the lane (0 red, 1 green, 2 blue, 3 the
+/// luminance) as 0..1; 0 with nothing under.
+#[inline(never)]
+fn load_under<const N: usize>(d: &mut [i32; N], under: Option<&[u8]>, ch: u8) {
+    let Some(u) = under else {
+        d.fill(0);
+        return;
+    };
+    let px = u.as_chunks::<3>().0;
+    match ch {
+        0..=2 => {
+            let ch = ch as usize;
+            for (o, p) in d.iter_mut().zip(px) {
+                *o = fixed::byte(p[ch]);
+            }
+        }
+        _ => {
+            for (o, p) in d.iter_mut().zip(px) {
+                *o = fixed::byte(fixed::luma(p[0], p[1], p[2]));
+            }
+        }
+    }
+}
+
+/// A colour step: the bottom layer's colour written over the lane, or a
+/// layer's colour (into a row on the stack) blended onto it.
+fn colour_step<const N: usize>(
+    s: &Scratch<N>,
+    op: &Op,
+    base: usize,
+    t: &Tables,
+    px: &mut [[u8; 3]],
+) {
+    let (kind, blend) = code::colour_parts(op.code);
+    let Some(mode) = blend else {
+        colour(s, op, base, t, px);
+        return;
+    };
+    let (v, n) = code::operands(op);
+    let plain = Op {
+        code: kind,
+        d: if kind == code::OUT_PAL { op.d } else { 0 },
+        ..*op
+    };
+    let mut row = [[0u8; 3]; W];
+    let src = &mut row[..px.len()];
+    colour(s, &plain, base, t, src);
+    // A layer that covers everything (the usual: no coverage given) is one
+    // loop per blend, so the blend is not a branch per channel (an indirect
+    // jump on the ESP32); one with a coverage, a lane or a value read with
+    // a stride of 0, shares one loop.
+    let one;
+    let (k, stride) = match s.arg(v[n - 1], base) {
+        Arg::Sc(v) if v >= ONE => {
+            match mode {
+                fixed::BLEND_ADD => blend_all::<{ fixed::BLEND_ADD }>(px, src),
+                fixed::BLEND_MULTIPLY => blend_all::<{ fixed::BLEND_MULTIPLY }>(px, src),
+                fixed::BLEND_SCREEN => blend_all::<{ fixed::BLEND_SCREEN }>(px, src),
+                fixed::BLEND_MAX => blend_all::<{ fixed::BLEND_MAX }>(px, src),
+                fixed::BLEND_MIN => blend_all::<{ fixed::BLEND_MIN }>(px, src),
+                _ => px.copy_from_slice(src),
+            }
+            return;
+        }
+        Arg::Lane(p) => (p, 1),
+        Arg::Sc(v) => {
+            one = v;
+            (&one as *const i32, 0)
+        }
+    };
+    blend_cover(px, src, k, stride, mode);
+}
+
+#[inline(never)]
+fn blend_all<const M: u8>(px: &mut [[u8; 3]], src: &[[u8; 3]]) {
+    for (d, s) in px.iter_mut().zip(src) {
+        for c in 0..3 {
+            d[c] = fixed::blend(M, d[c], s[c]);
+        }
+    }
+}
+
+/// `px` (what is below) with `src` blended on by `mode`, covered by the
+/// values at `k`, `stride` apart (0: one value for the lane).
+#[inline(never)]
+fn blend_cover(px: &mut [[u8; 3]], src: &[[u8; 3]], mut k: *const i32, stride: usize, mode: u8) {
+    for (d, s) in px.iter_mut().zip(src) {
+        // SAFETY: `k` is a lane of at least `px.len()` values (stride 1) or
+        // one value (stride 0), alive for the call.
+        let a = unsafe { *k };
+        for c in 0..3 {
+            d[c] = fixed::cover(d[c], fixed::blend(mode, d[c], s[c]), a);
+        }
+        k = k.wrapping_add(stride);
     }
 }
 

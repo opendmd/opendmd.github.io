@@ -40,7 +40,8 @@ pub(crate) const L_REG0: u8 = 3;
 
 /// Opcodes. Binary, unary and ternary arithmetic run per frame or per row
 /// on scalars, or per pixel on lanes (each operand a lane or a scalar
-/// broadcast); the `OUT_*` op is always the last and writes the colour.
+/// broadcast); `U_*` load what is under the formula into a lane; the
+/// colour steps (`OUT_*`, one per layer) write the pixels.
 pub(crate) mod code {
     // binary
     pub const ADD: u8 = 0;
@@ -85,19 +86,70 @@ pub(crate) mod code {
     pub const SMOOTH: u8 = 67;
     pub const NOISE: u8 = 68;
     pub const LAST_TERN: u8 = 68;
-    // the colour
+    // nullary, per pixel: the picture under the formula (its red, green,
+    // blue, luminance), 0..1
+    pub const U_R: u8 = 80;
+    pub const U_G: u8 = 81;
+    pub const U_B: u8 = 82;
+    pub const U_L: u8 = 83;
+    // the colour of the bottom layer when nothing shows through it: written
+    // over the pixels, as v0's last line
     pub const OUT_RGB: u8 = 96;
     pub const OUT_HSV: u8 = 97;
     pub const OUT_PAL: u8 = 98;
     pub const OUT_GRAY: u8 = 99;
+    /// A layer blended onto what is below it: `OUT_LAYER + kind + 4 ·
+    /// blend` (kind: the `OUT_*` above less `OUT_RGB`; blend: `fixed`'s
+    /// `BLEND_*`), with a coverage operand (`d` for rgb and hsv, `b` for
+    /// pal and gray).
+    pub const OUT_LAYER: u8 = 100;
 
+    /// A step that writes pixels rather than a value.
+    pub fn is_colour(c: u8) -> bool {
+        c >= OUT_RGB
+    }
+
+    /// For a colour step: the `OUT_*` kind (`OUT_RGB` .. `OUT_GRAY`) and
+    /// the blend, `None` for the bottom layer's plain write.
+    pub fn colour_parts(c: u8) -> (u8, Option<u8>) {
+        if c < OUT_LAYER {
+            (c, None)
+        } else {
+            let k = c - OUT_LAYER;
+            (OUT_RGB + k % 4, Some(k / 4))
+        }
+    }
+
+    /// Value operands (`a`, `b`, `c` in order) a step reads, the coverage
+    /// of a layer not counted.
     pub fn arity(c: u8) -> usize {
         match c {
             0..=LAST_BIN => 2,
             32..=LAST_UN => 1,
             64..=LAST_TERN => 3,
-            OUT_RGB | OUT_HSV => 3,
-            _ => 1,
+            U_R..=U_L => 0,
+            _ => match colour_parts(c).0 {
+                OUT_RGB | OUT_HSV => 3,
+                _ => 1,
+            },
+        }
+    }
+
+    /// Every operand a step reads (its value operands, then a layer's
+    /// coverage) and how many.
+    pub fn operands(op: &super::Op) -> ([u8; 4], usize) {
+        let n = arity(op.code);
+        let mut v = [op.a, op.b, op.c, 0];
+        match colour_parts(op.code) {
+            (k, Some(_)) if is_colour(op.code) => {
+                v[n] = if k == OUT_RGB || k == OUT_HSV {
+                    op.d
+                } else {
+                    op.b
+                };
+                (v, n + 1)
+            }
+            _ => (v, n),
         }
     }
 
@@ -116,10 +168,8 @@ pub(crate) mod code {
             0..=LAST_BIN => N[c as usize],
             32..=LAST_UN => U[(c - 32) as usize],
             64..=LAST_TERN => T[(c - 64) as usize],
-            OUT_RGB => "rgb",
-            OUT_HSV => "hsv",
-            OUT_PAL => "pal",
-            _ => "gray",
+            U_R..=U_L => ["ur", "ug", "ub", "ul"][(c - U_R) as usize],
+            _ => ["rgb", "hsv", "pal", "gray"][((colour_parts(c).0 - OUT_RGB) & 3) as usize],
         }
     }
 }
@@ -137,6 +187,11 @@ pub struct Op {
 
 /// Inputs bit: the program reads `i` (built per row).
 pub(crate) const USES_I: u8 = 1;
+/// The bottom layer lets what is under show through: each lane starts as
+/// the picture under the formula (black when there is none).
+pub(crate) const BACKDROP: u8 = 2;
+/// The program reads what is under it (`ur ug ub ul`).
+pub(crate) const UNDER: u8 = 4;
 
 /// A compiled formula. Plain data (every field an integer or an array of
 /// them), so an all-zero value is valid (an empty program) and
@@ -148,7 +203,8 @@ pub struct Program {
     /// The scalar slots' values at the start of a frame: the constants.
     pub(crate) init: [i32; MAX_SCALARS],
     /// `ops[..frame_end]` run once a frame, `..row_end` once a row,
-    /// `..pixel_end` per pixel; `ops[pixel_end]` is the colour.
+    /// `..pixel_end` per pixel: values, and a colour step per layer
+    /// (bottom to top; the last step is always one).
     pub(crate) frame_end: u16,
     pub(crate) row_end: u16,
     pub(crate) pixel_end: u16,
@@ -193,9 +249,9 @@ impl Default for Program {
 }
 
 impl Program {
-    /// Steps in all, the colour included (≤ [`MAX_OPS`]).
+    /// Steps in all, the colours included (≤ [`MAX_OPS`]).
     pub fn len(&self) -> usize {
-        self.pixel_end as usize + 1
+        self.pixel_end as usize
     }
 
     /// Never: a compiled program has at least its colour.
@@ -203,14 +259,30 @@ impl Program {
         false
     }
 
-    /// Steps run once a frame, once a row, and per pixel (the colour
+    /// Steps run once a frame, once a row, and per pixel (the colours
     /// counted with the pixel steps).
     pub fn counts(&self) -> (usize, usize, usize) {
         (
             self.frame_end as usize,
             (self.row_end - self.frame_end) as usize,
-            (self.pixel_end - self.row_end) as usize + 1,
+            (self.pixel_end - self.row_end) as usize,
         )
+    }
+
+    /// Colour steps: the layers drawn (a formula without `layer` blocks
+    /// has one; layers hidden under an opaque one are left out).
+    pub fn layers(&self) -> usize {
+        self.ops[self.row_end as usize..self.len()]
+            .iter()
+            .filter(|op| code::is_colour(op.code))
+            .count()
+    }
+
+    /// Whether a frame depends on the picture under the formula (it reads
+    /// `ur ug ub ul`, or its bottom layer lets it show through): drawn
+    /// over a GIF, it changes the GIF rather than replacing it.
+    pub fn over(&self) -> bool {
+        self.uses & (BACKDROP | UNDER) != 0
     }
 
     /// Lane registers the pixel steps use (≤ [`REGS`]).
@@ -225,11 +297,13 @@ impl Program {
 
     /// Which inputs the steps read: bits 0-2 the sliders `a`, `b`, `c`
     /// (the web app's editor shows a slider for each), bit 3 `t`, bit 4
-    /// the wall clock (`hour`, `minute` or `second`).
+    /// the wall clock (`hour`, `minute` or `second`), bit 5 the picture
+    /// under the formula ([`Program::over`]).
     pub fn inputs(&self) -> u8 {
-        let mut m = 0;
+        let mut m = if self.over() { 32 } else { 0 };
         for op in &self.ops[..self.len()] {
-            for &v in &[op.a, op.b, op.c][..code::arity(op.code)] {
+            let (v, n) = code::operands(op);
+            for &v in &v[..n] {
                 m |= match v {
                     S_A..=S_C => 1 << (v - S_A),
                     S_T => 8,
@@ -272,14 +346,37 @@ impl Program {
                 MIX => 130,
                 SMOOTH => 214,
                 NOISE => 855,
-                OUT_HSV => 195,
-                OUT_RGB => 120,
-                OUT_PAL => 0,
+                U_R | U_G | U_B => 35,
+                U_L => 125,
+                c if is_colour(c) => {
+                    // The bottom layer's write, as measured; a layer
+                    // blended on top: its colour into a row, then the blend
+                    // (host costs in adds, × 50 ns: docs/research/psi-layers.md).
+                    let (k, blend) = colour_parts(c);
+                    let base = match k {
+                        OUT_HSV => 195,
+                        OUT_RGB => 120,
+                        _ => 0,
+                    };
+                    let (v, n) = operands(op);
+                    // Covered unless the coverage is a constant slot of 1 or
+                    // more (a lane or an input never is one).
+                    let k = v[n.saturating_sub(1)];
+                    let konst = k & LANE == 0 && k >= S_FIRST_FREE && self.is_const_slot(k);
+                    let covered = n > 0 && !(konst && self.init[k as usize] >= ONE);
+                    base + match blend {
+                        None => 0,
+                        Some(crate::fixed::BLEND_MULTIPLY) => 210,
+                        Some(crate::fixed::BLEND_SCREEN) => 290,
+                        Some(_) => 150,
+                    } + if blend.is_some() && covered { 75 } else { 0 }
+                }
                 _ => 0,
             })
             .sum();
         let row = (self.row_end - self.frame_end) as u32;
-        ((160 + px) * (W * H) as u32) / 1000 + row * 10
+        let backdrop = if self.uses & BACKDROP != 0 { 50 } else { 0 };
+        ((160 + backdrop + px) * (W * H) as u32) / 1000 + row * 10
     }
 
     /// Reset a program in place to the empty one (all fields zero but the
@@ -324,18 +421,28 @@ impl Program {
             } else {
                 "pixel"
             };
-            let ar = code::arity(op.code);
-            let args = [op.a, op.b, op.c][..ar]
+            let (v, ar) = code::operands(op);
+            let args = v[..ar]
                 .iter()
                 .map(|&v| opnd(v))
                 .collect::<alloc::vec::Vec<_>>()
                 .join(", ");
-            let d = if op.code >= code::OUT_RGB {
+            let d = if code::is_colour(op.code) {
                 "out".into()
             } else {
                 opnd(op.d)
             };
-            let _ = writeln!(s, "{n:3} {sect} {d} = {}({args})", code::name(op.code));
+            let blend = match code::colour_parts(op.code) {
+                (_, Some(b)) if code::is_colour(op.code) => {
+                    ["over", "add", "multiply", "screen", "max", "min"][(b as usize).min(5)]
+                }
+                _ => "",
+            };
+            let _ = writeln!(
+                s,
+                "{n:3} {sect} {d} {blend}= {}({args})",
+                code::name(op.code)
+            );
         }
         s
     }
@@ -343,7 +450,7 @@ impl Program {
     fn is_const_slot(&self, v: u8) -> bool {
         !self.ops[..self.len()]
             .iter()
-            .any(|op| op.code < code::OUT_RGB && op.d == v)
+            .any(|op| !code::is_colour(op.code) && op.d == v)
     }
 }
 

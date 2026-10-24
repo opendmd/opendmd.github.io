@@ -217,7 +217,14 @@ const ERRORS: &[(&str, &str, usize, usize)] = &[
         1,
         8,
     ),
-    ("hsv(x, 1)", "`hsv` takes 3 values, but got 2", 1, 1),
+    (
+        "hsv(x, 1)",
+        "`hsv` takes 3 values (or 4: the last is how much of the pixel it covers, 0 to 1), but got 2",
+        1,
+        1,
+    ),
+    ("gray(x, 1, 2)", "`gray` takes 1 value (or 2", 1, 1),
+    ("sin(x, 1)", "`sin` takes 1 value, but got 2", 1, 1),
     (
         "gray(smoothstp(0, 1, x))",
         "unknown function `smoothstp` — did you mean `smoothstep`?",
@@ -312,10 +319,10 @@ const ERRORS: &[(&str, &str, usize, usize)] = &[
     ("gray(\"x\")", "there are no strings", 1, 6),
     ("pal(3, x)", "the first value of `pal` is a palette", 1, 5),
     (
-        "pal(fire, x, y)",
-        "`pal` takes a palette and one value",
+        "pal(fire, x, y, x)",
+        "`pal` takes a palette and one value (and how much",
         1,
-        12,
+        15,
     ),
     ("gray(loop)", "`loop` can only start a line", 1, 6),
     ("fire = 2\ngray(fire)", "is a palette's name", 1, 1),
@@ -439,8 +446,309 @@ fn worst_case_formulas() {
         assert!((1900..=2048).contains(&n), "{name}: {n} B");
         match compile(&src) {
             Ok(p) => assert!(p.len() <= crate::MAX_OPS, "{name}"),
-            Err(e) => assert!(e.msg.contains("too long for the panel"), "{name}: {}", e.msg),
+            Err(e) => assert!(
+                e.msg.contains("too long for the panel"),
+                "{name}: {}",
+                e.msg
+            ),
         }
     }
     assert!(compile(&crate::worst::many_locals()).is_ok());
+}
+
+// --- Layers and what is under ---------------------------------------------------
+
+fn over(src: &str, under: Option<&[u8]>, ms: u32) -> alloc::vec::Vec<u8> {
+    let p = compile(src).unwrap_or_else(|e| panic!("{}", e.render(src)));
+    let mut out = alloc::vec![0u8; W * H * 3];
+    render_rows::<128>(
+        &p,
+        &mut Scratch::new(),
+        &golden::inputs(ms),
+        &OWN,
+        under,
+        u32::MAX,
+        &mut out,
+    );
+    out
+}
+
+fn pic() -> alloc::vec::Vec<u8> {
+    let mut u = alloc::vec![0u8; W * H * 3];
+    golden::picture(&mut u);
+    u
+}
+
+#[test]
+fn bytes_blends_and_cover() {
+    for b in 0..=255u8 {
+        assert_eq!(fixed::chan(fixed::byte(b)), b, "byte {b} round trip");
+        assert_eq!(fixed::mul255(b, 255), b);
+        assert_eq!(fixed::mul255(b, 0), 0);
+        for d in [0u8, 1, 77, 128, 200, 254, 255] {
+            let exact = (b as f64 * d as f64 / 255.0).round() as u8;
+            assert_eq!(fixed::mul255(b, d), exact, "{b} x {d}");
+            let s = fixed::blend(fixed::BLEND_SCREEN, d, b) as i32;
+            let want = 255.0 - (255.0 - d as f64) * (255.0 - b as f64) / 255.0;
+            assert!(
+                (s as f64 - want).abs() <= 1.0,
+                "screen {d} {b}: {s} vs {want}"
+            );
+            assert_eq!(fixed::cover(d, b, ONE), b);
+            assert_eq!(fixed::cover(d, b, 0), d);
+            assert_eq!(fixed::cover(d, b, ONE * 3), b, "clamped");
+            assert_eq!(fixed::cover(d, b, -5), d, "clamped");
+            let half = fixed::cover(d, b, ONE / 2) as i32;
+            assert!(
+                (half * 2 - (d as i32 + b as i32)).abs() <= 1,
+                "{d} {b}: {half}"
+            );
+        }
+    }
+    assert_eq!(fixed::byte(255), ONE);
+    assert_eq!(fixed::byte(0), 0);
+}
+
+#[test]
+fn what_is_under_reads_back_exactly() {
+    let u = pic();
+    assert!(over("rgb(ur, ug, ub)", Some(&u), 0) == u, "identity");
+    let l = over("gray(ul)", Some(&u), 0);
+    for (p, q) in u.chunks(3).zip(l.chunks(3)) {
+        let y = fixed::luma(p[0], p[1], p[2]);
+        assert_eq!(q, [y, y, y]);
+    }
+    // Nothing under: black.
+    assert!(over("rgb(ur + 0.25, ug, ul)", None, 0)
+        .chunks(3)
+        .all(|p| p == [64, 0, 0]));
+    // The same as a black picture under it.
+    let black = alloc::vec![0u8; W * H * 3];
+    for src in [
+        "layer { hsv(x, 1, 1) }\nlayer add { gray(ur + 0.2, 0.5) }",
+        "rgb(1, x, 0, y)",
+        "layer screen { pal(fire, x) }",
+    ] {
+        assert!(over(src, None, 0) == over(src, Some(&black), 0), "{src}");
+    }
+}
+
+#[test]
+fn layers_blend_as_the_reference_does() {
+    let u = pic();
+    // Each layer by hand: its colour as v0 writes it, blended, covered.
+    let got = over(
+        "layer multiply { gray(py % 2 ? 1 : 0.55) }\nlayer add { rgb(x, 0, 0.25, 0.5) }\nlayer max { pal(ice, y, 0.75) }",
+        Some(&u),
+        0,
+    );
+    let pal = &PALETTES[1];
+    for (i, (d, g)) in u.chunks(3).zip(got.chunks(3)).enumerate() {
+        let (px, row) = (i % W, i / W);
+        let py = H - 1 - row;
+        let (x, y) = (
+            fixed::div((px as i32) << 16, 127 << 16),
+            fixed::div((py as i32) << 16, 31 << 16),
+        );
+        let lines = fixed::chan(if py % 2 == 1 { ONE } else { q(0.55) });
+        let mut want = [0u8; 3];
+        for c in 0..3 {
+            let mut v = fixed::mul255(d[c], lines);
+            let s = [fixed::chan(x), 0, fixed::chan(ONE / 4)][c];
+            v = fixed::cover(v, v.saturating_add(s), ONE / 2);
+            let k = fixed::pal(pal, y)[c];
+            v = fixed::cover(v, v.max(k), q(0.75));
+            want[c] = v;
+        }
+        assert_eq!(g, want, "pixel {i}");
+    }
+}
+
+#[test]
+fn a_layer_alone_is_the_plain_formula() {
+    for (body, plain) in [
+        ("hsv(x + t/4, 1, y)", "hsv(x + t/4, 1, y)"),
+        (
+            "v = noise(x*8, y*4, t)\npal(fire, v)",
+            "v = noise(x*8, y*4, t)\npal(fire, v)",
+        ),
+        ("gray(x, 1)", "gray(x)"),
+        ("rgb(x, y, 0, 2)", "rgb(x, y, 0)"),
+    ] {
+        let a = compile(&alloc::format!("layer {{\n{body}\n}}")).unwrap();
+        let b = compile(plain).unwrap();
+        assert!(a == b, "{body}:\n{}\nvs\n{}", a.listing(), b.listing());
+        assert!(!a.over() && a.layers() == 1);
+    }
+    // One that covers everything hides what is below it: left out.
+    let a = compile("layer add { noise(x*8, y, t) }\nlayer { rgb(1, x, 0) }").unwrap();
+    assert!(a == compile("rgb(1, x, 0)").unwrap(), "{}", a.listing());
+    let u = pic();
+    assert!(
+        over("layer add { noise(x*8, y, t) }\nlayer { hsv(x, 1, 1) }\nlayer multiply { gray(1 - ul*0.5) }", Some(&u), 0)
+            == over("layer { hsv(x, 1, 1) }\nlayer multiply { gray(1 - ul*0.5) }", Some(&u), 0)
+    );
+}
+
+#[test]
+fn layers_count_their_steps_and_say_what_they_read() {
+    let p = compile("layer { gray(x) }\nlayer add { gray(y, 0.5) }").unwrap();
+    assert_eq!((p.layers(), p.len()), (2, 2), "{}", p.listing());
+    assert!(!p.over(), "the bottom layer covers everything");
+    assert!(compile("layer add { gray(y) }").unwrap().over());
+    assert!(compile("rgb(1, 0, 0, 0.5)").unwrap().over());
+    assert!(compile("rgb(ur, 0, 0)").unwrap().over());
+    assert!(!compile("rgb(x, 0, 0, 1)").unwrap().over());
+    assert_eq!(compile("gray(ul)").unwrap().inputs(), 32);
+    assert!(compile("layer add { gray(y) }")
+        .unwrap()
+        .listing()
+        .contains("out add= gray("));
+    // Coverage counts as an operand (sliders, the step's reads).
+    assert_eq!(compile("layer screen { gray(x, a) }").unwrap().sliders(), 1);
+    // A step never writes a register it reads, across layers too.
+    let p = compile(
+        "d = len(x - 0.5, y - 0.5)\nlayer { v = sin(d*4 - t)\nhsv(v, 1, 1) }\nlayer add { q = cos(d*8 + t)\nrgb(q, q*ur, 0, d) }\nlayer multiply { gray(1 - d) }",
+    )
+    .unwrap();
+    for op in &p.ops[p.row_end as usize..p.len()] {
+        let (v, n) = code::operands(op);
+        if !code::is_colour(op.code) {
+            assert!(!v[..n].contains(&op.d), "{op:?}\n{}", p.listing());
+        }
+    }
+    let info = compile_into(
+        "layer { gray(x) }\nlayer add { gray(y) }",
+        &mut Program::default(),
+    )
+    .unwrap();
+    assert_eq!(info.layers, 2);
+}
+
+#[test]
+fn names_belong_to_their_layer() {
+    // The same name in two layers; a shared one in both.
+    assert!(
+        compile("k = x*2\nlayer { v = k\ngray(v) }\nlayer add { v = k*2\ngray(v, 0.5) }").is_ok()
+    );
+    // A frame { } block in each layer, and the formula's.
+    assert!(compile("frame { s = t }\nlayer { frame { u = s*2 }\ngray(u) }\nlayer add { frame { u = s }\ngray(u) }").is_ok());
+    // A layer's names are its own.
+    let e = compile("layer { v = x\ngray(v) }\nlayer add { gray(v) }").unwrap_err();
+    assert!(e.msg.starts_with("unknown name `v`"), "{}", e.msg);
+    // Names after a layer can reuse its names.
+    assert!(compile("layer { v = x\ngray(v) }\nv = y\nlayer add { gray(v) }").is_ok());
+}
+
+/// (source, message, line, column)
+const LAYER_ERRORS: &[(&str, &str, usize, usize)] = &[
+    (
+        "layer blur { gray(x) }",
+        "unknown blend `blur` (a layer goes over, add, multiply, screen, max or min)",
+        1,
+        7,
+    ),
+    (
+        "layer mutliply { gray(x) }",
+        "did you mean `multiply`?",
+        1,
+        7,
+    ),
+    (
+        "layer add\n{ gray(x) }",
+        "expected `{` here (as in `layer add { … }`), found the end of the line",
+        1,
+        10,
+    ),
+    ("layer {\ngray(x)\n", "this `layer {` is never closed", 1, 1),
+    ("layer { v = x }", "this layer has no colour", 1, 1),
+    (
+        "layer { gray(x)\nv = 1 }",
+        "the colour has to be the layer's last line",
+        1,
+        9,
+    ),
+    (
+        "layer { x * 2\ngray(x) }",
+        "only a layer's last line can be a bare value",
+        1,
+        9,
+    ),
+    (
+        "layer { layer { gray(x) } }",
+        "a layer can't go inside another",
+        1,
+        9,
+    ),
+    (
+        "layer { loop 4\ngray(x) }",
+        "`loop` is the whole formula's",
+        1,
+        9,
+    ),
+    (
+        "layer { gray(x) }\ngray(y)",
+        "with layers, every colour goes inside one",
+        2,
+        1,
+    ),
+    (
+        "gray(y)\nlayer { gray(x) }",
+        "the colour has to be the last line",
+        1,
+        1,
+    ),
+    ("layer = 3\ngray(x)", "`layer` is built in", 1, 1),
+    (
+        "layer { frame { a1 = 1 }\nframe { a2 = 2 }\ngray(a1) }",
+        "a layer can have one `frame { }` block",
+        2,
+        1,
+    ),
+    (
+        "v = 1\nlayer { v = 2\ngray(v) }",
+        "`v` is already set on line 1",
+        2,
+        9,
+    ),
+    (
+        "ur = 2\ngray(ur)",
+        "`ur` is built in (the red of the picture under the formula",
+        1,
+        1,
+    ),
+    (
+        "frame { k = ul }\ngray(k)",
+        "but this uses `ul` (the brightness of the picture under",
+        1,
+        13,
+    ),
+    (
+        "layer add { rgb(1, 1) }",
+        "`rgb` takes 3 values (or 4",
+        1,
+        13,
+    ),
+];
+
+#[test]
+fn layer_error_messages() {
+    let mut bad = alloc::vec::Vec::new();
+    for &(src, want, line, col) in LAYER_ERRORS {
+        match compile(src) {
+            Ok(_) => bad.push(alloc::format!("{src:?}: compiled")),
+            Err(e) => {
+                let lc = e.line_col(src);
+                if !e.msg.contains(want) || lc != (line, col) {
+                    bad.push(alloc::format!(
+                        "{src:?}: got {:?} at {lc:?}, want {want:?} at {:?}\n{}",
+                        e.msg,
+                        (line, col),
+                        e.render(src)
+                    ));
+                }
+            }
+        }
+    }
+    assert!(bad.is_empty(), "\n{}", bad.join("\n"));
 }

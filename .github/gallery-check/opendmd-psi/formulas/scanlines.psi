@@ -1,0 +1,2 @@
+-- A look: every other row darker, over the GIF
+layer multiply { gray(py % 2 ? 1 : 0.55) }

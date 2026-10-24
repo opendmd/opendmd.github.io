@@ -3,10 +3,14 @@
 // details, and the editor (`#formulas/edit`). Drawn by pkg-psi (the
 // firmware's crate: the panel's frames byte for byte) through the LED
 // preview (`Preview.showRgb`); on a device, Show on panel (js/psishow.js).
+// A formula that reads what is under it (`ur ug ub ul`, layers that let it
+// show through) is drawn over a GIF: one picked from the Library or a file
+// (decoded by pkg-art), else a sample picture; on a device it can be shown
+// over the panel's GIF or kept as the panel's look.
 
 import { app } from './state.js';
 import { PanelPreview } from './preview.js';
-import { h, clear, store, toast, debounce, saver, SITE } from './util.js';
+import { h, clear, store, toast, debounce, saver, base, SITE } from './util.js';
 import { popup, closeMenu } from './overrides.js';
 import { link as mklink, parse, sliderName, about, TIP, marks } from './psikit.js';
 
@@ -16,6 +20,7 @@ const psi = () => (mod ??= import(`../pkg-psi/opendmd_psi_web.js${gen ? '?' + ge
 // A trap (a bug) leaves the module unusable: a fresh instance takes over.
 function restart() {
   P = mod = held = null;
+  over = false;
   gen++;
   psi().then(() => { toast('Formulas restarted'); B?.ed.again(); for (const v of views) v.dirty = true; kick(); });
 }
@@ -30,23 +35,115 @@ function T(fn, d) {
 // The frame clock is the panel's: 50 frames a second, `t` a whole number of 20 ms frames.
 const D = 20;
 // What the module holds: compiling is cheap (tens of µs), so whoever draws compiles first.
-let held = null;
-const take = (src) => T(() => src != null && (src === held || (P.compile(src.slice(0, 4096)) && (held = src) != null)), false);
+// `over`: it draws over what is under it.
+let held = null, over = false;
+const hold = (src) => { held = src; over = src != null && !!(P.info()[5] & 32); return true; };
+const take = (src) => T(() => src != null && (src === held || (P.compile(src.slice(0, 4096)) && hold(src))), false);
 const Q = (v) => Math.round((v || 0) * 65536);
 // `still`: a thumbnail, drawn at 10:09:30 like the site's gallery (opendmd-gallery's
 // preview clock), so one that follows the clock doesn't come out dark at night.
-function draw(f, ms, still) {
+// `gms`: where the GIF under it is (its own clock: ms since the preview started).
+function draw(f, ms, still, gms = ms) {
   if (!take(f.src)) return null;
   const d = new Date();
   const [hh, mm, ss] = still ? [10, 9, 30] : [d.getHours(), d.getMinutes(), d.getSeconds()];
   return T(() => {
-    P.frame(ms, hh, mm, ss, Q(f.a), Q(f.b), Q(f.c));
+    if (over) new Uint8Array(P.mem.buffer, P.under(), 12288).set(underAt(gms));
+    P[over ? 'frameOver' : 'frame'](ms, hh, mm, ss, Q(f.a), Q(f.b), Q(f.c));
     return new Uint8Array(P.mem.buffer, P.pixels(), 12288);
   }, null);
 }
 const info = (src) => (take(src) && T(() => P.info(), null)) || [];
+const isOver = (f) => !!(info(f.src)[5] & 32);
 
-const NOTE = () => (app.device ? 'Show on panel plays it there until the playlist moves on; save it as a GIF to keep it.' : 'Formulas play here in the browser. Save one as a GIF to play it on an OpenDMD panel.');
+// --- What is under: the GIF picked (`U`: its name, RGB frames and when each
+// ends), else a sample picture (a sky, a sun and hills, drawn here).
+let U = null, SAMPLE = null;
+function sample() {
+  if (!SAMPLE) {
+    SAMPLE = new Uint8Array(12288);
+    for (let i = 0; i < 4096; i++) {
+      const x = i % 128, y = i >> 7;
+      SAMPLE.set(y > 23 - 4 * Math.sin(x / 13) - 2 * Math.sin(x / 5) ? [30, 110 + (x * 7 + y * 13) % 50, 40]
+        : (x - 98) ** 2 + 1.5 * (y - 10) ** 2 < 50 ? [255, 215, 80] : [40 + y * 6, 60 + y * 4, 170 - y * 3], i * 3);
+    }
+  }
+  return SAMPLE;
+}
+function underAt(ms) {
+  if (!U) return sample();
+  const t = ms % U.total;
+  let k = 0;
+  while (U.end[k] <= t) k++;
+  return U.f[k];
+}
+const underName = () => (U ? U.name : 'a sample picture');
+const underSet = [];
+function setUnder(u) {
+  U = u;
+  for (const v of views) v.dirty = true;
+  for (const fn of underSet) fn();
+  kick();
+}
+// A GIF's frames, by pkg-art (the Studio's decoder: the frames the Library's preview shows).
+async function loadGif(name, bytes) {
+  toast(`Reading “${name}”…`);
+  try {
+    const m = await (await import('./artmod.js')).art();
+    const st = m.Studio.fromGif(bytes);
+    while (!st.decode(24)) await new Promise((r) => setTimeout(r));
+    const d = st.delays(), f = [], end = [];
+    let t = 0;
+    for (let i = 0; i < d.length; i++) {
+      const a = st.thumb(i), b = new Uint8Array(12288);
+      for (let p = 0, q = 0; q < 12288; p += 4, q += 3) { b[q] = a[p]; b[q + 1] = a[p + 1]; b[q + 2] = a[p + 2]; }
+      f.push(b);
+      end.push(t += Math.max(20, d[i] || 100));
+    }
+    st.free();
+    setUnder({ name, f, end, total: t });
+  } catch (e) { toast(`Couldn’t read that GIF: ${e.message || e}`, 'bad'); }
+}
+// Which GIF: one of the playlist's (the Library's titles), a file, or the sample.
+async function pickGif(btn) {
+  const r = btn.getBoundingClientRect();
+  const q = h('input', { type: 'search', id: 'psi-gq', placeholder: 'Find a GIF', 'aria-label': 'Find a GIF' });
+  const list = h('div', { id: 'psi-glist', style: 'max-height:40vh;overflow:auto' });
+  const file = h('input', { type: 'file', accept: '.gif,image/gif', hidden: true, onchange: () => { const x = file.files[0]; if (x) { closeMenu(); x.arrayBuffer().then((b) => loadGif(x.name.replace(/\.gif$/i, ''), new Uint8Array(b))); } } });
+  let all = [];
+  const show = () => {
+    const t = q.value.trim().toLowerCase();
+    clear(list, all.filter((e) => e.t.toLowerCase().includes(t)).slice(0, 40).map((e) => h('button.mi', { onclick: () => { closeMenu(); app.previewBytes(e.p).then((b) => loadGif(e.t, b), (er) => toast(`Couldn’t read that GIF: ${er.message}`, 'bad')); } }, e.t)));
+  };
+  q.oninput = show;
+  popup(h('div.menu.wide', { id: 'psi-gif-pick', role: 'dialog', 'aria-label': 'Draw it over a GIF' }, h('div.mh', 'Draw it over a GIF'), app.src && q, app.src && list,
+    h('button.mi', { id: 'psi-gif-file', onclick: () => file.click() }, 'A GIF from this computer…'), file,
+    U && h('button.mi', { id: 'psi-gif-none', onclick: () => { closeMenu(); setUnder(null); } }, 'The sample picture')), r.left, r.bottom + 4);
+  if (app.src) {
+    const text = await app.text(app.activePath).catch(() => '');
+    all = (text ? app.wasm.parseManifest(text) : []).filter((e) => e.path[0] !== '@').map((e) => ({ t: e.title || base(e.path), p: e.path }));
+    show();
+  }
+}
+// The row that says what a formula is drawn over, with the picker.
+function overRow(id) {
+  const name = h('b', { id: id + '-name' }), el = h('div.row.cap', { id, hidden: true }, 'Drawn over ', name, h('button.sm', { id: id + '-pick', onclick: (e) => pickGif(e.currentTarget) }, 'Pick a GIF…'));
+  const upd = () => { name.textContent = underName(); };
+  underSet.push(upd);
+  upd();
+  return el;
+}
+
+// On a device: kept as the panel's look (Settings › Look), over every GIF.
+async function useLook(f) {
+  try {
+    await app.src.putConfig({ look_formula: (await import('./psishow.js')).fpath(f), look_formula_name: Array.from(f.name || 'Formula').slice(0, 60).join('') });
+    await app.refreshConfig();
+    toast(`“${f.name || 'Formula'}” is the panel’s look now: drawn over every GIF (Settings › Look turns it off)`, 'ok');
+  } catch (e) { toast(e.status == 400 ? `The panel can’t use it: ${e.message.replace(/^400: (look_formula: )?/, '')}` : 'Use as the look: ' + e.message, 'bad'); }
+}
+
+const NOTE = () => (app.device ? 'Show on panel plays it there until the playlist moves on (one that draws over a GIF, over the panel’s GIF); save it as a GIF to keep it.' : 'Formulas play here in the browser. Save one as a GIF to play it on an OpenDMD panel.');
 
 let PS = null;
 const shows = [], showBtn = (id, f) => app.device && shows[shows.push([h('button', { id, onclick: () => PS?.show(f()) }, 'Show on panel'), f]) - 1][0];
@@ -59,10 +156,12 @@ function loop(now) {
   for (const v of views) {
     if (!v.f || v.canvas.offsetParent === null) continue;
     on = true;
-    const n = Math.max(1, Math.floor((v.loopMs || 8000) / D)), i = Math.floor((now - v.t0) / D) % n;
-    if (i === v.i && !v.dirty) continue;
-    v.i = i; v.dirty = false;
-    const rgb = draw(v.f, i * D);
+    const n = Math.max(1, Math.floor((v.loopMs || 8000) / D)), k = Math.floor((now - v.t0) / D), i = k % n;
+    // Over a GIF the picture changes with the GIF too.
+    const key = v.over && U ? k : i;
+    if (key === v.i && !v.dirty) continue;
+    v.i = key; v.dirty = false;
+    const rgb = draw(v.f, i * D, false, now - v.t0);
     if (rgb) { v.pv.p.showRgb(rgb); v.canvas.dataset.frames = -~v.canvas.dataset.frames; }
   }
   // Nothing on screen: stop (kick() starts it again).
@@ -77,7 +176,7 @@ function view(canvas) {
 }
 function play(v, f, i) {
   if (v.f?.src !== f.src) v.t0 = performance.now();
-  v.f = f; v.loopMs = i[4]; v.dirty = true;
+  v.f = f; v.loopMs = i[4]; v.over = i[5] & 32; v.dirty = true;
   kick();
 }
 
@@ -134,13 +233,15 @@ function share(btn, f) {
 }
 
 // "Save as GIF…": one loop into Create Art: 20 ms frames, 40 past 240, cut at 240.
+// Over a GIF: the GIF's length, or the formula's loop if that is longer and it moves.
 function toGif(f) {
-  const ms = info(f.src)[4];
+  const i = info(f.src), ms = i[4];
   if (!ms) { toast('Fix the formula first: it doesn’t work yet', 'bad'); return; }
+  const o = i[5] & 32, len = !o ? ms : i[5] & 24 ? Math.max(ms, U?.total || 0) : U?.total || D;
   let d = D;
-  if (ms / d > 240) d = 40;
-  const all = Math.max(1, Math.floor(ms / d)), n = Math.min(all, 240);
-  app.artFrom = { title: f.name || 'Formula', frames: { n, delay: d, cut: all > n, frame: (i) => draw(f, i * d) } };
+  if (len / d > 240) d = 40;
+  const all = Math.max(1, Math.floor(len / d)), n = Math.min(all, 240);
+  app.artFrom = { title: (f.name || 'Formula') + (o && U ? ' over ' + U.name : ''), frames: { n, delay: d, cut: all > n, frame: (k) => draw(f, k * d % ms, false, k * d) } };
   app.go('create');
 }
 
@@ -184,10 +285,12 @@ function build(root) {
   const shareBtn = h('button', { id: 'psi-share-btn' }, 'Copy share link'), del = h('button.danger', { id: 'psi-del' }, 'Delete…');
   let cur = null;
   const show = showBtn('psi-show', () => cur);
+  const look = app.device && h('button', { id: 'psi-look', onclick: () => useLook(cur) }, 'Use as the look');
+  const under = overRow('psi-under');
   const side = h('div.side', { id: 'psi-side' }, h('div.card', { id: 'psi-detail' },
     h('button.sm.close', { 'aria-label': 'Close', onclick: () => side.classList.remove('open') }, '✕'),
-    canvas, cap, h('div.dhead', h('div.grow', title, desc)), sl,
-    h('div.row.acts', show, main, gifBtn), h('div.row.acts', shareBtn, del), h('p.cap', NOTE())));
+    canvas, cap, under, h('div.dhead', h('div.grow', title, desc)), sl,
+    h('div.row.acts', show, main, gifBtn), h('div.row.acts', look, shareBtn, del), h('p.cap', NOTE())));
   const ed = editor();
   root.append(h('h1.ptitle', 'Formulas'), h('div.libgrid', gal, side), ed.el);
   addEventListener('keydown', (e) => { if (e.key === 'Escape' && side.classList.contains('open') && !document.querySelector('.menu')) side.classList.remove('open'); });
@@ -202,6 +305,8 @@ function build(root) {
     cap.title = i.length ? TIP(i) : '';
     sliders(sl, f, i[5] || 0, () => { pv.dirty = true; PS?.follow(f); });
     if (show) show.disabled = !i.length;
+    under.hidden = !(i[5] & 32);
+    if (look) look.hidden = under.hidden;
     PS?.mark();
     main.textContent = mineToo ? 'Edit' : 'Remix';
     main.onclick = (e) => go(mineToo ? { ...f } : { name: f.name + ' remix', src: f.src, a: f.a, b: f.b, c: f.c }, e.currentTarget);
@@ -234,28 +339,32 @@ function build(root) {
         h('div.row', h('button.pri', { id: 'psi-new', onclick: (e) => go({ name: '', src: STARTER }, e.currentTarget) }, '+ New formula'),
           h('span.cap', 'Written in Psi ', h('span.psi-mark', { title: 'Psi, the language formulas are written in' }, 'Ψ')))),
       ms.length > 0 && h('div.card', h('h3', 'Your formulas'), h('div.psi-tiles', { id: 'psi-mine' }, ms.map((f) => tile(f, true)))),
-      h('div.card', h('h3', 'Examples'), h('div.psi-tiles', { id: 'psi-ex' }, EX.map((f) => tile(f, false)))));
+      h('div.card', h('h3', 'Examples'), h('div.psi-tiles', { id: 'psi-ex' }, EX.filter((f) => !isOver(f)).map((f) => tile(f, false)))),
+      h('div.card', h('h3', 'Over a GIF'), h('p.cap', 'These draw over what plays: scanlines, colours, a clock in the corner. Pick a GIF to try them on.'),
+        h('div.psi-tiles', { id: 'psi-ex-over' }, EX.filter(isOver).map((f) => tile(f, false)))));
     if (cur) for (const t of gal.querySelectorAll('.psi-tile')) t.classList.toggle('cur', t._f.src === cur.src && t._f.name === cur.name);
     // Two columns: the details are never empty (a sheet on a phone waits for a pick).
     else if (EX[0] && matchMedia('(min-width:1001px)').matches) pick(EX[0], false);
   }
   B = { root, ed, tiles, editing: false, draft: null };
-  B.ready = Promise.all([psi(), app.device && import('./psishow.js').then((m) => { PS = m; m.init(shows); }), new Promise((res) => document.head.append(h('link', { rel: 'stylesheet', href: './formulas.css', onload: res, onerror: res }))), fetch('formulas.json').then((r) => r.json()).then((x) => { EX = Array.isArray(x) ? x : []; })]).then(tiles)
+  B.ready = Promise.all([psi(), app.device && import('./psishow.js').then((m) => { PS = m; m.init(shows, isOver); }), new Promise((res) => document.head.append(h('link', { rel: 'stylesheet', href: './formulas.css', onload: res, onerror: res }))), fetch('formulas.json').then((r) => r.json()).then((x) => { EX = Array.isArray(x) ? x : []; })]).then(tiles)
     .catch((e) => { clear(gal, h('div.card', h('p.bad', 'Formulas could not be loaded: ' + (e.message || e)))); });
 }
 
 // --- The editor (`#formulas/edit`)
 const VARS = [['x, y', 'where the pixel is: 0 to 1 across, and up from the bottom'], ['px, py', 'the pixel’s column 0–127 and row 0–31 from the bottom'],
   ['t', 'seconds into the loop'], ['hour, minute, second', 'the time of day'], ['a, b, c', 'sliders, 0 to 1 (name one with -- a: speed)'],
-  ['w, h', '128 and 32'], ['i', 'the pixel’s number, 0–4095']];
+  ['w, h', '128 and 32'], ['i', 'the pixel’s number, 0–4095'], ['ur, ug, ub', 'the colour under the formula: the GIF it is drawn over, 0 to 1'], ['ul', 'how bright that is']];
 const FUNCS = [['sin(v) cos(v)', 'a wave: one turn per 1, between −1 and 1'], ['tri(v) saw(v) sqr(v)', 'triangle, sawtooth and square waves'],
   ['abs floor frac sqrt', 'size, whole part, fraction, square root'], ['min max clamp(v, lo, hi)', 'limits'], ['mix(a, b, k)', 'from a to b as k goes 0 to 1'],
   ['step(edge, v)', '1 past the edge, else 0'], ['smoothstep(e0, e1, v)', 'a soft step'], ['len(dx, dy)', 'distance'], ['atan2(dy, dx)', 'angle, in turns'],
   ['noise(x, y, z)', 'smooth random hills, 0 to 1'], ['hash(a, b)', 'random 0 to 1'], ['select(c, a, b)', 'a when c is true (not 0), else b; or c ? a : b'],
   ['< <= > >= == !=', 'compare: 1 or 0; and, or, not'], ['%', 'remainder: v % 1 is the fraction'], [';', 'a new line, on the same line'],
-  ['loop 8', 'the loop’s length in seconds (first line)'], ['frame { … }', 'values worked out once a frame']];
+  ['loop 8', 'the loop’s length in seconds (first line)'], ['frame { … }', 'values worked out once a frame'],
+  ['layer add { … }', 'a layer with its own names and colour, on what is below: over, add, multiply, screen, max or min']];
 const COLS = [['hsv(hue, sat, val)', 'colour: hue in turns, 0 to 1 each'], ['rgb(r, g, b)', 'red, green, blue: 0 to 1'],
-  ['pal(fire, v)', 'a palette: fire, ice, ocean, chrono, amber, rainbow, gray'], ['gray(v)', 'white, 0 to 1']];
+  ['pal(fire, v)', 'a palette: fire, ice, ocean, chrono, amber, rainbow, gray'], ['gray(v)', 'white, 0 to 1'],
+  ['rgb(r, g, b, k)', 'a last value: how much it covers, 0 to 1 (what is under shows through)']];
 
 function editor() {
   const name = h('input', { type: 'text', id: 'psi-name', placeholder: 'Untitled formula', maxLength: 60, 'aria-label': 'Name', oninput: () => { B.draft.name = name.value; stash(); } });
@@ -275,14 +384,16 @@ function editor() {
   const cap = h('div.cap', { id: 'psi-ed-cap' }), heavy = h('p.cap', { id: 'psi-heavy', hidden: true },
     'Heavy for the panel: noise, len, sqrt, atan2 and dividing by a changing value cost the most');
   const sl = h('div.psi-sls', { id: 'psi-ed-sl' });
+  const under = overRow('psi-ed-under');
+  const look = app.device && h('button', { id: 'psi-ed-look', hidden: true, onclick: () => useLook({ ...live }) }, 'Use as the look');
   const touch = matchMedia('(pointer:coarse)').matches;
   // One card: the preview (stuck to the top on a phone), the sliders, the
   // error over the code, the code, the actions.
-  const top = h('div.psi-top', canvas, cap);
+  const top = h('div.psi-top', canvas, cap, under);
   const el = h('div', { id: 'psi-ed' }, head, h('div.card.psi-edb', top, h('div.psi-sl2', sl, heavy), err,
     h('div.psi-code', h('div.psi-src', gut, h('div.psi-wrap', hl, ta)), strip,
       h('div.row.acts', help, h('span.cap', touch ? 'Tap a number, then drag the bar under the code to try other values' : 'Drag a number (or Alt + ↑ ↓) to try other values'))),
-    h('div.psi-acts', h('div.row.acts', showBtn('psi-ed-show', () => live), h('button', { id: 'psi-ed-gif', onclick: () => toGif(B.draft) }, 'Save as GIF…'),
+    h('div.psi-acts', h('div.row.acts', showBtn('psi-ed-show', () => live), look, h('button', { id: 'psi-ed-gif', onclick: () => toGif(B.draft) }, 'Save as GIF…'),
       h('button', { id: 'psi-ed-share', onclick: (e) => share(e.currentTarget, B.draft) }, 'Copy share link')), h('p.cap', NOTE()))));
   let pv = null, toks = [], bad = null, num = null, good = null;
   // What the preview plays: the last text that compiled, with the sliders as they are.
@@ -305,7 +416,7 @@ function editor() {
     // (The module restarting: the next compile catches up.)
     const ok = T(() => P.compile(f.src), null);
     if (ok == null) return;
-    held = ok ? f.src : null;
+    if (ok) hold(f.src); else held = null;
     if (ok) {
       bad = null;
       err.textContent = '';
@@ -313,6 +424,8 @@ function editor() {
       cap.textContent = about(i);
       cap.title = TIP(i);
       heavy.hidden = i[6] <= 8000;
+      under.hidden = !(i[5] & 32);
+      if (look) look.hidden = under.hidden;
       el.dataset.steps = i[0];
       delete el.dataset.err;
       good = f.src;
@@ -458,7 +571,7 @@ function editor() {
     const ins = (t) => () => { closeMenu(); const s = ta.selectionStart; ta.focus(); ta.setSelectionRange(s, ta.selectionEnd); document.execCommand('insertText', false, t); };
     const rows = (title, list) => [h('h3', title), h('dl.psi-dl', list.map(([k, v]) => [h('dt', h('button.txt.mono', { onclick: ins(k.split(/[ ,(]/)[0]) }, k)), h('dd', v)]))];
     popup(h('div.menu.wide', { id: 'psi-cheat', role: 'dialog', 'aria-label': 'Cheat sheet' }, h('div.mh', 'Cheat sheet'),
-      rows('Values', VARS), rows('Functions', FUNCS), rows('Colour (the last line)', COLS),
+      rows('Values', VARS), rows('Functions', FUNCS), rows('Colour (the last line, of the formula or a layer)', COLS),
       h('p.cap', 'Phases are in turns: sin(0.25) is 1. Tap a name to put it in. -- starts a comment.')), r.left, r.bottom + 4);
   }
 

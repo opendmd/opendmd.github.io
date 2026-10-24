@@ -3,8 +3,8 @@
 // tabs, `#settings/play|look|time|device` (bare `#settings` is the first);
 // only the open tab is in the page. Playback (brightness and its maximum
 // js/power.js, playlist, platforms, shuffle, how long each GIF stays),
-// Look (colour, glow, mirroring on Now, the transition, Start-up
-// js/boot.js), Schedule (time, schedule, night mode, Follow RePlayOS) and
+// Look (colour, glow, a formula over every GIF, mirroring on Now, the
+// transition, Start-up js/boot.js), Schedule (time, schedule, night mode, Follow RePlayOS) and
 // Device (status, the playback cache, network — its own Save; a new name
 // is live at once —, panel timing js/panel.js, firmware and security
 // js/firmware.js, About). Everything saves as it changes.
@@ -18,6 +18,9 @@ import { h, clear, on, note, store, debounce, saver, brightSlider } from './util
 
 const thumbs = () => h('label', { style: 'margin-top:12px' }, h('input', { type: 'checkbox', id: 'st-thumbs', checked: store.get('thumbs', !app.device), onchange: (e) => store.set('thumbs', e.target.checked) }), 'Thumbnails in the Library');
 const TABS = [['play', 'Playback'], ['look', 'Look'], ['time', 'Schedule'], ['device', 'Device']];
+// The examples (formulas.json), fetched once a session; pkg-psi's "lets the GIF show through".
+let exQ = null, psiOver = null;
+const examples = () => (exQ ??= fetch('formulas.json').then((r) => r.json()).catch(() => { exQ = null; return []; }));
 
 export async function mount(el) {
   if (!app.device) {
@@ -72,6 +75,35 @@ export async function mount(el) {
   f.brightness.addEventListener('input', () => { held = 1; later(); });
   for (const k of ['shuffle', 'set']) f[k].onchange = () => save([k], play);
   for (const k of ['look', 'glow']) f[k].onchange = () => save([k], looks);
+  // A formula over every GIF: one saved in Formulas (this browser), or an
+  // example, that lets the GIF show through (asked of pkg-psi — an instance
+  // of its own, `?look`, so the Formulas view's is not disturbed — or, if it
+  // will not load, guessed from its words), or none; the one set elsewhere
+  // stays listed, with the panel's word if it can't draw it any more.
+  const lf = h('select', { id: 'st-look-formula' });
+  const lfErr = h('p.cap.bad', { id: 'st-look-formula-err', hidden: true });
+  let lfs = [];
+  const guess = (src) => /\b(ur|ug|ub|ul|layer)\b/.test(src);
+  async function lookFormulas() {
+    const [ex, { fpath }, over] = await Promise.all([examples(), import('./psishow.js'),
+      (psiOver ??= import('../pkg-psi/opendmd_psi_web.js?look').then(async (m) => { await m.default(); return (src) => m.compile(src) && !!(m.info()[5] & 32); }).catch(() => guess))]);
+    const mine = store.get('psi.mine', []), cf = app.config || {};
+    lfs = [...(Array.isArray(mine) ? mine : []), ...(Array.isArray(ex) ? ex : [])]
+      .filter((x) => typeof x?.src == 'string' && over(x.src)).map((x) => ({ name: x.name || 'Formula', path: fpath(x) }));
+    if (cf.look_formula && !lfs.some((x) => x.path === cf.look_formula)) lfs.unshift({ name: cf.look_formula_name || 'A formula', path: cf.look_formula });
+    clear(lf, h('option', { value: '' }, 'None'), lfs.map((x, k) => h('option', { value: k }, x.name)));
+    lf.value = String(lfs.findIndex((x) => x.path === cf.look_formula));
+    if (lf.value === '-1') lf.value = '';
+  }
+  lf.onchange = () => looks(async () => {
+    const x = lfs[lf.value];
+    await app.src.putConfig({ look_formula: x?.path || '', look_formula_name: x?.name || '' });
+    await app.refreshConfig();
+  });
+  on('config', lookFormulas);
+  const lookErr = (st) => { const e = st?.formula_look?.error; lfErr.hidden = !e; lfErr.textContent = e ? `The panel can’t draw this formula any more: ${e}` : ''; };
+  on('status', lookErr);
+  lookErr(app.status);
 
   // Platforms: one row, "All (60)" or the ones picked, and a sheet to
   // choose them (counted per manifest text; the rare ones folded away).
@@ -161,6 +193,8 @@ export async function mount(el) {
       return tab('look',
         h('div.card', lookH, h('p.cap', 'How the panel draws every GIF'),
           h('div.form.f2', h('label.stack', 'Colour', f.look), h('label.stack', 'Phosphor glow', f.glow)),
+          (lookFormulas(), h('label.stack', { style: 'margin-top:12px' }, 'Formula over every GIF', lf)), lfErr,
+          h('p.cap', 'A formula drawn over everything the panel plays, before the colour and glow: scanlines, a colour grade, a clock in the corner. Make or pick one in Formulas.'),
           h('label', { style: 'margin-top:12px' }, mirror, 'Mirror the panel on Now'), h('p.cap', 'Now shows what the panel is playing; off saves the player a download for each GIF (this browser only)')),
         h('div.card', { id: 'st-trans-card' }, transH, h('p.cap', 'How the panel moves from one GIF to the next'),
           h('div.form.f2', h('label.stack', 'Style', f.transition), h('label.stack', 'Speed', f.transition_ms)),

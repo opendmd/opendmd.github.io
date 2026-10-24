@@ -34,7 +34,7 @@ pub use program::{Op, Program, H, MAX_OPS, MAX_SCALARS, REGS, W};
 pub use tables::{Tables, ATAN};
 #[cfg(feature = "tables")]
 pub use tables::{OWN, PALETTES, SIN};
-pub use vm::{q16, render_with, Inputs, Scratch, Q16_ONE};
+pub use vm::{q16, render_rows, render_with, Inputs, Scratch, Q16_ONE};
 
 /// The lane width the effect uses: one panel row.
 pub const LANES: usize = 128;
@@ -149,6 +149,36 @@ pub mod golden {
         ("palettes", "pal(rainbow, x)", 0, 0xd2ee745daaab3f25),
         ("clock", "frame { s = second / 60 }\npal(amber, step(x, s) + 0.3 * step(y, minute / 60))", 0, 0x2fa28273c4507f25),
     ];
+
+    /// The picture the [`OVER`] frames are drawn over: every byte value in
+    /// every channel somewhere (a hash per pixel), with smooth ramps across
+    /// the top half.
+    pub fn picture(out: &mut [u8]) {
+        for (i, p) in out.as_chunks_mut::<3>().0.iter_mut().enumerate() {
+            let (x, y) = ((i % crate::W) as u32, (i / crate::W) as u32);
+            let h = crate::fixed::mix32(i as u32 ^ 0x9e37_79b9);
+            if y < 16 {
+                p.copy_from_slice(&[(x * 2) as u8, (y * 16 + x / 8) as u8, (255 - x * 2) as u8]);
+            } else {
+                p.copy_from_slice(&[h as u8, (h >> 8) as u8, (h >> 16) as u8]);
+            }
+        }
+    }
+
+    /// Frames of formulas with layers, and of formulas drawn over
+    /// [`picture`] (`over`: true) — what is under, blends, coverage.
+    pub const OVER: &[(&str, &str, u32, bool, u64)] = &[
+        ("identity", "rgb(ur, ug, ub)", 0, true, 0x2c7a29e300e4c8cf),
+        ("luma", "gray(ul)", 0, true, 0xc7f57bec83c88cfe),
+        ("grade", "rgb(ur*1.2 - 0.05, ug, ub*0.7 + ul*0.2)", 0, true, 0x56bbda81836b00e),
+        ("scanlines", "layer multiply { gray(py % 2 ? 1 : 0.55) }", 0, true, 0x8925595265a58f1c),
+        ("vignette", "d = len((x - 0.5)*2, (y - 0.5)*1.2)\nlayer multiply { gray(1 - smoothstep(0.6, 1.3, d)) }", 0, true, 0x83fc31d9d8ceb1e3),
+        ("blends", "loop 4\nlayer add { hsv(x + t/4, 1, 0.5) }\nlayer screen { gray(y, 0.5) }\nlayer max { rgb(0, step(0.5, x), 0) }\nlayer min { gray(0.9) }", 1000, true, 0x7160afc8affc1391),
+        ("cover", "layer { rgb(1, 0, 0, x) }\nlayer over { pal(ice, y, 0.25) }\nlayer { gray(0.5, step(px % 8, 1)) }", 0, true, 0x4c437de4180ecfbe),
+        ("hidden", "layer add { noise(x*8, y*4, t) }\nlayer { hsv(x, 1, 1) }\nlayer multiply { gray(1 - ul*0.5) }", 0, true, 0x6e7731edba40d20b),
+        ("alone", "layer { hsv(x, 1, 1) }\nlayer add { gray(ur + 0.2, 0.5) }", 0, false, 0xb62345c4247f9a5),
+        ("scoped", "frame { s = sin(t) }\nk = x*4\nlayer { v = frac(k + s)\nrgb(v, ub, 0) }\nlayer screen { v = frac(k*2 - y)\nframe { q = cos(t) }\npal(fire, v*q, 0.75) }", 2500, true, 0xe01c5295366f8613),
+    ];
 }
 
 /// Formulas that make the compiler work hardest within what the panel
@@ -162,7 +192,10 @@ pub mod worst {
 
     /// The path's length for `src` (`@fx:psi?src=` + compacted, `+` 3 B).
     pub fn path_len(src: &str) -> usize {
-        12 + crate::compact(src).bytes().map(|b| if b == b'+' { 3 } else { 1 }).sum::<usize>()
+        12 + crate::compact(src)
+            .bytes()
+            .map(|b| if b == b'+' { 3 } else { 1 })
+            .sum::<usize>()
     }
 
     fn fill(mut line: impl FnMut(usize) -> String, end: impl Fn(usize) -> String) -> String {
@@ -181,13 +214,22 @@ pub mod worst {
     /// As many lines (locals) as fit, each a new value: the most names and
     /// nodes.
     pub fn many_locals() -> String {
-        fill(|k| format!("q{k} = x*{k}.5 + y*{k}.25"), |k| format!("gray(q{k})"))
+        fill(
+            |k| format!("q{k} = x*{k}.5 + y*{k}.25"),
+            |k| format!("gray(q{k})"),
+        )
     }
 
     /// A chain, each local built on the one before, up to the step limit.
     pub fn chain() -> String {
         fill(
-            |k| if k == 0 { String::from("q0 = x") } else { format!("q{k} = q{}*0.99 + {k}.5", k - 1) },
+            |k| {
+                if k == 0 {
+                    String::from("q0 = x")
+                } else {
+                    format!("q{k} = q{}*0.99 + {k}.5", k - 1)
+                }
+            },
             |k| format!("gray(frac(q{k}))"),
         )
     }
@@ -206,8 +248,11 @@ pub mod worst {
     /// A named generator.
     pub type Case = (&'static str, fn() -> String);
 
-    pub const ALL: [Case; 3] =
-        [("many locals", many_locals), ("chain", chain), ("distinct terms", distinct)];
+    pub const ALL: [Case; 3] = [
+        ("many locals", many_locals),
+        ("chain", chain),
+        ("distinct terms", distinct),
+    ];
 }
 
 #[cfg(all(test, feature = "tables"))]

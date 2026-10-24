@@ -3,8 +3,10 @@
 //! (`wasm-pack test --node`, `make test-wasm`) with the same expected
 //! hashes, so a pass on both is bit-identical output.
 
-use opendmd_psi::golden::{fnv, inputs, FRAMES as GOLDEN};
-use opendmd_psi::{compile, render_with, sketches, Program, Scratch, H, MAX_OPS, OWN, W};
+use opendmd_psi::golden::{fnv, inputs, picture, FRAMES as GOLDEN, OVER};
+use opendmd_psi::{
+    compile, render_rows, render_with, sketches, Program, Scratch, H, MAX_OPS, OWN, W,
+};
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
@@ -42,6 +44,75 @@ fn golden_frames() {
         "golden frames differ (got):\n{}",
         bad.join("\n")
     );
+}
+
+fn frame_over<const N: usize>(p: &Program, ms: u32, under: Option<&[u8]>) -> Vec<u8> {
+    let mut s = Scratch::<N>::new();
+    let mut out = vec![0x5a; W * H * 3];
+    render_rows::<N>(p, &mut s, &inputs(ms), &OWN, under, u32::MAX, &mut out);
+    out
+}
+
+/// Layers, and formulas over a picture: the same hashes at both lane
+/// widths, here and in wasm (and on the ESP32, through `psi-probe`).
+#[test]
+fn golden_frames_over() {
+    let mut under = vec![0u8; W * H * 3];
+    picture(&mut under);
+    let mut bad = Vec::new();
+    for &(name, src, ms, over, want) in OVER {
+        let p = compile(src).unwrap_or_else(|e| panic!("{name}: {}", e.render(src)));
+        let u = over.then_some(under.as_slice());
+        let a = frame_over::<128>(&p, ms, u);
+        assert!(
+            a == frame_over::<64>(&p, ms, u),
+            "{name}: lane widths differ"
+        );
+        let got = fnv(&a);
+        if got != want {
+            bad.push(format!("    (\"{name}\", …, {ms}, {over}, {got:#x}),"));
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "golden frames over differ (got):\n{}",
+        bad.join("\n")
+    );
+}
+
+/// Any set of rows drawn alone is the same bytes as in the whole frame;
+/// rows not asked for are left alone.
+#[test]
+fn rows_alone_are_the_same() {
+    let mut under = vec![0u8; W * H * 3];
+    picture(&mut under);
+    for &(name, src, ms, over, _) in OVER.iter().chain(
+        GOLDEN
+            .iter()
+            .map(|&(n, s, m, _)| (n, s, m, false, 0u64))
+            .collect::<Vec<_>>()
+            .iter(),
+    ) {
+        let p = compile(src).unwrap();
+        let u = over.then_some(under.as_slice());
+        let all = frame_over::<128>(&p, ms, u);
+        for rows in [1u32, 0x8000_0001, 0x0f0f_0f0f, 0x1234_5678] {
+            let mut s = Scratch::<128>::new();
+            let mut out = vec![0x5a; W * H * 3];
+            render_rows::<128>(&p, &mut s, &inputs(ms), &OWN, u, rows, &mut out);
+            for r in 0..H {
+                let row = r * W * 3..(r + 1) * W * 3;
+                if rows & (1 << r) != 0 {
+                    assert!(out[row.clone()] == all[row], "{name}: row {r}");
+                } else {
+                    assert!(
+                        out[row].iter().all(|&b| b == 0x5a),
+                        "{name}: row {r} touched"
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -152,6 +223,16 @@ const PIECES: &[&str] = &[
     ".",
     "1e3",
     "_",
+    "layer",
+    "layer {",
+    "layer add {",
+    "multiply",
+    "screen",
+    "max",
+    "ur",
+    "ug",
+    "ub",
+    "ul",
 ];
 
 fn check(src: &str) {
@@ -159,6 +240,9 @@ fn check(src: &str) {
         Ok(p) => {
             assert!(p.len() <= MAX_OPS, "{src:?}: {} steps", p.len());
             let _ = frame::<128>(&p, 1234);
+            let mut under = vec![0u8; W * H * 3];
+            picture(&mut under);
+            let _ = frame_over::<128>(&p, 1234, Some(&under));
         }
         Err(e) => {
             assert!(
@@ -194,7 +278,7 @@ fn garbage_never_panics() {
 /// A random well-formed expression of depth ≤ `d`.
 fn expr(r: &mut Rng, d: u32) -> String {
     const LEAVES: &[&str] = &[
-        "x", "y", "px", "py", "i", "t", "hour", "a", "0.5", "3", "-2.25", "100", "w",
+        "x", "y", "px", "py", "i", "t", "hour", "a", "0.5", "3", "-2.25", "100", "w", "ur", "ul",
     ];
     if d == 0 || r.below(4) == 0 {
         return LEAVES[r.below(LEAVES.len())].to_string();
@@ -228,21 +312,48 @@ fn expr(r: &mut Rng, d: u32) -> String {
 fn random_formulas_render_or_refuse() {
     let mut r = Rng(0xfeed_beef_0bad_cafe);
     let mut ok = 0;
+    let mut under = vec![0u8; W * H * 3];
+    picture(&mut under);
     for k in 0..600 {
-        let src = format!(
-            "loop {}\nv = {}\nu = {}\nhsv({}, 1, {})",
-            1 + k % 9,
-            expr(&mut r, 4),
-            expr(&mut r, 4),
-            expr(&mut r, 3),
-            expr(&mut r, 3)
-        );
+        let src = if k % 2 == 0 {
+            format!(
+                "loop {}\nv = {}\nu = {}\nhsv({}, 1, {})",
+                1 + k % 9,
+                expr(&mut r, 4),
+                expr(&mut r, 4),
+                expr(&mut r, 3),
+                expr(&mut r, 3)
+            )
+        } else {
+            // Layers: a shared value, two or three layers of their own.
+            let blends = ["", "add", "multiply", "screen", "max", "min", "over"];
+            let mut s = format!("loop {}\nv = {}\n", 1 + k % 9, expr(&mut r, 3));
+            for _ in 0..2 + r.below(2) {
+                let cover = if r.below(2) == 0 {
+                    format!(", {}", expr(&mut r, 2))
+                } else {
+                    String::new()
+                };
+                s += &format!(
+                    "layer {} {{\nu = {}\nrgb(u, v, {}{cover})\n}}\n",
+                    blends[r.below(blends.len())],
+                    expr(&mut r, 3),
+                    expr(&mut r, 2)
+                );
+            }
+            s
+        };
         match compile(&src) {
             Ok(p) => {
                 ok += 1;
                 assert!(p.len() <= MAX_OPS);
-                // Both lane widths, bit for bit.
+                // Both lane widths, bit for bit, alone and over a picture.
                 assert!(frame::<128>(&p, 777) == frame::<64>(&p, 777), "{src}");
+                assert!(
+                    frame_over::<128>(&p, 777, Some(&under))
+                        == frame_over::<64>(&p, 777, Some(&under)),
+                    "{src}"
+                );
             }
             Err(e) => {
                 // Only the size limits may refuse a well-formed formula.

@@ -62,9 +62,25 @@ export function frame(ms, hour, minute, second, a, b, c) {
 }
 
 /**
+ * [`frame`] over the picture at [`under`] (what `ur ug ub ul` read and
+ * what shows through the layers): the formula drawn over a GIF's frame.
+ * @param {number} ms
+ * @param {number} hour
+ * @param {number} minute
+ * @param {number} second
+ * @param {number} a
+ * @param {number} b
+ * @param {number} c
+ */
+export function frameOver(ms, hour, minute, second, a, b, c) {
+    wasm.frameOver(ms, hour, minute, second, a, b, c);
+}
+
+/**
  * What the formula drawn is: `[steps, per frame, per row, per pixel, loop
- * ms, inputs (bits 0-2 the sliders a b c, 3 t, 4 the clock), estimated µs
- * a frame on the panel]`; empty before anything compiled.
+ * ms, inputs (bits 0-2 the sliders a b c, 3 t, 4 the clock, 5 the picture
+ * under it: drawn over a GIF it changes the GIF), estimated µs a frame on
+ * the panel, layers]`; empty before anything compiled.
  * @returns {Uint32Array}
  */
 export function info() {
@@ -81,6 +97,16 @@ export function info() {
  */
 export function pixels() {
     const ret = wasm.pixels();
+    return ret >>> 0;
+}
+
+/**
+ * Where the page puts the picture [`frame_over`] draws over: 128 × 32
+ * RGB888 bytes in the module's memory, top row first (kept until changed).
+ * @returns {number}
+ */
+export function under() {
+    const ret = wasm.under();
     return ret >>> 0;
 }
 function __wbg_get_imports() {
