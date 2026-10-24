@@ -110,6 +110,8 @@ ol.steps>li::before{content:counter(step);position:absolute;left:16px;top:13px;w
 border-radius:50%;background:var(--acc);color:#111;font-weight:800;box-shadow:0 0 16px rgba(247,165,49,.4)}
 ol.steps>li>:first-child{margin-top:0}ol.steps>li>:last-child{margin-bottom:0}
 
+p.vers{font-size:14px;color:var(--mut)}
+
 footer{grid-column:2;padding:0 44px 40px;color:var(--mut);font-size:13px}
 footer p{max-width:860px;border-top:1px solid var(--line);padding-top:16px}
 

@@ -11,9 +11,13 @@
 //
 // The work runs in slices of ~12 ms with the page given back between them
 // (no Worker: one wasm instance, the one the prepare job already loaded).
+//
+// A GIF past 256 colours is never smoothed: its file could only be a lossy
+// one, so it plays as it is (`fits` is false and the switch is not offered).
 
 import { app } from './state.js';
 import { art } from './artmod.js';
+import { prepareBytes, playsAsIs, madeCopy } from './prepare.js';
 import { dfetch } from './source.js';
 import { h, clear, enc, toast } from './util.js';
 
@@ -100,10 +104,15 @@ export async function set(path, on) {
   const rest = (await readList()).filter((p) => lc(p) !== lc(path));
   const dest = app.wasm.cachePathFor(path);
   if (on) {
+    let copy;
+    try { copy = await smoothCopy(gif); } catch (e) {
+      throw playsAsIs(e) ? new Error('not for a GIF with more than 256 colours; it plays as it is') : e;
+    }
     await writeList([...rest, path]);
-    await app.src.writeFile(dest, await smoothCopy(gif));
+    await app.src.writeFile(dest, copy);
+    madeCopy(path);
   } else {
-    await app.src.writeFile(dest, (await art()).prepareGif(gif).copy);
+    await prepareBytes(path, gif);
     await writeList(rest);
   }
 }
@@ -117,9 +126,8 @@ export async function keep(path, bytes, on, ready) {
   const list = await readList().catch(() => []);
   const rest = list.filter((p) => lc(p) !== lc(path));
   const dest = app.wasm.cachePathFor(path);
-  const m = await art();
   if (!on) {
-    await app.src.writeFile(dest, m.prepareGif(bytes).copy);
+    await prepareBytes(path, bytes);
     if (rest.length < list.length) await writeList(rest);
     return null;
   }
@@ -127,10 +135,10 @@ export async function keep(path, bytes, on, ready) {
   let copy = null, warn = null;
   try { copy = ready?.prepare(); } catch { /* made again below */ }
   try { copy ||= await smoothCopy(bytes); } catch (e) {
-    warn = `Smooth motion could not be made for this one (${e.message || e}); it plays as it is`;
-    copy = m.prepareGif(bytes).copy;
+    warn = playsAsIs(e) ? 'Smooth motion is not available for a GIF with more than 256 colours; it plays as it is'
+      : `Smooth motion could not be made for this one (${e.message || e}); it plays as it is`;
   }
-  await app.src.writeFile(dest, copy);
+  if (copy) { await app.src.writeFile(dest, copy); madeCopy(path); } else await prepareBytes(path, bytes);
   return warn;
 }
 
@@ -162,7 +170,7 @@ export async function detail(box, it, bytes, pv, cap) {
   if (!alive()) { s.free(); return; }
   held = s;
   box.dataset.analyseMs = Math.round(performance.now() - t0);
-  if (!s.offered && !on) { box.dataset.state = 'none'; return; }
+  if ((!s.offered || !s.fits) && !on) { box.dataset.state = 'none'; return; }
 
   let showing = false;
   const msg = h('div.cap', { id: 'lib-smooth-msg' });

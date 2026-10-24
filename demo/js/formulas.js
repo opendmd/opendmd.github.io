@@ -1,24 +1,19 @@
-// The Formulas view (`#formulas`; mounted when first opened or a
-// `#formula=` link opens): a few lines of maths that draw on the panel,
-// written in Psi (Ψ), OpenDMD's per-pixel language. The examples
-// (formulas.json) and the formulas saved in this browser, a details pane
-// like the Library's, and the editor (`#formulas/edit`). Drawn in the page
-// by their own wasm module (pkg-psi: the firmware's crate, so a frame here
-// is the panel's byte for byte) and shown through the main module's LED
-// preview (`Preview.showRgb`). Phase 1: nothing is sent to the panel; a
-// formula reaches it as a GIF ("Save as GIF…" → Create Art).
+// The Formulas view (`#formulas`, `#formula=` links): maths that draws on
+// the panel, in Psi (Ψ). The examples (formulas.json), the ones saved here,
+// details, and the editor (`#formulas/edit`). Drawn by pkg-psi (the
+// firmware's crate: the panel's frames byte for byte) through the LED
+// preview (`Preview.showRgb`); on a device, Show on panel (js/psishow.js).
 
 import { app } from './state.js';
 import { PanelPreview } from './preview.js';
-import { h, clear, store, toast, debounce, saver } from './util.js';
+import { h, clear, store, toast, debounce, saver, SITE } from './util.js';
 import { popup, closeMenu } from './overrides.js';
 import { link as mklink, parse, sliderName, about, TIP, marks } from './psikit.js';
 
 let P = null, mod = null, gen = 0;
 const psi = () => (mod ??= import(`../pkg-psi/opendmd_psi_web.js${gen ? '?' + gen : ''}`).then(async (m) => { P = { ...m, mem: (await m.default()).memory }; })
   .catch((e) => { mod = null; throw e; }));
-// A trap in the module (a bug: it should never happen) leaves it unusable:
-// a fresh instance (a module of its own, by its address) takes over.
+// A trap (a bug) leaves the module unusable: a fresh instance takes over.
 function restart() {
   P = mod = held = null;
   gen++;
@@ -51,7 +46,10 @@ function draw(f, ms, still) {
 }
 const info = (src) => (take(src) && T(() => P.info(), null)) || [];
 
-const NOTE = () => (app.device ? 'Formulas play here in the browser for now. Save one as a GIF to play it on the panel.' : 'Formulas play here in the browser. Save one as a GIF to play it on an OpenDMD panel.');
+const NOTE = () => (app.device ? 'Show on panel plays it there until the playlist moves on; save it as a GIF to keep it.' : 'Formulas play here in the browser. Save one as a GIF to play it on an OpenDMD panel.');
+
+let PS = null;
+const shows = [], showBtn = (id, f) => app.device && shows[shows.push([h('button', { id, onclick: () => PS?.show(f()) }, 'Show on panel'), f]) - 1][0];
 
 // A preview: the LED canvas, the formula it plays and its own clock.
 const views = new Set();
@@ -122,7 +120,7 @@ async function copy(text) {
 }
 // The formula's own page on the site (/f/: a preview, its code, Open on my
 // display, Try it in the demo); the demo's links stay on its own site.
-const SHARE = () => (app.demo ? new URL('../f/', location.href).href : 'https://opendmd.github.io/f/');
+const SHARE = () => (app.demo ? new URL('../f/', location.href).href : SITE + 'f/');
 function share(btn, f) {
   const r = btn.getBoundingClientRect(), url = link(f, SHARE()), here = app.device && link(f);
   const field = h('input', { type: 'text', id: 'psi-link', readOnly: true, value: url, onfocus: (e) => e.target.select() });
@@ -135,8 +133,7 @@ function share(btn, f) {
     h('a.btn.mi', { id: 'psi-submit', href: url + '&submit', target: '_blank', rel: 'noopener', style: 'text-decoration:none', onclick: closeMenu }, 'Submit to the gallery…')), r.left, r.bottom + 4);
 }
 
-// "Save as GIF…": one loop drawn here, into Create Art (its timeline, text
-// and save, as for an effect): 20 ms frames, 40 ms past 240 of them, cut at 240.
+// "Save as GIF…": one loop into Create Art: 20 ms frames, 40 past 240, cut at 240.
 function toGif(f) {
   const ms = info(f.src)[4];
   if (!ms) { toast('Fix the formula first: it doesn’t work yet', 'bad'); return; }
@@ -185,15 +182,16 @@ function build(root) {
   const sl = h('div.psi-sls', { id: 'psi-sl' });
   const main = h('button.pri', { id: 'psi-edit' }), gifBtn = h('button', { id: 'psi-gif' }, 'Save as GIF…');
   const shareBtn = h('button', { id: 'psi-share-btn' }, 'Copy share link'), del = h('button.danger', { id: 'psi-del' }, 'Delete…');
+  let cur = null;
+  const show = showBtn('psi-show', () => cur);
   const side = h('div.side', { id: 'psi-side' }, h('div.card', { id: 'psi-detail' },
     h('button.sm.close', { 'aria-label': 'Close', onclick: () => side.classList.remove('open') }, '✕'),
     canvas, cap, h('div.dhead', h('div.grow', title, desc)), sl,
-    h('div.row.acts', main, gifBtn), h('div.row.acts', shareBtn, del), h('p.cap', NOTE())));
+    h('div.row.acts', show, main, gifBtn), h('div.row.acts', shareBtn, del), h('p.cap', NOTE())));
   const ed = editor();
   root.append(h('h1.ptitle', 'Formulas'), h('div.libgrid', gal, side), ed.el);
   addEventListener('keydown', (e) => { if (e.key === 'Escape' && side.classList.contains('open') && !document.querySelector('.menu')) side.classList.remove('open'); });
   const pv = view(canvas);
-  let cur = null;
   function pick(f, mineToo) {
     cur = f;
     side.classList.add('open');
@@ -202,7 +200,9 @@ function build(root) {
     desc.textContent = f.desc || '';
     cap.textContent = i.length ? about(i) : `This formula doesn’t work any more: ${T(() => P.error(), '')}`;
     cap.title = i.length ? TIP(i) : '';
-    sliders(sl, f, i[5] || 0, () => { pv.dirty = true; });
+    sliders(sl, f, i[5] || 0, () => { pv.dirty = true; PS?.follow(f); });
+    if (show) show.disabled = !i.length;
+    PS?.mark();
     main.textContent = mineToo ? 'Edit' : 'Remix';
     main.onclick = (e) => go(mineToo ? { ...f } : { name: f.name + ' remix', src: f.src, a: f.a, b: f.b, c: f.c }, e.currentTarget);
     gifBtn.onclick = () => toGif(f);
@@ -240,7 +240,7 @@ function build(root) {
     else if (EX[0] && matchMedia('(min-width:1001px)').matches) pick(EX[0], false);
   }
   B = { root, ed, tiles, editing: false, draft: null };
-  B.ready = Promise.all([psi(), new Promise((res) => document.head.append(h('link', { rel: 'stylesheet', href: './formulas.css', onload: res, onerror: res }))), fetch('formulas.json').then((r) => r.json()).then((x) => { EX = Array.isArray(x) ? x : []; })]).then(tiles)
+  B.ready = Promise.all([psi(), app.device && import('./psishow.js').then((m) => { PS = m; m.init(shows); }), new Promise((res) => document.head.append(h('link', { rel: 'stylesheet', href: './formulas.css', onload: res, onerror: res }))), fetch('formulas.json').then((r) => r.json()).then((x) => { EX = Array.isArray(x) ? x : []; })]).then(tiles)
     .catch((e) => { clear(gal, h('div.card', h('p.bad', 'Formulas could not be loaded: ' + (e.message || e)))); });
 }
 
@@ -282,11 +282,11 @@ function editor() {
   const el = h('div', { id: 'psi-ed' }, head, h('div.card.psi-edb', top, h('div.psi-sl2', sl, heavy), err,
     h('div.psi-code', h('div.psi-src', gut, h('div.psi-wrap', hl, ta)), strip,
       h('div.row.acts', help, h('span.cap', touch ? 'Tap a number, then drag the bar under the code to try other values' : 'Drag a number (or Alt + ↑ ↓) to try other values'))),
-    h('div.psi-acts', h('div.row.acts', h('button', { id: 'psi-ed-gif', onclick: () => toGif(B.draft) }, 'Save as GIF…'),
+    h('div.psi-acts', h('div.row.acts', showBtn('psi-ed-show', () => live), h('button', { id: 'psi-ed-gif', onclick: () => toGif(B.draft) }, 'Save as GIF…'),
       h('button', { id: 'psi-ed-share', onclick: (e) => share(e.currentTarget, B.draft) }, 'Copy share link')), h('p.cap', NOTE()))));
   let pv = null, toks = [], bad = null, num = null, good = null;
   // What the preview plays: the last text that compiled, with the sliders as they are.
-  const live = { get src() { return good; }, get a() { return B.draft.a; }, get b() { return B.draft.b; }, get c() { return B.draft.c; } };
+  const live = { get name() { return B.draft.name; }, get src() { return good; }, get a() { return B.draft.a; }, get b() { return B.draft.b; }, get c() { return B.draft.c; } };
 
   const stash = debounce(() => store.set('psi.draft', B.draft), 300);
   // Numbers (a unary minus included), comments and the error, drawn under the (transparent) text.
@@ -317,8 +317,9 @@ function editor() {
       delete el.dataset.err;
       good = f.src;
       top.classList.remove('stale');
-      sliders(sl, f, i[5], () => { stash(); pv.dirty = true; });
+      sliders(sl, f, i[5], () => { stash(); pv.dirty = true; PS?.follow(live); });
       play(pv, live, i);
+      PS?.follow(live);
     } else {
       bad = T(() => P.errorAt(), [0, 0]);
       top.classList.toggle('stale', good != null);
@@ -479,6 +480,7 @@ function editor() {
   return {
     el,
     open(f) {
+      PS?.drop(live);
       B.draft = f;
       f.base ??= sig(f);
       name.value = f.name || '';

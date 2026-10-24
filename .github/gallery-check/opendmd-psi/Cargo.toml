@@ -1,6 +1,6 @@
 [package]
 name = "opendmd-psi"
-version = "1.0.0-beta.5"
+version = "1.0.0-beta.6"
 edition = "2021"
 description = "Psi: OpenDMD's per-pixel effects language (Formulas) — a compiler and a row-vectorised Q16.16 VM, no_std."
 license = "MIT OR Apache-2.0"

@@ -11,10 +11,10 @@
 // the old web app's.
 
 import { app } from './state.js';
-import { h, store } from './util.js';
+import { h, store, SITE } from './util.js';
 import { older, fwHead, sendFw, put, restart } from './firmware.js';
 
-export const RELEASE = 'https://opendmd.github.io/install/release.json';
+export const RELEASE = SITE + 'install/release.json';
 const WWW_MAX = 1310720; // the www partition
 const td = new TextDecoder();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

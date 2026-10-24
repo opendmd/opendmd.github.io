@@ -49,6 +49,15 @@ export class Smoother {
         return ret >>> 0;
     }
     /**
+     * At most 256 colours, so a smoothed copy can be made at all (past
+     * 256 the GIF plays as it is, never smoothed).
+     * @returns {boolean}
+     */
+    get fits() {
+        const ret = wasm.smoother_fits(this.__wbg_ptr);
+        return ret !== 0;
+    }
+    /**
      * @returns {number}
      */
     get frames() {
@@ -670,8 +679,10 @@ export function platforms() {
  * GIF bytes -> its prepared copy with the core's recoder in the prepared
  * format (the one `opendmd-pack` and the device run, so the output is
  * byte-identical). Returns `{copy: Uint8Array, stats: {width, height,
- * frames, colours, quantised, gif_bytes, out_bytes}}`; throws on a GIF the
- * player could not play either.
+ * frames, colours, gif_bytes, out_bytes}}`; throws on a GIF the player
+ * could not play either, and — with `gifslim::ORIGINAL_REASON`, "more
+ * than 256 colours: plays as it is" — on one that gets no copy because
+ * only a lossy one could be made (the panel plays the GIF itself).
  * @param {Uint8Array} gif
  * @returns {any}
  */

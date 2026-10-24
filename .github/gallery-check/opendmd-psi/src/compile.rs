@@ -512,6 +512,33 @@ struct Node {
 
 struct Dag {
     nodes: Vec<Node>,
+    /// Open-addressing index of `nodes` for sharing ([`Dag::push`]):
+    /// [`SLOTS`] ids, `NO` where empty. A linear scan made compiling a long
+    /// formula quadratic (~0.2-0.35 ms on the host, tens of ms on the
+    /// ESP32, per live edit).
+    index: Vec<Id>,
+}
+
+/// Index slots: a power of two, twice [`MAX_NODES`] (4 KB, freed with the
+/// rest when `compile_into` returns).
+const SLOTS: usize = 2 * MAX_NODES;
+const NO: Id = Id::MAX;
+
+impl Node {
+    fn hash(&self) -> usize {
+        let mut h: u32 = 0x811c_9dc5;
+        for v in [
+            self.code as u32,
+            self.a as u32,
+            self.b as u32,
+            self.c as u32,
+            self.val as u32,
+            (self.level as u32) << 8 | self.why as u32,
+        ] {
+            h = (h ^ v).wrapping_mul(0x0100_0193);
+        }
+        (h ^ (h >> 15)) as usize
+    }
 }
 
 impl Dag {
@@ -525,8 +552,13 @@ impl Dag {
     }
 
     fn push(&mut self, n: Node, at: (usize, usize)) -> Result<Id, Error> {
-        if let Some(i) = self.nodes.iter().position(|m| *m == n) {
-            return Ok(i as Id);
+        let mut slot = n.hash() & (SLOTS - 1);
+        loop {
+            match self.index[slot] {
+                NO => break,
+                i if self.nodes[i as usize] == n => return Ok(i),
+                _ => slot = (slot + 1) & (SLOTS - 1),
+            }
         }
         if self.nodes.len() >= MAX_NODES {
             return Err(Error::new(
@@ -536,7 +568,9 @@ impl Dag {
             ));
         }
         self.nodes.push(n);
-        Ok((self.nodes.len() - 1) as Id)
+        let id = (self.nodes.len() - 1) as Id;
+        self.index[slot] = id;
+        Ok(id)
     }
 
     fn constant(&mut self, v: i32, at: (usize, usize)) -> Result<Id, Error> {
@@ -663,7 +697,9 @@ impl Dag {
 struct Local<'s> {
     name: &'s str,
     id: Id,
-    line: usize,
+    /// Where its name is (the line is worked out only for an error: per
+    /// local it made a long formula quadratic).
+    at: usize,
     in_frame: bool,
 }
 
@@ -1062,7 +1098,7 @@ impl<'s> Parser<'s> {
                 t,
                 format!(
                     "`{name}` is already set on line {} — each name can be set once",
-                    l.line
+                    self.line_of(l.at)
                 ),
             );
         }
@@ -1085,11 +1121,10 @@ impl<'s> Parser<'s> {
                 ),
             ));
         }
-        let line = self.line_of(t.start);
         self.locals.push(Local {
             name,
             id,
-            line,
+            at: t.start,
             in_frame,
         });
         self.end_of_statement()
@@ -1133,6 +1168,7 @@ fn compile_inner(src: &str, prog: &mut Program) -> Result<Info, Error> {
         pos: 0,
         dag: Dag {
             nodes: Vec::with_capacity(64),
+            index: alloc::vec![NO; SLOTS],
         },
         locals: Vec::new(),
         depth: 0,

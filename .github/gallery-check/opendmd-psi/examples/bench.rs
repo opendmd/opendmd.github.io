@@ -2,9 +2,10 @@
 //! FRAMES] [--list] [--ppm DIR]`. Prints ns per frame at lane widths 64 and
 //! 128, the step counts (frame / row / pixel) and the registers used;
 //! `--list` the step listings, `--ppm DIR` frame 0 and a mid-loop frame of
-//! each as PPM images.
+//! each as PPM images. Then the compile time of the worst formulas a
+//! panel accepts (`opendmd_psi::worst`), 200 compiles each.
 
-use opendmd_psi::{compile, render_with, sketches, Inputs, Program, Scratch, H, OWN, W};
+use opendmd_psi::{compile, compile_into, render_with, sketches, worst, Inputs, Program, Scratch, H, OWN, W};
 use std::hint::black_box;
 use std::time::Instant;
 
@@ -99,5 +100,20 @@ fn main() {
                 std::fs::write(format!("{dir}/{base}-{k}.ppm"), f).expect("write ppm");
             }
         }
+    }
+    let mut p = Program::default();
+    for (name, f) in worst::ALL {
+        let src = f();
+        let t0 = Instant::now();
+        let mut r = Ok(Default::default());
+        for _ in 0..200 {
+            r = compile_into(black_box(&src), &mut p);
+        }
+        let us = t0.elapsed().as_secs_f64() * 1e6 / 200.0;
+        let what = match r {
+            Ok(_) => format!("{} steps, est {} µs", p.len(), p.esp32_us()),
+            Err(e) => e.msg,
+        };
+        println!("compile {name:<15} {} B source, {} B path: {us:.1} µs ({what})", src.len(), worst::path_len(&src));
     }
 }

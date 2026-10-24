@@ -138,7 +138,7 @@ export const app = {
   async play(path) {
     try {
       await this.src.play(path);
-      toast(`on the panel: ${base(path)}`, 'ok');
+      toast(`on the panel: ${path.startsWith('@fx:psi') ? 'Formula' : base(path)}`, 'ok');
       return true;
     } catch (e) {
       toast(e.status === 404 ? `${path}: not on the card` : e.status === 415 ? `${path}: not a GIF` : 'play: ' + e.message, 'bad');

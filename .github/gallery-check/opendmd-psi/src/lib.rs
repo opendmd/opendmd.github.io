@@ -151,5 +151,64 @@ pub mod golden {
     ];
 }
 
+/// Formulas that make the compiler work hardest within what the panel
+/// accepts (a path of at most 2,048 B, as `fx_psi::path` writes it: the
+/// source compacted, `+` as `%2B`): compile-time tests and the bench.
+#[cfg(feature = "tables")]
+#[doc(hidden)]
+pub mod worst {
+    use alloc::format;
+    use alloc::string::String;
+
+    /// The path's length for `src` (`@fx:psi?src=` + compacted, `+` 3 B).
+    pub fn path_len(src: &str) -> usize {
+        12 + crate::compact(src).bytes().map(|b| if b == b'+' { 3 } else { 1 }).sum::<usize>()
+    }
+
+    fn fill(mut line: impl FnMut(usize) -> String, end: impl Fn(usize) -> String) -> String {
+        let mut s = String::from("loop 8\n");
+        let mut k = 0;
+        loop {
+            let next = format!("{s}{}\n", line(k));
+            if path_len(&format!("{next}{}", end(k))) > 2048 {
+                return format!("{s}{}", end(k.saturating_sub(1)));
+            }
+            s = next;
+            k += 1;
+        }
+    }
+
+    /// As many lines (locals) as fit, each a new value: the most names and
+    /// nodes.
+    pub fn many_locals() -> String {
+        fill(|k| format!("q{k} = x*{k}.5 + y*{k}.25"), |k| format!("gray(q{k})"))
+    }
+
+    /// A chain, each local built on the one before, up to the step limit.
+    pub fn chain() -> String {
+        fill(
+            |k| if k == 0 { String::from("q0 = x") } else { format!("q{k} = q{}*0.99 + {k}.5", k - 1) },
+            |k| format!("gray(frac(q{k}))"),
+        )
+    }
+
+    /// One long sum of distinct terms (no sharing to find).
+    pub fn distinct() -> String {
+        let mut s = String::from("v = 0");
+        let mut k = 0;
+        while path_len(&format!("{s} + x*1.{k:03}\ngray(v)")) <= 2048 {
+            s = format!("{s} + x*1.{k:03}");
+            k += 1;
+        }
+        format!("{s}\ngray(v)")
+    }
+
+    /// A named generator.
+    pub type Case = (&'static str, fn() -> String);
+
+    pub const ALL: [Case; 3] =
+        [("many locals", many_locals), ("chain", chain), ("distinct terms", distinct)];
+}
+
 #[cfg(all(test, feature = "tables"))]
 mod tests;

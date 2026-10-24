@@ -16,9 +16,11 @@
 <nav aria-label="Site"><a class="brand" href="../index.html"><picture class="led" style="--cols:70;--rows:16"><img src="../art/wordmark.png" alt="OpenDMD" width="70" height="16"></picture></a><div class="links"><a href="../index.html">Overview</a><a href="../demo/" class='demo'>Try the demo</a><a href="../formulas/index.html">Formula gallery</a><h4>Guide</h4><a href="../guide/hardware.html">What you need</a><a href="../install/index.html">Install</a><a href="../guide/web-app.html">The web app</a><a href="../guide/create-art.html">Create Art</a><a href="../guide/effects.html">Effects and live items</a><a href="../guide/formulas.html">Formulas</a><a href="../guide/card.html">The SD card</a><a href="../guide/updating.html">Updating</a><a href="../guide/troubleshooting.html">Troubleshooting</a><h4>For developers</h4><a href="index.html">Building from source</a><a href="api.html" class='on'>HTTP API</a><a href="simulator.html">The simulator</a><a href="effects.html">Writing an effect</a><a href="pinout.html">Hardware pinout</a></div></nav>
 <main id="main">
 <h1 id="opendmd-http-api">OpenDMD HTTP API<a class="headerlink" href="#opendmd-http-api" title="Permanent link">#</a></h1>
+<p class="vers">The latest docs. The API of a particular release: <a href="api/v1.0.0-beta.6.html">1.0.0-beta.6</a></p>
+
 <p>Everything the web app does goes through this API, and a script can do the
 same. The source of truth is <code>firmware/src/http.rs</code>. In the examples <code>$DMD</code>
-is the player's address (filled in on the page the player serves).</p>
+is the player's address.</p>
 <pre><code class="language-sh">DMD=http://opendmd.local
 curl -s $DMD/api/status
 </code></pre>
@@ -83,12 +85,13 @@ that file at the root, any other name is <code>/sets/&lt;name&gt;.txt</code>. No
 <p>Play one file now (with the transition, from its prepared copy if there is
 one), then the playlist carries on.</p>
 <p>Body: <code>{"path": string}</code>, a card-absolute GIF path or a live item (see
-"Live items").</p>
+"Live items"). <code>"live":true</code>: only replace a formula on screen (<code>409</code> if
+none is; <code>400</code> for any other path).</p>
 <p>Reply: <code>{"ok":true,"path":"…"}</code>.</p>
-<p>Errors: <code>400</code> neither card-absolute nor a live item; <code>404</code> the file does
-not open (what was playing carries on); <code>415</code> not a GIF, or a live item
-this firmware does not know (<code>@fx:nonsense</code>); <code>503</code> no playlist running;
-<code>413</code> body over 8 KB.</p>
+<p>Errors: <code>400</code> neither card-absolute nor a live item, or a bad formula;
+<code>404</code> the file does not open (what was playing carries on); <code>415</code> not a
+GIF, or a live item this firmware does not know (<code>@fx:nonsense</code>); <code>503</code> no
+playlist running; <code>413</code> body over 8 KB, or a formula over 2,048 B.</p>
 <pre><code class="language-sh">curl -s $DMD/api/play --json '{&quot;path&quot;:&quot;/gifs/Consoles/SNES_Super_Metroid_01.gif&quot;}'
 curl -s $DMD/api/play --json '{&quot;path&quot;:&quot;@clock?seconds=1&amp;date=1&quot;}'
 </code></pre>
@@ -596,7 +599,7 @@ faster and uploads them to <code>/cache/&lt;Category&gt;/&lt;xx&gt;/&lt;name&gt;
 <h3 id="get-apicache">GET /api/cache<a class="headerlink" href="#get-apicache" title="Permanent link">#</a></h3>
 <p>How many of the playlist's files are prepared:</p>
 <p><code>{"total","prepared","state","count_ms","auto"}</code>: the playlist's length;
-how many have a copy (null until counted); <code>"counting"</code> or <code>"ready"</code> (poll
+how many have a copy or play as they are (null until counted); <code>"counting"</code> or <code>"ready"</code> (poll
 until ready); the last count's ms. <code>auto</code>, the player's own preparing:
 <code>{"mode","state","reason","policy","session","failed","avg_full_s","avg_drip_s","eta_s","current"}</code>:
 <code>mode</code> = <code>auto_prepare</code>; <code>state</code> <code>idle</code>, <code>running</code>, <code>paused</code>, <code>done</code>;
@@ -613,13 +616,14 @@ Subtract it from a playlist for what is left to prepare.</p>
 <pre><code class="language-sh">curl -s $DMD/api/cache/list | jq .count
 </code></pre>
 <h3 id="get-apicachefailed">GET /api/cache/failed<a class="headerlink" href="#get-apicachefailed" title="Permanent link">#</a></h3>
-<p>The GIFs that cannot be prepared (nor played), streamed:
-<code>[{"path":"/gifs/…","reason":"more than 256 colours"}]</code>, <code>[]</code> if none.</p>
+<p>The GIFs with no copy, streamed:
+<code>[{"path":"/gifs/…","reason":"image truncated"}]</code>, <code>[]</code> if none. Reason
+<code>more than 256 colours…</code>: it plays as it is (done).</p>
 <pre><code class="language-sh">curl -s $DMD/api/cache/failed
 </code></pre>
 <h3 id="post-apicachefailed">POST /api/cache/failed<a class="headerlink" href="#post-apicachefailed" title="Permanent link">#</a></h3>
-<p>Record a GIF the browser could not prepare either, so the player skips it
-too: <code>{"path":"/gifs/….gif","reason":string}</code> (kept to one line, ≤ 200
+<p>Record a GIF the browser could not prepare either (or one that plays as it
+is), so the player skips it too: <code>{"path":"/gifs/….gif","reason":string}</code> (kept to one line, ≤ 200
 characters). Reply: <code>{"ok":true,"path","added":bool}</code> (false: it was
 there). <code>400</code> not a <code>/gifs/….gif</code> path.</p>
 <pre><code class="language-sh">curl -s $DMD/api/cache/failed --json '{&quot;path&quot;:&quot;/gifs/Other/broken.gif&quot;,&quot;reason&quot;:&quot;image truncated&quot;}'
@@ -777,6 +781,11 @@ centred, if it fits). A loop is one pass across the panel.</p>
 <code>color=RRGGBB</code>, <code>shade=0</code>. An unknown effect is a <code>415</code>.</p>
 <pre><code class="language-sh">curl -s $DMD/api/play --json '{&quot;path&quot;:&quot;@fx:wire?shape=tesseract&amp;speed=3&quot;}'
 </code></pre>
+<p><strong><code>@fx:psi</code></strong> — a formula (the app's Formulas): <code>src=&lt;url-encoded
+formula&gt;</code>, <code>a=</code>, <code>b=</code>, <code>c=</code> (sliders, 0..1), <code>fps=50|100|25</code> (default 50).
+A heavy one is shown at fewer frames a second; status
+<code>now_playing.formula</code> has <code>frame_us</code>, <code>frame_ms</code>, <code>asked_ms</code> and
+<code>compile_us</code>.</p>
 <p><strong><code>@boot</code></strong> — the start-up show. <code>len=short|full|card</code> (<code>card</code>: the status
 card), and for it <code>v=&lt;version&gt;</code>, <code>ip=&lt;address&gt;</code>, <code>ap=&lt;network&gt;</code>,
 <code>note=&lt;text&gt;</code> (≤ 32 characters each).</p>

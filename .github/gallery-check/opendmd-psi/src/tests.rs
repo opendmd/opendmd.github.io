@@ -427,3 +427,20 @@ fn sliders_and_the_esp32_estimate() {
         );
     }
 }
+
+/// The worst formulas a panel accepts compile (or say why not) and fit
+/// its path; compiling them is linear (a node index, lines found only for
+/// errors): ~50-80 µs each on the host (`make psi-bench`).
+#[test]
+fn worst_case_formulas() {
+    for (name, f) in crate::worst::ALL {
+        let src = f();
+        let n = crate::worst::path_len(&src);
+        assert!((1900..=2048).contains(&n), "{name}: {n} B");
+        match compile(&src) {
+            Ok(p) => assert!(p.len() <= crate::MAX_OPS, "{name}"),
+            Err(e) => assert!(e.msg.contains("too long for the panel"), "{name}: {}", e.msg),
+        }
+    }
+    assert!(compile(&crate::worst::many_locals()).is_ok());
+}
