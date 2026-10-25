@@ -443,11 +443,16 @@ fn worst_case_formulas() {
     for (name, f) in crate::worst::ALL {
         let src = f();
         let n = crate::worst::path_len(&src);
-        assert!((1900..=2048).contains(&n), "{name}: {n} B");
+        assert!(
+            matches!(name, "parts" | "nested" | "parts in layers") || (1900..=2048).contains(&n),
+            "{name}: {n} B"
+        );
         match compile(&src) {
             Ok(p) => assert!(p.len() <= crate::MAX_OPS, "{name}"),
             Err(e) => assert!(
-                e.msg.contains("too long for the panel"),
+                e.msg.contains("too long for the panel")
+                    || e.msg.contains("too many places")
+                    || e.msg.starts_with("unknown name"),
                 "{name}: {}",
                 e.msg
             ),
@@ -751,4 +756,297 @@ fn layer_error_messages() {
         }
     }
     assert!(bad.is_empty(), "\n{}", bad.join("\n"));
+}
+
+// --- Parts: one formula inside another --------------------------------------------
+
+/// `src` pasted in as `part p { … }` and drawn whole (as the last line and
+/// as a layer), under a `loop` of its own length: the same bytes.
+fn pasted(src: &str) -> [String; 2] {
+    let lp = compile(src).unwrap().loop_ms();
+    let inner: String = src.lines().map(|l| alloc::format!("  {l}\n")).collect();
+    let head = alloc::format!("loop {}\npart p {{\n{inner}}}\n", lp as f64 / 1000.0);
+    [
+        alloc::format!("{head}p"),
+        alloc::format!("{head}layer {{ p }}"),
+    ]
+}
+
+#[test]
+fn a_part_drawn_whole_is_the_formula() {
+    let u = pic();
+    let all = sketches::ALL
+        .iter()
+        .map(|s| (s.1, 0u32))
+        .chain(golden::FRAMES.iter().map(|f| (f.1, f.2)))
+        .chain(golden::OVER.iter().map(|f| (f.1, f.2)));
+    for (src, ms) in all {
+        for ms in [ms, ms + 1230, ms + 7000] {
+            let want = over(src, Some(&u), ms);
+            for p in pasted(src) {
+                assert!(over(&p, Some(&u), ms) == want, "{p}\nat {ms} ms");
+            }
+        }
+    }
+    // Drawn where the pixel is, written out: the same program.
+    let p = "part p { v = sin(x*3 + t)\nhsv(v, 1, y) }\n";
+    assert_eq!(
+        compile(&alloc::format!("{p}p(x, y)")).unwrap(),
+        compile(&alloc::format!("{p}p")).unwrap()
+    );
+}
+
+#[test]
+fn parts_have_their_own_names_values_and_time() {
+    let same = |a: &str, b: &str, ms: u32| {
+        assert!(
+            over(a, None, ms) == over(b, None, ms),
+            "{a}\nvs\n{b}\nat {ms} ms"
+        )
+    };
+    // The same names inside and outside; outside names unseen inside.
+    same(
+        "v = y\npart p { v = x\ngray(v) }\nlayer { p }\nlayer add { gray(v, 0.5) }",
+        "layer { gray(x) }\nlayer add { gray(y, 0.5) }",
+        0,
+    );
+    let e = compile("k = 1\npart p { gray(k) }\np").unwrap_err();
+    assert!(e.msg.starts_with("unknown name `k`"), "{}", e.msg);
+    // Its values: `p.v`, and at another place `p(x', y').v`.
+    same("part p { v = x*2\ngray(v) }\ngray(p.v * 0.5)", "gray(x)", 0);
+    same(
+        "part p { v = x\ngray(v) }\ngray(p(1 - x, y).v)",
+        "gray(1 - x)",
+        0,
+    );
+    // Drawn elsewhere: x and y, and px, py, i from them.
+    same(
+        "part p { rgb(x, y, 0) }\np(1 - x, y*0.5)",
+        "rgb(1 - x, y*0.5, 0)",
+        0,
+    );
+    same(
+        "part p { rgb(px % 3 / 2, py % 4 / 3, i % 7 / 6) }\np(x*2, 1 - y)",
+        "qx = floor(x*2*127 + 0.5); qy = floor((1 - y)*31 + 0.5)\nrgb(qx % 3 / 2, qy % 4 / 3, ((31 - qy)*128 + qx) % 7 / 6)",
+        0,
+    );
+    // Its own loop: `t` modulo it, unless the formula's is no longer.
+    same(
+        "loop 8\npart p { loop 2\ngray(t/2) }\np",
+        "loop 2\ngray(t/2)",
+        1000,
+    );
+    assert!(
+        over("loop 8\npart p { loop 2\ngray(t/2) }\np", None, 3000)
+            == over("loop 2\ngray(t/2)", None, 1000)
+    );
+    let plain = compile("loop 2\npart p { loop 4\ngray(t/4) }\np").unwrap();
+    assert_eq!(
+        plain,
+        compile("loop 2\ngray(t/4)").unwrap(),
+        "no modulo needed"
+    );
+    // Nested: the inner part's place is the outer's.
+    same(
+        "part q { part r { gray(x) }\nr(x*0.5, y) }\nq(1 - x, y)",
+        "gray((1 - x)*0.5)",
+        0,
+    );
+    // Coverage: a part's colour takes one more value, like every colour.
+    same(
+        "layer { gray(0.2) }\npart p { gray(x) }\nlayer { p(x, y, 0.5) }",
+        "layer { gray(0.2) }\nlayer { gray(x, 0.5) }",
+        0,
+    );
+    same(
+        "layer { gray(0.2) }\npart p { gray(x, y) }\nlayer add { p(x, y, 0.5) }",
+        "layer { gray(0.2) }\nlayer add { gray(x, y*0.5) }",
+        0,
+    );
+    // A part with layers keeps them (each covering that much less).
+    same("part p { layer { gray(x) }\nlayer multiply { gray(y) } }\nlayer { gray(1) }\nlayer { p(x, y, 0.5) }",
+        "layer { gray(1) }\nlayer { gray(x, 0.5) }\nlayer multiply { gray(y, 0.5) }", 0);
+    // Unused, it costs nothing.
+    assert_eq!(
+        compile("part p { gray(noise(x, y, t)) }\ngray(x)").unwrap(),
+        compile("gray(x)").unwrap()
+    );
+    // A part only for its values needs no colour.
+    same(
+        "part m { k = step(0.5, x) }\ngray(m.k)",
+        "gray(step(0.5, x))",
+        0,
+    );
+}
+
+#[test]
+fn parts_stay_within_the_limits() {
+    // Drawn at many places: each is steps of its own, and the 256 hold.
+    let mut s = String::from("part p { hsv(sin(x*3 + y)*0.5 + noise(x*4, y, t), 1, 1) }\n");
+    for k in 0..40 {
+        s += &alloc::format!("layer add {{ p(x + {k}.5, y) }}\n");
+    }
+    let e = compile(&s).unwrap_err();
+    assert!(e.msg.contains("too long for the panel"), "{}", e.msg);
+    // Read again too often (nested, each drawn at two places).
+    let mut s = String::from("part p0 { gray(x) }\n");
+    for k in 1..8 {
+        s = alloc::format!("part p{k} {{\n{s}layer {{ p{}(x*0.5, y) }}\nlayer {{ p{}(x*0.25 + 0.1, y, 0.5) }}\n}}\n", k - 1, k - 1);
+    }
+    s += "p7";
+    let e = compile(&s).unwrap_err();
+    assert!(e.msg.contains("parts go too deep"), "{}", e.msg);
+    // Not as deep, but read again and again: bounded too.
+    let mut s = String::from("part p0 { v = x\ngray(v) }\n");
+    for k in 1..5 {
+        let j = k - 1;
+        s = alloc::format!("part p{k} {{\n{s}v = p{j}(x*0.5, y).v + p{j}(y, x).v + p{j}(x + 0.1, y).v + p{j}(x, y*2).v + p{j}(1 - x, y).v\ngray(v)\n}}\n");
+    }
+    s += "p4";
+    let e = compile(&s).unwrap_err();
+    assert!(e.msg.contains("too many places"), "{}", e.msg);
+}
+
+/// (source, message, line, column)
+const PART_ERRORS: &[(&str, &str, usize, usize)] = &[
+    (
+        "part { gray(x) }\ngray(x)",
+        "a part needs a name, as in `part p { … }`",
+        1,
+        6,
+    ),
+    (
+        "part p gray(x)",
+        "expected `{` here (as in `part p { … }`), found `gray`",
+        1,
+        8,
+    ),
+    ("part p {\ngray(x)\n", "this `part {` is never closed", 1, 1),
+    (
+        "v = 1\npart v { gray(x) }\ngray(x)",
+        "`v` is already set on line 1",
+        2,
+        6,
+    ),
+    (
+        "part p { gray(x) }\np = 2\ngray(x)",
+        "`p` is already set on line 1",
+        2,
+        1,
+    ),
+    ("part t { gray(x) }\ngray(x)", "`t` is built in", 1, 6),
+    (
+        "part p { gray(x) }\ngray(p)",
+        "`p` is a part: draw it as a whole last line",
+        2,
+        6,
+    ),
+    (
+        "part p { gray(x) }\ngray(p.w)",
+        "part `p` sets no value `w`",
+        2,
+        8,
+    ),
+    (
+        "part p { wave = x\ngray(x) }\ngray(p.wav)",
+        "did you mean `wave`?",
+        3,
+        8,
+    ),
+    (
+        "part p { gray(x) }\np(0.5)",
+        "`p` takes 2 values, where to draw it (x, y) (or 3: the last is how much",
+        2,
+        1,
+    ),
+    (
+        "part p { v = x\ngray(x) }\ngray(p(x, y, 1).v)",
+        "`p` takes 2 values, where to draw it (x, y), but got 3",
+        3,
+        6,
+    ),
+    ("part m { k = x }\nm", "part `m` has no colour", 2, 1),
+    (
+        "part p { gray(x)\nv = 1 }\np",
+        "the colour has to be the part's last line",
+        1,
+        10,
+    ),
+    (
+        "part p { gray(tme) }\np",
+        "unknown name `tme` — did you mean `t`?",
+        1,
+        15,
+    ),
+    (
+        "part p { layer { gray(x) }\nlayer add { gray(y) } }\nlayer add { p }",
+        "this part has layers of its own",
+        3,
+        7,
+    ),
+    (
+        "layer { part p { gray(x) } }",
+        "a part goes outside the layers",
+        1,
+        9,
+    ),
+    (
+        "part p { loop 2\nloop 3\ngray(x) }\np",
+        "`loop` is already set",
+        2,
+        1,
+    ),
+    (
+        "use Plasma as p\np",
+        "`use` puts a formula in by its name",
+        1,
+        1,
+    ),
+    ("part = 2\ngray(x)", "`part` is built in", 1, 1),
+    (
+        "gray(x.y)",
+        "expected `,` or `)` in `gray(…)`, found `.`",
+        1,
+        7,
+    ),
+];
+
+#[test]
+fn part_error_messages() {
+    let mut bad = alloc::vec::Vec::new();
+    for &(src, want, line, col) in PART_ERRORS {
+        match compile(src) {
+            Ok(_) => bad.push(alloc::format!("{src:?}: compiled")),
+            Err(e) => {
+                let lc = e.line_col(src);
+                if !e.msg.contains(want) || lc != (line, col) {
+                    bad.push(alloc::format!(
+                        "{src:?}: got {:?} at {lc:?}, want {want:?} at {:?}\n{}",
+                        e.msg,
+                        (line, col),
+                        e.render(src)
+                    ));
+                }
+            }
+        }
+    }
+    assert!(bad.is_empty(), "\n{}", bad.join("\n"));
+}
+
+#[test]
+fn compact_keeps_parts() {
+    let src = "loop 8\npart p {\n  -- Plasma\n  loop 4\n  v = sin(x*2 + t/4)\n  hsv(v, 1, 1)\n}\nlayer { p }\nlayer add { p(1 - x, y, 0.5) }";
+    assert_eq!(compile(&compact(src)).unwrap(), compile(src).unwrap());
+}
+
+#[test]
+fn suggestions_measure_edits_and_swaps() {
+    use crate::compile::distance_for_tests as d;
+    assert_eq!(d("tme", "t"), 2);
+    assert_eq!(d("smoothstp", "smoothstep"), 1);
+    assert_eq!(d("mutliply", "multiply"), 1);
+    assert_eq!(d("", "abc"), 3);
+    assert_eq!(d("kitten", "sitting"), 3);
+    assert_eq!(d("ca", "abc"), 3);
+    assert_eq!(d(&"a".repeat(24), &"b".repeat(24)), 24);
 }

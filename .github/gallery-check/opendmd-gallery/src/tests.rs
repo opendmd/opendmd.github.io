@@ -231,7 +231,7 @@ fn the_examples_pass() {
         assert_eq!(e.src, format!("{src}\n"));
         n += 1;
     }
-    assert_eq!(n, 24);
+    assert_eq!(n, 27);
 }
 
 /// A JSON string field, the simple way (the file is one object a line).

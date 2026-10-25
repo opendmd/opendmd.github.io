@@ -100,6 +100,7 @@ enum Tok {
     LBrace,
     RBrace,
     Comma,
+    Dot,
     Assign,
     Newline,
     Eof,
@@ -123,6 +124,7 @@ fn describe(t: Tok) -> &'static str {
         Tok::RBrace => "`}`",
         Tok::LBrace => "`{`",
         Tok::Comma => "`,`",
+        Tok::Dot => "`.`",
         Tok::Assign => "`=`",
         Tok::Colon => "`:`",
         Tok::Question => "`?`",
@@ -231,6 +233,19 @@ fn lex(src: &str) -> Result<Vec<Token>, Error> {
                 .ok_or_else(|| Error::new(start, i, "numbers must be between -32768 and 32767"))?;
             out.push(Token {
                 tok: Tok::Num(v),
+                start,
+                end: i,
+            });
+            continue;
+        }
+        // `p.v`: a part's value.
+        if c == b'.'
+            && b.get(i + 1)
+                .is_some_and(|&n| n.is_ascii_alphabetic() || n == b'_')
+        {
+            i += 1;
+            out.push(Token {
+                tok: Tok::Dot,
                 start,
                 end: i,
             });
@@ -457,7 +472,7 @@ const PALETTES: [(&str, u8); 7] = [
     ("gray", 255),
 ];
 
-const KEYWORDS: [&str; 3] = ["loop", "frame", "layer"];
+const KEYWORDS: [&str; 5] = ["loop", "frame", "layer", "part", "use"];
 
 /// How a layer goes onto what is below it (`layer add { … }`; `over` when
 /// none is named).
@@ -470,32 +485,39 @@ const BLENDS: [(&str, u8); fixed::BLENDS] = [
     ("min", fixed::BLEND_MIN),
 ];
 
-/// Optimal string alignment distance (edits, adjacent swaps count one).
+/// Optimal string alignment distance (edits, adjacent swaps count one),
+/// in three rolling rows of bytes (it runs at the deepest point of an
+/// error: a 25 × 25 table of words was 5 KB of stack there).
 fn distance(a: &str, b: &str) -> usize {
     let (a, b) = (a.as_bytes(), b.as_bytes());
     if a.len() > 24 || b.len() > 24 {
         return usize::MAX;
     }
-    let mut d = [[0usize; 25]; 25];
-    for (i, row) in d.iter_mut().enumerate().take(a.len() + 1) {
-        row[0] = i;
-    }
-    for (j, v) in d[0].iter_mut().enumerate().take(b.len() + 1) {
-        *v = j;
+    // Row k of the table is r[k % 3]: rows i-2 and i-1 are all row i needs.
+    let mut r: [[u8; 25]; 3] = [[0; 25]; 3];
+    for (j, v) in r[0].iter_mut().enumerate().take(b.len() + 1) {
+        *v = j as u8;
     }
     for i in 1..=a.len() {
+        let (prev2, prev) = (r[(i + 1) % 3], r[(i - 1) % 3]);
+        let mut cur = [0u8; 25];
+        cur[0] = i as u8;
         for j in 1..=b.len() {
-            let cost = usize::from(a[i - 1] != b[j - 1]);
-            let mut v = (d[i - 1][j] + 1)
-                .min(d[i][j - 1] + 1)
-                .min(d[i - 1][j - 1] + cost);
+            let cost = u8::from(a[i - 1] != b[j - 1]);
+            let mut v = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
             if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
-                v = v.min(d[i - 2][j - 2] + 1);
+                v = v.min(prev2[j - 2] + 1);
             }
-            d[i][j] = v;
+            cur[j] = v;
         }
+        r[i % 3] = cur;
     }
-    d[a.len()][b.len()]
+    r[a.len() % 3][b.len()] as usize
+}
+
+#[cfg(test)]
+pub(crate) fn distance_for_tests(a: &str, b: &str) -> usize {
+    distance(a, b)
 }
 
 /// The closest of `cands` to `name`, if it is close enough to be a typo.
@@ -586,6 +608,7 @@ impl Dag {
         (n.code == K_CONST).then_some(n.val)
     }
 
+    #[inline(never)]
     fn push(&mut self, n: Node, at: (usize, usize)) -> Result<Id, Error> {
         let mut slot = n.hash() & (SLOTS - 1);
         loop {
@@ -608,6 +631,7 @@ impl Dag {
         Ok(id)
     }
 
+    #[inline(never)]
     fn constant(&mut self, v: i32, at: (usize, usize)) -> Result<Id, Error> {
         self.push(
             Node {
@@ -623,6 +647,7 @@ impl Dag {
         )
     }
 
+    #[inline(never)]
     fn input(&mut self, inp: Input, at: (usize, usize)) -> Result<Id, Error> {
         let why = INPUTS.iter().position(|e| e.1 == inp).unwrap_or(0) as u8;
         // What is under the formula: loaded into a lane by a step of its own.
@@ -678,6 +703,7 @@ impl Dag {
 
     /// An op node: folded when its operands are constants, simplified
     /// where that is exact, shared when it already exists.
+    #[inline(never)]
     fn op(&mut self, c: u8, args: [Id; 3], at: (usize, usize)) -> Result<Id, Error> {
         let n = code::arity(c);
         let ks: [Option<i32>; 3] =
@@ -752,6 +778,14 @@ impl Dag {
 
 // --- the parser -------------------------------------------------------------------
 
+/// Tokens read again for parts drawn at other places (`p(x', y')`, each
+/// reading all the part's text, parts in it included), in all: bounds
+/// compile time whatever the nesting.
+const MAX_WORK: usize = 1536;
+/// What a part's level of nesting counts against [`MAX_DEPTH`] (with the
+/// brackets and operators around it): bounds the parser's stack.
+const PART_DEPTH: usize = 3;
+
 struct Local<'s> {
     name: &'s str,
     id: Id,
@@ -759,8 +793,41 @@ struct Local<'s> {
     /// local it made a long formula quadratic).
     at: usize,
     in_frame: bool,
-    /// 0: the whole formula's; k: the `k`th layer's own.
+    /// The scope it was set in ([`Parser::scopes`]).
     scope: u16,
+}
+
+/// `part name { … }`: another formula inside this one, pasted in, with
+/// names of its own. Its tokens (`body`, just after `{`, to `end`, its `}`)
+/// are read where it is written and again for each place it is drawn at.
+struct Part<'s> {
+    name: &'s str,
+    at: usize,
+    scope: u16,
+    body: usize,
+    end: usize,
+    /// Its own loop (Q16 seconds; 8 when it sets none, as alone).
+    loop_v: i32,
+    insts: Vec<Inst>,
+}
+
+/// A part read at one place (`None`: where the pixel is): its scope (the
+/// values it sets, `p.v`, are the locals set there), its colours and
+/// whether they are layers.
+struct Inst {
+    at: Option<(Id, Id)>,
+    scope: u16,
+    colours: Vec<Colour>,
+    layered: bool,
+}
+
+/// What `x y px py i t` mean where the parser is: inside a part drawn
+/// elsewhere, the place it is drawn at, and its own time.
+#[derive(Clone, Copy)]
+struct Env {
+    at: Option<(Id, Id)>,
+    t: Option<Id>,
+    loop_v: i32,
 }
 
 struct Parser<'s> {
@@ -770,19 +837,36 @@ struct Parser<'s> {
     dag: Dag,
     locals: Vec<Local<'s>>,
     depth: usize,
-    /// The layer being read (0: outside the layers) and the last one's.
+    /// The scope being read, and every scope's parent and whether it is a
+    /// part's own (which sees nothing outside it). 0 is the formula's; a
+    /// layer's sees the names around it.
     scope: u16,
-    layers: u16,
+    scopes: Vec<(u16, bool)>,
+    parts: Vec<Part<'s>>,
+    env: Env,
+    work: usize,
 }
 
 /// A colour: an `OUT_*` code, its arguments, the palette, how much of the
 /// pixel it covers (`None`: all of it) and how it goes onto what is below.
+#[derive(Clone, Copy)]
 struct Colour {
     code: u8,
     args: [Id; 3],
     pal: u8,
     alpha: Option<Id>,
     blend: u8,
+}
+
+/// What a formula's or a part's lines come to: its colours, bottom to top
+/// (the last line's, or its layers'), the line that made the top one,
+/// whether they are layers, `layer` blocks written, and its `loop`.
+struct Body {
+    colours: Vec<Colour>,
+    top: Option<Token>,
+    layered: bool,
+    blocks: usize,
+    loop_v: Option<i32>,
 }
 
 const BP_TERNARY: u8 = 1;
@@ -830,8 +914,26 @@ impl<'s> Parser<'s> {
         self.src[..at].matches('\n').count() + 1
     }
 
+    #[cold]
+    #[inline(never)]
     fn err<T>(&self, t: Token, msg: impl Into<String>) -> Result<T, Error> {
         Err(Error::new(t.start, t.end, msg))
+    }
+
+    // The errors are built out of line (`#[cold]`, never inlined), so the
+    // recursive parser's frames carry no `format!` temporaries: the
+    // compiler's stack depth is what the firmware's main task must hold.
+
+    #[cold]
+    #[inline(never)]
+    fn fail(&self, t: Token, msg: &str) -> Error {
+        Error::new(t.start, t.end, msg)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn fail_at(&self, t: Token, msg: String) -> Error {
+        Error::new(t.start, t.end, msg)
     }
 
     fn expect(&mut self, want: Tok, what: &str) -> Result<Token, Error> {
@@ -839,12 +941,37 @@ impl<'s> Parser<'s> {
         if t.tok == want {
             return Ok(self.next());
         }
-        self.err(t, format!("expected {what} here, found {}", self.found(t)))
+        Err(self.expected(t, what))
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn expected(&self, t: Token, what: &str) -> Error {
+        self.fail_at(t, format!("expected {what} here, found {}", self.found(t)))
+    }
+
+    /// `close` where the `)` of `open` should be: never closed (the newline
+    /// was swallowed), or something else in the way.
+    #[cold]
+    #[inline(never)]
+    fn not_closed(&self, open: Token, close: Token, name: &str) -> Error {
+        if let Err(e) = self.unclosed(open, close) {
+            return e;
+        }
+        if name.is_empty() {
+            return self.expected(close, "`)`");
+        }
+        self.fail_at(
+            close,
+            format!(
+                "expected `,` or `)` in `{name}(…)`, found {}",
+                self.found(close)
+            ),
+        )
     }
 
     fn found(&self, t: Token) -> String {
         match t.tok {
-            Tok::Name | Tok::Num(_) => format!("`{}`", self.text(t)),
             Tok::Newline | Tok::Eof => describe(t.tok).to_string(),
             _ => format!("`{}`", self.text(t)),
         }
@@ -869,12 +996,35 @@ impl<'s> Parser<'s> {
     fn expr(&mut self, min_bp: u8) -> Result<Id, Error> {
         self.depth += 1;
         if self.depth > MAX_DEPTH {
-            let t = self.peek();
-            return self.err(t, "this is nested too deeply — split it into named steps");
+            return Err(self.too_deep());
         }
         let r = self.expr_inner(min_bp);
         self.depth -= 1;
         r
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn too_deep(&self) -> Error {
+        let t = self.peek();
+        // Inside parts, their nesting counts too.
+        self.fail(
+            t,
+            if self.scopes.iter().any(|s| s.1) {
+                "parts go too deep here — take one out of another"
+            } else {
+                "this is nested too deeply — split it into named steps"
+            },
+        )
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn no_value(&self, t: Token) -> Error {
+        match t.tok {
+            Tok::Newline | Tok::Eof => self.fail(t, "a value is missing here"),
+            _ => self.fail_at(t, format!("expected a value, found {}", self.found(t))),
+        }
     }
 
     fn expr_inner(&mut self, min_bp: u8) -> Result<Id, Error> {
@@ -896,16 +1046,13 @@ impl<'s> Parser<'s> {
                 let e = self.expr(0)?;
                 let close = self.peek();
                 if close.tok != Tok::RParen {
-                    self.unclosed(t, close)?;
+                    return Err(self.not_closed(t, close, ""));
                 }
-                self.expect(Tok::RParen, "`)`")?;
+                self.next();
                 e
             }
             Tok::Name => self.name(t)?,
-            Tok::Newline | Tok::Eof => {
-                return self.err(t, "a value is missing here");
-            }
-            _ => return self.err(t, format!("expected a value, found {}", self.found(t))),
+            _ => return Err(self.no_value(t)),
         };
         loop {
             let op = self.peek();
@@ -934,9 +1081,26 @@ impl<'s> Parser<'s> {
         Ok(lhs)
     }
 
-    /// Names set in another layer are that layer's own.
-    fn visible(&self, l: &Local) -> bool {
-        l.scope == 0 || l.scope == self.scope
+    /// Whether names set in `scope` can be seen here: this scope's and its
+    /// parents', up to the part it is in (a part sees nothing outside it).
+    fn visible(&self, scope: u16) -> bool {
+        let mut s = self.scope;
+        loop {
+            if s == scope {
+                return true;
+            }
+            let (parent, own) = self.scopes[s as usize];
+            if own || s == 0 {
+                return false;
+            }
+            s = parent;
+        }
+    }
+
+    fn part_named(&self, name: &str) -> Option<usize> {
+        self.parts
+            .iter()
+            .rposition(|p| p.name == name && self.visible(p.scope))
     }
 
     /// The candidates for a misspelt value name.
@@ -948,7 +1112,7 @@ impl<'s> Parser<'s> {
             .chain(
                 self.locals
                     .iter()
-                    .filter(|l| self.visible(l))
+                    .filter(|l| self.visible(l.scope))
                     .map(|l| l.name),
             )
     }
@@ -956,8 +1120,10 @@ impl<'s> Parser<'s> {
     fn name(&mut self, t: Token) -> Result<Id, Error> {
         let name = self.text(t);
         let at = (t.start, t.end);
-        let call = self.peek().tok == Tok::LParen;
-        if call {
+        if let Some(k) = self.part_named(name) {
+            return self.part_value(t, k);
+        }
+        if self.peek().tok == Tok::LParen {
             if let Some(&(_, ar, f)) = FUNCS.iter().find(|e| e.0 == name) {
                 let args = self.args(t, name, ar)?;
                 return match f {
@@ -971,58 +1137,98 @@ impl<'s> Parser<'s> {
                     }
                 };
             }
-            if COLOURS.iter().any(|e| e.0 == name) {
-                return self.err(
-                    t,
-                    format!(
-                        "`{name}(…)` makes the colour, so it can only be the whole last line \
-                         (of the formula, or of a layer)"
-                    ),
-                );
-            }
-            if self.lookup_value(name).is_some() {
-                return self.err(t, format!("`{name}` is a value, not a function"));
-            }
-            let s = suggest(
-                name,
-                FUNCS.iter().map(|e| e.0).chain(COLOURS.iter().map(|e| e.0)),
-            );
-            return self.err(t, format!("unknown function `{name}`{}", did_you_mean(s)));
-        }
-        if let Some(id) = self.lookup_value(name) {
+        } else if let Some(id) = self.lookup_value(name) {
             return id;
         }
-        if FUNCS.iter().any(|e| e.0 == name) || COLOURS.iter().any(|e| e.0 == name) {
-            return self.err(t, format!("`{name}` is a function: write `{name}(…)`"));
-        }
-        if KEYWORDS.contains(&name) {
-            return self.err(t, format!("`{name}` can only start a line"));
-        }
-        if PALETTES.iter().any(|e| e.0 == name) {
-            return self.err(
-                t,
-                format!("`{name}` is a palette: use it as `pal({name}, k)` on the last line"),
-            );
-        }
-        let s = suggest(name, self.value_names());
-        self.err(t, format!("unknown name `{name}`{}", did_you_mean(s)))
+        Err(self.unknown(t))
     }
 
+    /// Why the name at `t` is not a value here (or, before `(`, a function).
+    #[cold]
+    #[inline(never)]
+    fn unknown(&mut self, t: Token) -> Error {
+        let name = self.text(t);
+        let msg = if self.peek().tok == Tok::LParen {
+            if COLOURS.iter().any(|e| e.0 == name) {
+                format!(
+                    "`{name}(…)` makes the colour, so it can only be the whole last line \
+                     (of the formula, or of a layer)"
+                )
+            } else if self.lookup_value(name).is_some() {
+                format!("`{name}` is a value, not a function")
+            } else {
+                let s = suggest(
+                    name,
+                    FUNCS.iter().map(|e| e.0).chain(COLOURS.iter().map(|e| e.0)),
+                );
+                format!("unknown function `{name}`{}", did_you_mean(s))
+            }
+        } else if FUNCS.iter().any(|e| e.0 == name) || COLOURS.iter().any(|e| e.0 == name) {
+            format!("`{name}` is a function: write `{name}(…)`")
+        } else if KEYWORDS.contains(&name) {
+            format!("`{name}` can only start a line")
+        } else if PALETTES.iter().any(|e| e.0 == name) {
+            format!("`{name}` is a palette: use it as `pal({name}, k)` on the last line")
+        } else {
+            let s = suggest(name, self.value_names());
+            format!("unknown name `{name}`{}", did_you_mean(s))
+        };
+        self.fail_at(t, msg)
+    }
+
+    #[inline(never)]
     fn lookup_value(&mut self, name: &str) -> Option<Result<Id, Error>> {
         if let Some(l) = self
             .locals
             .iter()
-            .find(|l| l.name == name && self.visible(l))
+            .find(|l| l.name == name && self.visible(l.scope))
         {
             return Some(Ok(l.id));
         }
         if let Some(&(_, inp, _)) = INPUTS.iter().find(|e| e.0 == name) {
-            return Some(self.dag.input(inp, (0, 0)));
+            return Some(self.input(inp));
         }
         if let Some(&(_, v)) = CONSTS.iter().find(|e| e.0 == name) {
             return Some(self.dag.constant(v, (0, 0)));
         }
         None
+    }
+
+    /// A built-in value here: inside a part, its own `t`, and where it is
+    /// drawn — `px = floor(x·127 + ½)`, `py = floor(y·31 + ½)`, `i = (31 −
+    /// py)·128 + px`, as on the panel (`x = px/127`).
+    #[inline(never)]
+    fn input(&mut self, inp: Input) -> Result<Id, Error> {
+        let at = (0, 0);
+        if let (Input::T, Some(t)) = (inp, self.env.t) {
+            return Ok(t);
+        }
+        let Some((x, y)) = self.env.at else {
+            return self.dag.input(inp, at);
+        };
+        let grid = |p: &mut Self, v: Id, n: i32| -> Result<Id, Error> {
+            let k = p.dag.constant(n << 16, at)?;
+            let half = p.dag.constant(ONE / 2, at)?;
+            let m = p.dag.op(code::MUL, [v, k, 0], at)?;
+            let r = p.dag.op(code::ADD, [m, half, 0], at)?;
+            p.dag.op(code::FLOOR, [r, 0, 0], at)
+        };
+        match inp {
+            Input::X => Ok(x),
+            Input::Y => Ok(y),
+            Input::Px => grid(self, x, W as i32 - 1),
+            Input::Py => grid(self, y, H as i32 - 1),
+            Input::I => {
+                let px = grid(self, x, W as i32 - 1)?;
+                let py = grid(self, y, H as i32 - 1)?;
+                let top = self.dag.constant((H as i32 - 1) << 16, at)?;
+                let w = self.dag.constant((W as i32) << 16, at)?;
+                let row = self.dag.op(code::SUB, [top, py, 0], at)?;
+                let r = self.dag.op(code::MUL, [row, w, 0], at)?;
+                self.dag.op(code::ADD, [r, px, 0], at)
+            }
+            _ => self.dag.input(inp, at),
+        }
     }
 
     /// `( a, b, … )` with exactly `n` values.
@@ -1060,32 +1266,36 @@ impl<'s> Parser<'s> {
         }
         let close = self.peek();
         if close.tok != Tok::RParen {
-            self.unclosed(open, close)?;
-            return self.err(
-                close,
-                format!(
-                    "expected `,` or `)` in `{name}(…)`, found {}",
-                    self.found(close)
-                ),
-            );
+            return Err(self.not_closed(open, close, name));
         }
         self.next();
         if k != n && !(cover && k == n + 1) {
-            let span = Error::new(f.start, close.end, "");
-            let s = if n == 1 { "" } else { "s" };
-            return Err(Error {
-                msg: if cover {
-                    format!(
-                        "`{name}` takes {n} value{s} (or {}: the last is how much of the pixel it covers, 0 to 1), but got {k}",
-                        n + 1
-                    )
-                } else {
-                    format!("`{name}` takes {n} value{s}, but got {k}")
-                },
-                ..span
-            });
+            return Err(self.arity(f, close, name, n, k, cover));
         }
         Ok((out, k))
+    }
+
+    /// `name(…)` from `f` to `close` given `k` values for `n` (`cover`: or
+    /// `n + 1`).
+    #[cold]
+    #[inline(never)]
+    fn arity(&self, f: Token, close: Token, name: &str, n: usize, k: usize, cover: bool) -> Error {
+        let s = if n == 1 { "" } else { "s" };
+        // A part: where to draw it.
+        let what = if self.part_named(name).is_some() {
+            ", where to draw it (x, y)"
+        } else {
+            ""
+        };
+        let msg = if cover {
+            format!(
+                "`{name}` takes {n} value{s}{what} (or {}: the last is how much of the pixel it covers, 0 to 1), but got {k}",
+                n + 1
+            )
+        } else {
+            format!("`{name}` takes {n} value{s}{what}, but got {k}")
+        };
+        Error::new(f.start, close.end, msg)
     }
 
     /// The colour call at `t` (its name): `rgb(r, g, b)`, `hsv(h, s, v)`,
@@ -1178,9 +1388,9 @@ impl<'s> Parser<'s> {
         }
     }
 
-    /// `name = expr`.
-    fn assignment(&mut self, in_frame: bool) -> Result<(), Error> {
-        let t = self.next();
+    /// A name about to be set at `t` (a value or a part): not a built-in,
+    /// and not one already set here.
+    fn new_name(&self, t: Token) -> Result<&'s str, Error> {
         let name = self.text(t);
         if let Some(e) = INPUTS.iter().find(|e| e.0 == name) {
             return self.err(
@@ -1201,19 +1411,28 @@ impl<'s> Parser<'s> {
                 format!("`{name}` is a palette's name; pick another name"),
             );
         }
-        if let Some(l) = self
+        let prev = self
             .locals
             .iter()
-            .find(|l| l.name == name && self.visible(l))
-        {
+            .find(|l| l.name == name && self.visible(l.scope))
+            .map(|l| l.at)
+            .or(self.part_named(name).map(|k| self.parts[k].at));
+        if let Some(at) = prev {
             return self.err(
                 t,
                 format!(
                     "`{name}` is already set on line {} — each name can be set once",
-                    self.line_of(l.at)
+                    self.line_of(at)
                 ),
             );
         }
+        Ok(name)
+    }
+
+    /// `name = expr`.
+    fn assignment(&mut self, in_frame: bool) -> Result<(), Error> {
+        let t = self.next();
+        let name = self.new_name(t)?;
         let eq = self.expect(Tok::Assign, "`=`")?;
         if matches!(self.peek().tok, Tok::Newline | Tok::Eof) {
             return self.err(eq, format!("a value is missing after `=` (`{name} = …`)"));
@@ -1262,17 +1481,22 @@ impl<'s> Parser<'s> {
         }
     }
 
-    /// `frame { name = value … }` at `t` (one per formula, and one per
-    /// layer).
+    /// Inside a `layer { }` (not a formula's or a part's own lines).
+    fn in_layer(&self) -> bool {
+        self.scope != 0 && !self.scopes[self.scope as usize].1
+    }
+
+    /// `frame { name = value … }` at `t` (one per formula or part, and one
+    /// per layer).
     fn frame_block(&mut self, t: Token, seen: &mut bool) -> Result<(), Error> {
         self.next();
         if *seen {
             return self.err(
                 t,
-                if self.scope == 0 {
-                    "there can be one `frame { }` block"
-                } else {
+                if self.in_layer() {
                     "a layer can have one `frame { }` block"
+                } else {
+                    "there can be one `frame { }` block"
                 },
             );
         }
@@ -1295,10 +1519,59 @@ impl<'s> Parser<'s> {
         self.end_of_statement()
     }
 
-    /// A colour line at `t` (its name), or a bare value as the last line
-    /// of the formula (`end` Eof) or of a layer (`end` RBrace): its gray.
-    fn colour_or_value(&mut self, t: Token, end: Tok) -> Result<Colour, Error> {
+    /// Whether the statement at the cursor is a name, maybe a bracket, and
+    /// nothing else (`p` or `p(x*2, y)`: a part's colour, not `p.v + 1`).
+    fn whole_line(&self) -> bool {
+        let mut k = self.pos + 1;
+        if self.toks[k].tok == Tok::LParen {
+            let mut depth = 0;
+            loop {
+                match self.toks[k].tok {
+                    Tok::LParen => depth += 1,
+                    Tok::RParen => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    Tok::Eof => return false,
+                    _ => {}
+                }
+                k += 1;
+            }
+            k += 1;
+        }
+        matches!(self.toks[k].tok, Tok::Newline | Tok::Eof | Tok::RBrace)
+    }
+
+    /// A colour line at `t` (its name), a part drawn (`p`, `p(x', y')`,
+    /// `p(x', y', k)`), or a bare value as the last line of the formula or
+    /// a part (`end` Eof or RBrace) or of a layer (RBrace): its gray. The
+    /// colours (several for a part with layers) and whether they are layers.
+    fn colour_or_value(&mut self, t: Token, end: Tok) -> Result<(Vec<Colour>, bool), Error> {
         let word = if t.tok == Tok::Name { self.text(t) } else { "" };
+        if let Some(k) = self.part_named(word).filter(|_| self.whole_line()) {
+            self.next();
+            let (j, cover) = self.part_at(t, k, true)?;
+            self.end_of_statement()?;
+            let inst = &self.parts[k].insts[j];
+            if inst.colours.is_empty() {
+                return self.err(
+                    t,
+                    format!("part `{word}` has no colour, only values: `{word}.v`"),
+                );
+            }
+            let (mut cs, layered) = (inst.colours.clone(), inst.layered);
+            if let Some(k) = cover {
+                for c in &mut cs {
+                    c.alpha = Some(match c.alpha {
+                        Some(a) => self.dag.op(code::MUL, [a, k, 0], (t.start, t.end))?,
+                        None => k,
+                    });
+                }
+            }
+            return Ok((cs, layered));
+        }
         if t.tok == Tok::Name
             && COLOURS.iter().any(|e| e.0 == word)
             && self.toks[self.pos + 1].tok == Tok::LParen
@@ -1306,7 +1579,7 @@ impl<'s> Parser<'s> {
             self.next();
             let c = self.colour(t)?;
             self.end_of_statement()?;
-            return Ok(c);
+            return Ok((alloc::vec![c], false));
         }
         let id = self.expr(0)?;
         self.end_of_statement()?;
@@ -1315,27 +1588,30 @@ impl<'s> Parser<'s> {
             return Err(Error::new(
                 t.start,
                 self.toks[self.pos.saturating_sub(1)].start.max(t.end),
-                if end == Tok::Eof {
-                    "only the last line can be a bare value (the colour) — did you mean `name = …`?"
-                } else {
+                if self.in_layer() {
                     "only a layer's last line can be a bare value (its colour) — did you mean `name = …`?"
+                } else {
+                    "only the last line can be a bare value (the colour) — did you mean `name = …`?"
                 },
             ));
         }
-        Ok(Colour {
-            code: code::OUT_GRAY,
-            args: [id, 0, 0],
-            pal: 0,
-            alpha: None,
-            blend: fixed::BLEND_OVER,
-        })
+        Ok((
+            alloc::vec![Colour {
+                code: code::OUT_GRAY,
+                args: [id, 0, 0],
+                pal: 0,
+                alpha: None,
+                blend: fixed::BLEND_OVER,
+            }],
+            false,
+        ))
     }
 
     /// `layer [blend] { … }` at `kw`: its own values (and `frame { }`),
-    /// ending in its colour.
-    fn layer(&mut self, kw: Token) -> Result<(Colour, Token), Error> {
+    /// ending in its colour (several: a part with layers drawn whole).
+    fn layer(&mut self, kw: Token) -> Result<(Vec<Colour>, Token), Error> {
         self.next();
-        let mut blend = fixed::BLEND_OVER;
+        let mut blend = None;
         let b = self.peek();
         if b.tok == Tok::Name {
             let name = self.text(b);
@@ -1350,7 +1626,7 @@ impl<'s> Parser<'s> {
                 );
             };
             self.next();
-            blend = m;
+            blend = Some(m);
         }
         let open = self.peek();
         if open.tok != Tok::LBrace {
@@ -1363,10 +1639,11 @@ impl<'s> Parser<'s> {
             );
         }
         self.next();
-        self.layers += 1;
-        self.scope = self.layers;
+        let outer = self.scope;
+        self.scopes.push((outer, false));
+        self.scope = (self.scopes.len() - 1) as u16;
         let mut seen_frame = false;
-        let mut colour: Option<(Colour, Token)> = None;
+        let mut colour: Option<((Vec<Colour>, bool), Token)> = None;
         self.skip_newlines();
         loop {
             let t = self.peek();
@@ -1395,6 +1672,12 @@ impl<'s> Parser<'s> {
                         "a layer can't go inside another — close this one with `}` first",
                     )
                 }
+                "part" => {
+                    return self.err(
+                        t,
+                        "a part goes outside the layers (draw it in one with `layer { p }`)",
+                    )
+                }
                 "frame" => self.frame_block(t, &mut seen_frame)?,
                 _ if self.is_assignment() => self.assignment(false)?,
                 _ => colour = Some((self.colour_or_value(t, Tok::RBrace)?, t)),
@@ -1402,26 +1685,317 @@ impl<'s> Parser<'s> {
             self.skip_newlines();
         }
         self.next();
-        self.scope = 0;
-        let Some((mut c, ct)) = colour else {
+        self.scope = outer;
+        let Some(((mut cs, layered), ct)) = colour else {
             return self.err(
                 kw,
                 "this layer has no colour: end it with `rgb(…)`, `hsv(…)`, `pal(…)` or `gray(…)`",
             );
         };
-        c.blend = blend;
+        match (layered, blend) {
+            // A part with layers keeps its own blends: it goes over, whole.
+            (true, Some(m)) if m != fixed::BLEND_OVER => {
+                return self.err(
+                    b,
+                    "this part has layers of its own: it can only go over, as in `layer { p }`",
+                )
+            }
+            (true, _) => {}
+            (false, m) => cs[0].blend = m.unwrap_or(fixed::BLEND_OVER),
+        }
         self.end_of_statement()?;
-        Ok((c, ct))
+        Ok((cs, ct))
+    }
+
+    /// The `loop` the lines from token `k` set (to their `}`, or the end),
+    /// read ahead: a part's `t` is its own from its first line.
+    fn loop_ahead(&self, mut k: usize) -> Option<i32> {
+        let mut depth = 0;
+        let mut start = true;
+        loop {
+            let t = self.toks[k];
+            match t.tok {
+                Tok::LBrace => depth += 1,
+                Tok::RBrace if depth == 0 => return None,
+                Tok::RBrace => depth -= 1,
+                Tok::Eof => return None,
+                Tok::Name if depth == 0 && start && self.text(t) == "loop" => {
+                    if let Tok::Num(v) = self.toks[k + 1].tok {
+                        return Some(v);
+                    }
+                }
+                _ => {}
+            }
+            start = matches!(t.tok, Tok::Newline | Tok::LBrace | Tok::RBrace);
+            k += 1;
+        }
+    }
+
+    /// `part name { … }` at `kw`: read where it is written (its errors show
+    /// there, and `name` / `name.v` drawn where the pixel is are ready).
+    fn part(&mut self, kw: Token) -> Result<(), Error> {
+        self.next();
+        let n = self.peek();
+        if n.tok != Tok::Name {
+            return self.err(n, "a part needs a name, as in `part p { … }`");
+        }
+        let name = self.new_name(n)?;
+        self.next();
+        let open = self.peek();
+        if open.tok != Tok::LBrace {
+            return self.err(
+                open,
+                format!(
+                    "expected `{{` here (as in `part {name} {{ … }}`), found {}",
+                    self.found(open)
+                ),
+            );
+        }
+        let body = self.pos + 1;
+        let mut depth = 0;
+        let mut end = self.pos;
+        loop {
+            match self.toks[end].tok {
+                Tok::LBrace => depth += 1,
+                Tok::RBrace => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                Tok::Eof => return self.err(kw, "this `part {` is never closed — add `}`"),
+                _ => {}
+            }
+            end += 1;
+        }
+        let loop_v = self.loop_ahead(body).unwrap_or(8 * ONE);
+        self.parts.push(Part {
+            name,
+            at: n.start,
+            scope: self.scope,
+            body,
+            end,
+            loop_v,
+            insts: Vec::new(),
+        });
+        self.instance(self.parts.len() - 1, None, kw)?;
+        self.pos = end + 1;
+        self.end_of_statement()
+    }
+
+    /// Part `k` read at `at` (`None`: where the pixel is), for its use at
+    /// `by`: once per place, with names of its own that nothing outside it
+    /// sees, `t` its own loop's, and `x y px py i` the place's.
+    #[inline(never)]
+    fn instance(&mut self, k: usize, at: Option<(Id, Id)>, by: Token) -> Result<usize, Error> {
+        if let Some(j) = self.parts[k].insts.iter().position(|i| i.at == at) {
+            return Ok(j);
+        }
+        let (body, end, loop_v) = (self.parts[k].body, self.parts[k].end, self.parts[k].loop_v);
+        // Read again (where it is written, it is read once, as all text is).
+        if at.is_some() {
+            self.work += end - body;
+        }
+        if self.work > MAX_WORK {
+            return self.err(
+                by,
+                "this formula draws its parts in too many places — simplify it",
+            );
+        }
+        self.depth += PART_DEPTH;
+        if self.depth > MAX_DEPTH {
+            return self.err(by, "parts go too deep here — take one out of another");
+        }
+        // (What it sets stays, in a scope nothing else sees: `p.v` reads it.)
+        let saved = (self.pos, self.scope, self.env);
+        // Its own time: `t` modulo its loop, unless the time here is shorter.
+        let t = if self.env.loop_v <= loop_v {
+            self.env.t
+        } else {
+            let a = (by.start, by.end);
+            let t0 = self.input(Input::T)?;
+            let n = self.dag.constant(loop_v, a)?;
+            Some(self.dag.op(code::MOD, [t0, n, 0], a)?)
+        };
+        self.scopes.push((self.scope, true));
+        self.scope = (self.scopes.len() - 1) as u16;
+        self.env = Env {
+            at: at.or(self.env.at),
+            t,
+            loop_v,
+        };
+        self.pos = body;
+        let b = self.body(Tok::RBrace)?;
+        let scope = self.scope;
+        (self.pos, self.scope, self.env) = saved;
+        self.depth -= PART_DEPTH;
+        let p = &mut self.parts[k];
+        p.insts.push(Inst {
+            at,
+            scope,
+            colours: b.colours,
+            layered: b.layered,
+        });
+        Ok(p.insts.len() - 1)
+    }
+
+    /// Part `k` used at `t` (its name, the cursor after it): `p`, or `p(x',
+    /// y')` — and as a `colour`, `p(x', y', k)`. Which reading, and the
+    /// coverage.
+    #[inline(never)]
+    fn part_at(&mut self, t: Token, k: usize, colour: bool) -> Result<(usize, Option<Id>), Error> {
+        let (mut at, mut cover) = (None, None);
+        if self.peek().tok == Tok::LParen {
+            let (a, n) = self.args_or_cover(t, self.text(t), 2, colour)?;
+            // Where the pixel is already: the reading as written.
+            let here = (self.input(Input::X)?, self.input(Input::Y)?);
+            at = Some((a[0], a[1])).filter(|&p| p != here);
+            cover = (n == 3).then_some(a[2]);
+        }
+        Ok((self.instance(k, at, t)?, cover))
+    }
+
+    /// `p.v` or `p(x', y').v` at `t`: a value part `k` sets.
+    #[inline(never)]
+    fn part_value(&mut self, t: Token, k: usize) -> Result<Id, Error> {
+        let (j, _) = self.part_at(t, k, false)?;
+        if self.peek().tok != Tok::Dot {
+            return Err(self.not_a_value(t, None));
+        }
+        self.next();
+        let v = self.expect(Tok::Name, "the name of one of the part's values")?;
+        let vn = self.text(v);
+        let scope = self.parts[k].insts[j].scope;
+        match self
+            .locals
+            .iter()
+            .find(|l| l.scope == scope && l.name == vn)
+        {
+            Some(l) => Ok(l.id),
+            None => Err(self.not_a_value(t, Some((v, scope)))),
+        }
+    }
+
+    /// Part `t` used as a value without `.v`, or `.v` (in `scope`) that it
+    /// doesn't set.
+    #[cold]
+    #[inline(never)]
+    fn not_a_value(&self, t: Token, v: Option<(Token, u16)>) -> Error {
+        let name = self.text(t);
+        let Some((v, scope)) = v else {
+            return self.fail_at(
+                t,
+                format!(
+                    "`{name}` is a part: draw it as a whole last line (of the formula, or of a layer), \
+                     or use one of its values, as in `{name}.v`"
+                ),
+            );
+        };
+        let vn = self.text(v);
+        let s = suggest(
+            vn,
+            self.locals
+                .iter()
+                .filter(|l| l.scope == scope)
+                .map(|l| l.name),
+        );
+        self.fail_at(
+            v,
+            format!("part `{name}` sets no value `{vn}`{}", did_you_mean(s)),
+        )
+    }
+
+    /// The lines of a formula (`end` Eof) or a part (`end` RBrace, the
+    /// cursor after its `{`): names, `frame { }`, `loop`, parts, layers and
+    /// the colour.
+    fn body(&mut self, end: Tok) -> Result<Body, Error> {
+        let mut b = Body {
+            colours: Vec::new(),
+            top: None,
+            layered: false,
+            blocks: 0,
+            loop_v: None,
+        };
+        let mut last: Option<Token> = None;
+        let mut seen_frame = false;
+        self.skip_newlines();
+        loop {
+            let t = self.peek();
+            if t.tok == end {
+                break;
+            }
+            if let Some(ct) = last {
+                return Err(Error::new(
+                    ct.start,
+                    ct.end,
+                    if end == Tok::Eof {
+                        "the colour has to be the last line (move this to the end)"
+                    } else {
+                        "the colour has to be the part's last line (move this to just before `}`)"
+                    },
+                ));
+            }
+            match self.keyword() {
+                "loop" => {
+                    self.next();
+                    if b.loop_v.is_some() {
+                        return self.err(t, "`loop` is already set");
+                    }
+                    let n = self.next();
+                    let Tok::Num(v) = n.tok else {
+                        return self.err(n, "`loop` takes a number of seconds, e.g. `loop 8`");
+                    };
+                    if !(ONE / 10..=3600 * ONE).contains(&v) {
+                        return self.err(n, "the loop must be between 0.1 and 3600 seconds");
+                    }
+                    b.loop_v = Some(v);
+                    self.end_of_statement()?;
+                }
+                "frame" => self.frame_block(t, &mut seen_frame)?,
+                "layer" => {
+                    let (cs, ct) = self.layer(t)?;
+                    b.colours.extend(cs);
+                    b.top = Some(ct);
+                    b.layered = true;
+                    b.blocks += 1;
+                }
+                "part" => self.part(t)?,
+                "use" => {
+                    return self.err(
+                        t,
+                        "`use` puts a formula in by its name, as `part p { … }`, when you leave the line",
+                    )
+                }
+                _ if self.is_assignment() => self.assignment(false)?,
+                _ => {
+                    let (cs, layered) = self.colour_or_value(t, end)?;
+                    if b.blocks > 0 {
+                        return Err(Error::new(
+                            t.start,
+                            self.toks[self.pos.saturating_sub(1)].end.max(t.end),
+                            "with layers, every colour goes inside one: put this line in `layer { … }`",
+                        ));
+                    }
+                    b.colours = cs;
+                    b.layered = layered;
+                    b.top = Some(t);
+                    last = Some(t);
+                }
+            }
+            self.skip_newlines();
+        }
+        Ok(b)
     }
 }
 
 /// What a compile also reports.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Info {
-    /// Values set inside `frame { }` blocks.
+    /// Values set inside `frame { }` blocks (a part's once for each place
+    /// it is drawn at).
     pub frame_values: usize,
-    /// `layer` blocks written (0: the formula is one picture, its last
-    /// line).
+    /// `layer` blocks written in the formula's own lines (0: it is one
+    /// picture, its last line).
     pub layers: usize,
 }
 
@@ -1456,74 +2030,30 @@ fn compile_inner(src: &str, prog: &mut Program) -> Result<Info, Error> {
         locals: Vec::new(),
         depth: 0,
         scope: 0,
-        layers: 0,
+        scopes: alloc::vec![(0, false)],
+        parts: Vec::new(),
+        env: Env {
+            at: None,
+            t: None,
+            loop_v: 0,
+        },
+        work: 0,
     };
-    // The last line's colour, or the layers' (bottom to top).
-    let mut colour: Option<(Colour, Token)> = None;
-    let mut layers: Vec<(Colour, Token)> = Vec::new();
-    let mut seen_loop = false;
-    let mut seen_frame = false;
-    p.skip_newlines();
-    loop {
-        let t = p.peek();
-        if t.tok == Tok::Eof {
-            break;
-        }
-        if let Some((_, ct)) = &colour {
-            let ct = *ct;
-            return Err(Error::new(
-                ct.start,
-                ct.end,
-                "the colour has to be the last line (move this to the end)",
-            ));
-        }
-        match p.keyword() {
-            "loop" => {
-                p.next();
-                if seen_loop {
-                    return p.err(t, "`loop` is already set");
-                }
-                seen_loop = true;
-                let n = p.next();
-                let Tok::Num(v) = n.tok else {
-                    return p.err(n, "`loop` takes a number of seconds, e.g. `loop 8`");
-                };
-                if !(ONE / 10..=3600 * ONE).contains(&v) {
-                    return p.err(n, "the loop must be between 0.1 and 3600 seconds");
-                }
-                prog.loop_ms = ((v as i64 * 1000 + ONE as i64 / 2) >> 16) as u32;
-                p.end_of_statement()?;
-            }
-            "frame" => p.frame_block(t, &mut seen_frame)?,
-            "layer" => layers.push(p.layer(t)?),
-            _ if p.is_assignment() => p.assignment(false)?,
-            _ => {
-                let c = p.colour_or_value(t, Tok::Eof)?;
-                if !layers.is_empty() {
-                    return Err(Error::new(
-                        t.start,
-                        p.toks[p.pos.saturating_sub(1)].end.max(t.end),
-                        "with layers, every colour goes inside one: put this line in `layer { … }`",
-                    ));
-                }
-                colour = Some((c, t));
-            }
-        }
-        p.skip_newlines();
+    p.env.loop_v = p.loop_ahead(0).unwrap_or(8 * ONE);
+    let body = p.body(Tok::Eof)?;
+    if let Some(v) = body.loop_v {
+        prog.loop_ms = ((v as i64 * 1000 + ONE as i64 / 2) >> 16) as u32;
     }
-    let n_layers = layers.len();
-    if let Some(c) = colour {
-        layers.push(c);
-    }
-    if layers.is_empty() {
+    let mut layers = body.colours;
+    let (Some(ct), false) = (body.top, layers.is_empty()) else {
         let at = src.len();
-        let msg = if p.locals.is_empty() {
+        let msg = if p.locals.is_empty() && p.parts.is_empty() {
             "empty: write a colour, e.g. `hsv(x + t/4, 1, 1)`"
         } else {
             "the last line should be the colour, e.g. `rgb(r, g, b)`, `hsv(h, s, v)` or `pal(fire, k)`"
         };
         return Err(Error::new(at, at, msg));
-    }
+    };
     let frame_values = p.locals.iter().filter(|l| l.in_frame).count();
     // A layer under one that covers everything (`over`, coverage 1) is never
     // seen: from the topmost such layer up. If it is the bottom one it is
@@ -1535,13 +2065,12 @@ fn compile_inner(src: &str, prog: &mut Program) -> Result<Info, Error> {
             && c.alpha
                 .is_none_or(|a| dag.konst(a).is_some_and(|v| v >= ONE))
     };
-    if let Some(k) = layers.iter().rposition(|(c, _)| opaque(c)) {
+    if let Some(k) = layers.iter().rposition(opaque) {
         layers.drain(..k);
     }
-    let backdrop = !opaque(&layers[0].0);
-    let ct = layers[layers.len() - 1].1;
+    let backdrop = !opaque(&layers[0]);
     let mut steps = Vec::with_capacity(layers.len());
-    for (k, (c, _)) in layers.iter().enumerate() {
+    for (k, c) in layers.iter().enumerate() {
         let plain = k == 0 && !backdrop;
         let alpha = match (plain, c.alpha) {
             (true, _) => None,
@@ -1568,7 +2097,7 @@ fn compile_inner(src: &str, prog: &mut Program) -> Result<Info, Error> {
     })?;
     Ok(Info {
         frame_values,
-        layers: n_layers,
+        layers: body.blocks,
     })
 }
 

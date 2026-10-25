@@ -183,8 +183,8 @@ pub mod golden {
 
 /// Formulas that make the compiler work hardest within what the panel
 /// accepts (a path of at most 2,048 B, as `fx_psi::path` writes it: the
-/// source compacted, `+` as `%2B`): compile-time tests and the bench.
-#[cfg(feature = "tables")]
+/// source compacted, `+` as `%2B`): compile-time tests, the bench, the
+/// host's stack probe (`examples/stack.rs`) and `psi-probe`'s stack report.
 #[doc(hidden)]
 pub mod worst {
     use alloc::format;
@@ -245,13 +245,73 @@ pub mod worst {
         format!("{s}\ngray(v)")
     }
 
+    /// Parts inside parts, each drawn at several places: the most reading
+    /// again (stopped by the compiler's bound on it).
+    pub fn parts() -> String {
+        let mut s = String::from("part p0 { v = sin(x*3 + t)*y\ngray(v) }\n");
+        for k in 1.. {
+            let j = k - 1;
+            let next = format!(
+                "part p{k} {{\n{s}v = p{j}(x*0.5, y).v + p{j}(y, x).v + p{j}(x + 0.1, y).v + p{j}(x, y*2).v + p{j}(1 - x, y).v\ngray(v)\n}}\n"
+            );
+            if path_len(&format!("{next}p{k}")) > 2048 || k > 4 {
+                return format!("{s}p{j}");
+            }
+            s = next;
+        }
+        unreachable!()
+    }
+
+    /// The deepest plain nesting: calls inside calls to the depth cap, and
+    /// a misspelt name at the bottom (the error and its suggestions are
+    /// built at the deepest point): the parser's stack at its highest.
+    pub fn nested() -> String {
+        let mut s = String::from("tme");
+        let mut k = 0;
+        while crate::compile(&format!("gray({s})"))
+            .is_err_and(|e| e.msg.starts_with("unknown name"))
+        {
+            s = format!("sin({s})");
+            k += 1;
+            if k > 64 {
+                break;
+            }
+        }
+        // One less: the deepest that still reaches the name.
+        s = s.replacen("sin(", "", 1);
+        s.pop();
+        format!("gray({s})")
+    }
+
+    /// Parts inside parts, each drawn in a layer at another place, as deep
+    /// as the cap allows, with a misspelt name at the bottom.
+    pub fn parts_in_layers() -> String {
+        let mut best = String::new();
+        for depth in 1..12 {
+            let mut s = String::from("part p0 {\nv = sin(cos(x*3 + tme))\ngray(v)\n}\n");
+            for k in 1..depth {
+                let j = k - 1;
+                s = format!("part p{k} {{\n{s}layer {{ p{j}(x*0.5, sin(y)) }}\nlayer {{ p{j}(1 - x, y, 0.5) }}\n}}\n");
+            }
+            let src = format!("{s}layer {{ p{}(x, y) }}", depth - 1);
+            match crate::compile(&src) {
+                Err(e) if e.msg.starts_with("unknown name") => best = src,
+                _ => break,
+            }
+        }
+        best
+    }
+
     /// A named generator.
     pub type Case = (&'static str, fn() -> String);
 
-    pub const ALL: [Case; 3] = [
+    pub const ALL: [Case; 6] = [
         ("many locals", many_locals),
         ("chain", chain),
         ("distinct terms", distinct),
+        ("parts", parts),
+        ("nested", nested),
+        ("parts in layers", parts_in_layers),
     ];
 }
 

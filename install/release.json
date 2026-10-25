@@ -1,6 +1,6 @@
 {
-  "version": "1.0.0-beta.7",
-  "firmware": "firmware/opendmd-1.0.0-beta.7.odfw",
-  "www": "firmware/opendmd-1.0.0-beta.7-www.pack",
-  "www_version": "v1.0.0-beta.7"
+  "version": "1.0.0-beta.8",
+  "firmware": "firmware/opendmd-1.0.0-beta.8.odfw",
+  "www": "firmware/opendmd-1.0.0-beta.8-www.pack",
+  "www_version": "v1.0.0-beta.8"
 }
