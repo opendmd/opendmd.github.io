@@ -1,6 +1,6 @@
 {
   "name": "OpenDMD",
-  "version": "1.0.0-beta.9",
+  "version": "1.0.0-beta.10",
   "new_install_prompt_erase": true,
   "new_install_improv_wait_time": 15,
   "builds": [
@@ -10,9 +10,9 @@
         { "path": "bootloader-4mb.bin", "offset": 4096 },
         { "path": "partition-table-4mb.bin", "offset": 32768 },
         { "path": "ota_data_initial.bin", "offset": 61440 },
-        { "path": "opendmd-1.0.0-beta.9-4mb-app.bin", "offset": 131072 },
+        { "path": "opendmd-1.0.0-beta.10-4mb-app.bin", "offset": 131072 },
         { "path": "updater.bin", "offset": 2490368 },
-        { "path": "opendmd-1.0.0-beta.9-www.pack", "offset": 2883584 }
+        { "path": "opendmd-1.0.0-beta.10-www.pack", "offset": 2883584 }
       ]
     }
   ]

@@ -349,14 +349,13 @@ pub fn render_rows<const N: usize>(
     sc[S_A as usize] = inputs.a;
     sc[S_B as usize] = inputs.b;
     sc[S_C as usize] = inputs.c;
-    let sin = |v: i32| fixed::sin(tables, v);
     let (fe, re, pe) = (
         prog.frame_end as usize,
         prog.row_end as usize,
         prog.pixel_end as usize,
     );
     for op in &prog.ops[..fe] {
-        scalar(sc, op, sin);
+        scalar(sc, op, tables);
     }
     let uses_i = prog.uses & USES_I != 0;
     let backdrop = prog.uses & BACKDROP != 0;
@@ -369,7 +368,7 @@ pub fn render_rows<const N: usize>(
         scratch.sc[S_PY as usize] = py;
         scratch.sc[S_Y as usize] = fixed::div(py, ((H - 1) as i32) << 16);
         for op in &prog.ops[fe..re] {
-            scalar(&mut scratch.sc, op, sin);
+            scalar(&mut scratch.sc, op, tables);
         }
         let span = row * W * 3..(row + 1) * W * 3;
         let row_bytes = &mut out[span.clone()];
@@ -401,10 +400,10 @@ pub fn render_rows<const N: usize>(
 }
 
 #[inline(always)]
-fn scalar(sc: &mut [i32; MAX_SCALARS], op: &Op, sin: impl Fn(i32) -> i32) {
+fn scalar(sc: &mut [i32; MAX_SCALARS], op: &Op, t: &Tables) {
     // Operands of scalar steps are always scalar slots (< 128).
     let g = |v: u8| sc[(v & 0x7f) as usize];
-    let v = eval(op.code, g(op.a), g(op.b), g(op.c), sin);
+    let v = eval(op.code, g(op.a), g(op.b), g(op.c), Some(t));
     sc[(op.d & 0x7f) as usize] = v;
 }
 
@@ -459,6 +458,7 @@ fn lane_op<const N: usize>(
         ATAN2 => bin!(run2, d, a, b, fixed::atan2),
         HASH => bin!(run2, d, a, b, fixed::hash),
         LEN => bin!(run2, d, a, b, fixed::len),
+        BIT => bin!(fast2, d, a, b, fixed::bit),
         NEG => un!(fast1, d, a, fixed::neg),
         NOT => un!(fast1, d, a, fixed::not),
         ABS => un!(fast1, d, a, fixed::abs),
@@ -476,8 +476,40 @@ fn lane_op<const N: usize>(
         MIX => tern!(fast3, d, a, b, c, fixed::mix),
         SMOOTH => tern!(run3, d, a, b, c, fixed::smooth),
         NOISE => tern!(run3, d, a, b, c, fixed::noise),
+        // One loop for the four, its operands read with a stride (0: a
+        // value for the whole lane): the lookup dwarfs the loop, and seven
+        // monomorphised copies would be ~1 KB more of wasm.
+        DIGIT..=DIGIT_B => glyph_lane(d, [a, b, c], &glyphs(t, op.code)),
         U_R..=U_L => load_under(d, under, op.code - U_R),
         _ => {}
+    }
+}
+
+/// A font's pixel for each element of the lane.
+#[inline(never)]
+fn glyph_lane<const N: usize>(d: &mut [i32; N], args: [Arg; 3], g: &crate::tables::Glyphs) {
+    let mut one = [0i32; 3];
+    let mut p = [core::ptr::null::<i32>(); 3];
+    let mut stride = [0usize; 3];
+    for k in 0..3 {
+        match args[k] {
+            Arg::Lane(q) => (p[k], stride[k]) = (q, 1),
+            Arg::Sc(v) => one[k] = v,
+        }
+    }
+    for k in 0..3 {
+        if stride[k] == 0 {
+            p[k] = &one[k];
+        }
+    }
+    for o in d.iter_mut() {
+        // SAFETY: each pointer is a lane of `N` values read once per
+        // element (stride 1), or one value (stride 0), alive for the call.
+        let (c, x, y) = unsafe { (*p[0], *p[1], *p[2]) };
+        *o = fixed::glyph(g, c, x, y);
+        for k in 0..3 {
+            p[k] = p[k].wrapping_add(stride[k]);
+        }
     }
 }
 

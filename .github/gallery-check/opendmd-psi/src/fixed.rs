@@ -10,7 +10,7 @@
 //! they never overflow. Division by zero gives the saturated value of the
 //! numerator's sign (0 for 0 / 0); `%` by zero gives 0.
 
-use crate::tables::{Tables, ATAN, SQRT};
+use crate::tables::{Glyphs, Tables, ATAN, SQRT};
 
 pub const ONE: i32 = 1 << 16;
 
@@ -420,6 +420,37 @@ pub fn smooth(x: i32, e0: i32, inv: i32) -> i32 {
     let t = clamp(mul(sub(x, e0), inv), 0, ONE);
     let t2 = ((t as i64 * t as i64) >> 16) as i32;
     ((t2 as i64 * (3 * ONE - 2 * t) as i64) >> 16) as i32
+}
+
+/// Bit `i` of `floor(n)` (two's complement), 1 or 0: bits 0..14 of a
+/// whole number up to 32,767; a negative `n`'s bits from 15 up are 1. `i`
+/// is floored; below 0 it is 0.
+#[inline(always)]
+pub fn bit(n: i32, i: i32) -> i32 {
+    let k = i >> 16;
+    if k < 0 {
+        0
+    } else {
+        (((n >> 16) >> k.min(31)) & 1) << 16
+    }
+}
+
+/// Pixel (`x`, `y`) of character `c` in the font `g` (each floored; `x`
+/// a column from the cell's left, `y` a row from its top): 1 when lit, else
+/// 0, and 0 outside the cell or for a character the font hasn't. One
+/// lookup.
+#[inline(always)]
+pub fn glyph(g: &Glyphs, c: i32, x: i32, y: i32) -> i32 {
+    let (c, x, y) = (c >> 16, (x >> 16) as u32, (y >> 16) as u32);
+    let k = c.wrapping_sub(g.lo) as u32;
+    if k >= g.n || x >= g.w || y >= g.h {
+        return 0;
+    }
+    let at = (c + g.off) as u32 * g.h + y;
+    match g.rows.get(at as usize) {
+        Some(&r) => (((r << x) >> 7) as i32 & 1) << 16,
+        None => 0,
+    }
 }
 
 /// A Q16 colour channel 0..1 as 0..255, rounded.

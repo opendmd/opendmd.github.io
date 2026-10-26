@@ -325,6 +325,43 @@ const ERRORS: &[(&str, &str, usize, usize)] = &[
         15,
     ),
     ("gray(loop)", "`loop` can only start a line", 1, 6),
+    (
+        "gray(digit(1, 2))",
+        "`digit` takes 3 values (the digit, a column and a row; and a font, normal, small or bold, if you like), but got 2",
+        1,
+        6,
+    ),
+    (
+        "gray(glyph(65, 1, 2, small, 3))",
+        "`glyph` takes 3 values (the character, a column and a row",
+        1,
+        6,
+    ),
+    (
+        "gray(digit(1, 2, 3, big))",
+        "the last value of `digit` is a font: normal (the default), small or bold, found `big`",
+        1,
+        21,
+    ),
+    (
+        "gray(digit(1, 2, 3, 0.5))",
+        "the last value of `digit` is a font",
+        1,
+        21,
+    ),
+    (
+        "gray(glyph(48, 0, 0, bold))",
+        "the bold font has digits only: use `digit(n, x, y, bold)`",
+        1,
+        22,
+    ),
+    ("gray(bit(5))", "`bit` takes 2 values, but got 1", 1, 6),
+    ("gray(small)", "`small` is a font: use it as `digit(n, x, y, small)`", 1, 6),
+    ("gray(glyph('AB', 0, 0))", "a character goes in quotes, one at a time", 1, 12),
+    ("gray(glyph('é', 0, 0))", "a character goes in quotes, one at a time", 1, 12),
+    ("gray(glyph(\"A\", 0, 0))", "for a character's code write it in single quotes", 1, 12),
+    ("sin = 2\ngray(sin)", "`sin` is built in", 1, 1),
+    ("gray(digit)", "`digit` is a function: write `digit(…)`", 1, 6),
     ("fire = 2\ngray(fire)", "is a palette's name", 1, 1),
     (
         "gray(((((((((((((((((((((((((((x)))))))))))))))))))))))))))",
@@ -385,11 +422,22 @@ fn program_is_plain_data() {
     assert!(core::mem::size_of::<Program>() <= 1824);
 }
 
+/// Names that became functions later stay usable as values in saved
+/// formulas; a call is still the function.
+#[test]
+fn later_functions_stay_names() {
+    let a = compile("glyph = x\ndigit = y\nbit = 0.5\nrgb(glyph, digit, bit)").unwrap();
+    assert_eq!(a, compile("rgb(x, y, 0.5)").unwrap());
+    let b = compile("glyph = 0.5\ngray(glyph('A', px % 5, 31 - py) * glyph)").unwrap();
+    assert!(b.len() > 2);
+}
+
 #[test]
 fn compact_compiles_the_same() {
     let extra = [
         "v = min(x,\n  y) -- c\n\n  // d\ngray(v)",
         "a1 = x +\n y\nframe {\n q = t\n}\nrgb(a1, q, - -x)",
+        "k = ' ' + ';' + '-'-'/' -- c\ngray(glyph(k, px % 5, py) + digit(3, 1, 1, small))",
     ];
     for src in sketches::ALL.iter().map(|s| s.1).chain(extra) {
         let c = compact(src);
@@ -444,7 +492,10 @@ fn worst_case_formulas() {
         let src = f();
         let n = crate::worst::path_len(&src);
         assert!(
-            matches!(name, "parts" | "nested" | "parts in layers") || (1900..=2048).contains(&n),
+            matches!(
+                name,
+                "parts" | "nested" | "nested digit" | "parts in layers"
+            ) || (1900..=2048).contains(&n),
             "{name}: {n} B"
         );
         match compile(&src) {
@@ -459,6 +510,13 @@ fn worst_case_formulas() {
         }
     }
     assert!(compile(&crate::worst::many_locals()).is_ok());
+    // As deep as `sin(` nesting goes.
+    let d = crate::worst::nested_digit();
+    assert_eq!(
+        d.matches("digit(").count(),
+        crate::worst::nested().matches("sin(").count(),
+        "{d}"
+    );
 }
 
 // --- Layers and what is under ---------------------------------------------------

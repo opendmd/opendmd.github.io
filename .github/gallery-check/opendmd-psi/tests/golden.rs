@@ -5,7 +5,8 @@
 
 use opendmd_psi::golden::{fnv, inputs, picture, FRAMES as GOLDEN, OVER};
 use opendmd_psi::{
-    compile, render_rows, render_with, sketches, Program, Scratch, H, MAX_OPS, OWN, W,
+    compile, render_rows, render_with, sketches, Program, Scratch, FONT_4X6, FONT_5X7, FONT_BOLD,
+    H, MAX_OPS, OWN, W,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -78,6 +79,172 @@ fn golden_frames_over() {
         "golden frames over differ (got):\n{}",
         bad.join("\n")
     );
+}
+
+/// Which pixels of `src`'s frame are lit (`gray` of 0 or 1: 255 or 0),
+/// `[row from the top][column]`.
+fn lit(src: &str) -> Vec<[bool; W]> {
+    let p = compile(src).unwrap_or_else(|e| panic!("{}", e.render(src)));
+    let f = frame::<128>(&p, 0);
+    assert!(f == frame::<64>(&p, 0), "{src}: lane widths differ");
+    (0..H)
+        .map(|r| {
+            core::array::from_fn(|c| {
+                let v = f[(r * W + c) * 3];
+                assert!(v == 0 || v == 255, "{src}: pixel {c}, {r} is {v}");
+                v == 255
+            })
+        })
+        .collect()
+}
+
+/// The font's pixel, as `opendmd_core::text` draws it: rows of bytes, the
+/// most significant bit leftmost; blank outside the cell or the font.
+fn font_pixel(rows: &[u8], w: i32, h: i32, glyph: i32, x: i32, y: i32) -> bool {
+    (0..95).contains(&glyph)
+        && (0..w).contains(&x)
+        && (0..h).contains(&y)
+        && rows[(glyph * h + y) as usize] & (0x80 >> x) != 0
+}
+
+/// `digit` and `glyph`, in both fonts: every pixel of every character, and
+/// around each cell (a column and a row before and after it, which are
+/// blank), against core's font tables, per pixel; out-of-range and
+/// fractional characters (floored; blank).
+#[test]
+fn digits_and_glyphs_are_the_fonts() {
+    for (font, rows, w, h) in [
+        ("", FONT_5X7.as_flattened(), 5, 7),
+        (", small", FONT_4X6.as_flattened(), 4, 6),
+    ] {
+        let (cw, ch) = (w + 2, h + 2); // the cell and a pixel either side
+        let per = W as i32 / cw; // cells across
+        for first in [0, 1, 2, 3, 4].map(|k| 32 - 2 + k * per * (H as i32 / ch)) {
+            // Characters from `first` (some below 32 and above 126), a
+            // quarter added (floored away).
+            let src = format!(
+                "k = {first} + floor(px/{cw}) + floor((31 - py)/{ch})*{per}\n\
+                 gray(glyph(k + 0.25, px % {cw} - 1, (31 - py) % {ch} - 1{font}))"
+            );
+            let got = lit(&src);
+            for (r, row) in got.iter().enumerate() {
+                for (c, &l) in row.iter().enumerate() {
+                    let (c, r) = (c as i32, r as i32);
+                    let k = first + c / cw + r / ch * per;
+                    let want = font_pixel(rows, w, h, k - 32, c % cw - 1, r % ch - 1);
+                    assert_eq!(l, want, "glyph {k} ({src}) at {c}, {r}");
+                }
+            }
+        }
+        // Digits: -1 to 10 (blank but 0..9), 0.75 less (floored).
+        let src = format!(
+            "n = floor(px/{cw}) % 12 - 1.75 + 1\n\
+             gray(digit(n, px % {cw} - 1, (31 - py) % {ch} - 1{font}))"
+        );
+        for (r, row) in lit(&src).iter().enumerate() {
+            for (c, &l) in row.iter().enumerate() {
+                let (c, r) = (c as i32, r as i32);
+                let n = c / cw % 12 - 1;
+                let want =
+                    (0..10).contains(&n) && font_pixel(rows, w, h, 16 + n, c % cw - 1, r % ch - 1);
+                assert_eq!(l, want, "digit {n} ({src}) at {c}, {r}");
+            }
+        }
+        // Once a row (the character a constant, the row from py) and once a
+        // frame (all constants: run, not folded).
+        for n in [-1, 0, 7, 9, 10] {
+            for x in -1..=w {
+                let src = format!("gray(digit({n}, {x}, 31 - py{font}))");
+                let src = src
+                    .replace("digit(-1", "digit(0 - 1")
+                    .replace(", -1,", ", 0 - 1,");
+                for (r, row) in lit(&src).iter().enumerate() {
+                    let want = (0..10).contains(&n) && font_pixel(rows, w, h, 16 + n, x, r as i32);
+                    assert!(row.iter().all(|&l| l == want), "{src}: row {r}");
+                }
+            }
+        }
+        for (k, x, y) in [(65, 0, 2), (65, 2, 0), (58, 1, 1), (126, 1, 0), (127, 0, 0)] {
+            let src = format!("gray(glyph({k}, {x}, {y}{font}))");
+            let want = font_pixel(rows, w, h, k - 32, x, y);
+            assert!(lit(&src).iter().flatten().all(|&l| l == want), "{src}");
+        }
+    }
+    // The bold digits (digits only, a 4 × 6 cell, the table's 5 rows):
+    // every pixel and around each cell, per pixel and once a row.
+    let bold = FONT_BOLD.as_flattened();
+    let src = "n = floor(px/6) % 12 - 1.75 + 1\n\
+               gray(digit(n, px % 6 - 1, (31 - py) % 8 - 1, bold))";
+    for (r, row) in lit(src).iter().enumerate() {
+        for (c, &l) in row.iter().enumerate() {
+            let (c, r) = (c as i32, r as i32);
+            let n = c / 6 % 12 - 1;
+            let (x, y) = (c % 6 - 1, r % 8 - 1);
+            let want = (0..10).contains(&n) && x < 4 && font_pixel(bold, 4, 5, n, x, y);
+            assert_eq!(l, want, "bold digit {n} at {c}, {r}");
+        }
+    }
+    for n in [-1, 0, 4, 9, 10] {
+        for x in -1..=4 {
+            let src = format!("gray(digit({n}, {x}, 31 - py, bold))")
+                .replace("digit(-1", "digit(0 - 1")
+                .replace(", -1,", ", 0 - 1,");
+            for (r, row) in lit(&src).iter().enumerate() {
+                let want = (0..10).contains(&n) && font_pixel(bold, 4, 5, n, x, r as i32);
+                assert!(row.iter().all(|&l| l == want), "{src}: row {r}");
+            }
+        }
+    }
+    // A character in quotes is its code.
+    assert!(
+        lit("gray('A' == 65 and ' ' == 32 and '~' == 126 and ''' == 39 and '-' - 1 == 44)")
+            .iter()
+            .flatten()
+            .all(|&l| l)
+    );
+}
+
+/// `bit(n, i)`: bit i of floor(n), two's complement; i floored, below 0
+/// nothing; per pixel against the reference, and once (folded) at the edges.
+#[test]
+fn bits_are_twos_complement() {
+    let reference = |n: f64, i: f64| -> bool {
+        let (n, i) = (n.floor() as i64, i.floor() as i64);
+        i >= 0 && (n >> i.min(40)) & 1 == 1
+    };
+    let got = lit("gray(bit(px*64.25 - 4096, py*0.75 - 4))");
+    for (r, row) in got.iter().enumerate() {
+        let py = (H - 1 - r) as f64;
+        for (c, &l) in row.iter().enumerate() {
+            let (n, i) = (c as f64 * 64.25 - 4096.0, py * 0.75 - 4.0);
+            assert_eq!(l, reference(n, i), "bit({n}, {i})");
+        }
+    }
+    for (n, i, want) in [
+        ("5", "0", true),
+        ("5", "1", false),
+        ("5", "2", true),
+        ("5", "0.99", true),
+        ("5.99", "1", false),
+        ("5", "0 - 1", false),
+        ("5", "0 - 0.5", false),
+        ("0.5", "0", false),
+        ("32767", "14", true),
+        ("32767", "15", false),
+        ("16384", "14", true),
+        ("0 - 1", "0", true),
+        ("0 - 1", "15", true),
+        ("0 - 1", "99", true),
+        ("0 - 2", "0", false),
+        ("0 - 0.25", "3", true),
+        ("0", "99", false),
+    ] {
+        let src = format!("gray(bit({n}, {i}))");
+        assert!(
+            lit(&src).iter().flatten().all(|&l| l == want),
+            "{src}: want {want}"
+        );
+    }
 }
 
 /// Any set of rows drawn alone is the same bytes as in the whole frame;
@@ -233,6 +400,13 @@ const PIECES: &[&str] = &[
     "ug",
     "ub",
     "ul",
+    "digit(",
+    "glyph(",
+    "bit(",
+    "'A'",
+    "'",
+    "small",
+    "normal",
 ];
 
 fn check(src: &str) {

@@ -33,7 +33,7 @@ the real time in big rainbow digits, with a bar along the bottom that
 fills once a minute, a step a second. Check it against your watch. A GIF
 can't know the time; one that only showed each minute of a day would
 already be 2.7 MB, and with the seconds and the moving colours it would
-be gigabytes. The formula is 1.5 KB.</p>
+be gigabytes. The formula is under 1 KB, most of it comments.</p>
 <p>From there:</p>
 <ul>
 <li><strong>Remix</strong> (an example) or <strong>Edit</strong> (one of yours) opens it in the editor.</li>
@@ -112,7 +112,7 @@ last version that worked, dimmed.</p>
 <p>A formula is a few lines: names you set (<code>wave = …</code>, each name once), and a
 colour on the last line. It is worked out for every pixel, every frame.
 <code>--</code> starts a comment. Everything is a number; there are no loops, lists or
-words.</p>
+words (a single character in quotes, <code>'A'</code>, is a number too: its code).</p>
 <p><strong>Values</strong></p>
 <table>
 <thead>
@@ -210,8 +210,32 @@ words.</p>
 <td><code>c ? a : b</code>, <code>select(c, a, b)</code></td>
 <td><code>a</code> when <code>c</code> is true (not 0), else <code>b</code></td>
 </tr>
+<tr>
+<td><code>digit(n, col, row)</code></td>
+<td>1 where digit <code>n</code> (0 to 9) has a pixel in the panel's font, else 0</td>
+</tr>
+<tr>
+<td><code>glyph(ch, col, row)</code></td>
+<td>the same for a character: <code>glyph('A', col, row)</code></td>
+</tr>
+<tr>
+<td><code>bit(n, i)</code></td>
+<td>bit <code>i</code> of the whole number <code>n</code>, 1 or 0, for patterns of your own</td>
+</tr>
 </tbody>
 </table>
+<p><strong>Digits and letters.</strong> <code>digit</code> and <code>glyph</code> read the panel's own font, the
+one the clock and the title cards use: a character is 5 columns by 7 rows
+(<code>col</code> 0 to 4 from the left, <code>row</code> 0 to 6 from the top; a digit uses
+columns 0 to 3 and rows 0 to 5, the rest is the gap to the next one).
+Anything outside that, or a character the font hasn't, is 0, so a
+character drawn big is just its column and row worked out from the pixel:
+<code>digit(7, floor(px/4), floor((31 - py)/4))</code> draws a 7 four times the size
+in the top-left corner (rows count down from the top here, though <code>py</code>
+counts up). Add <code>small</code> for the smaller font, 4 by 6 (digits 3 by 5):
+<code>digit(n, col, row, small)</code>, or <code>bold</code> for chunky 3 by 5 digits (digits
+only): <code>digit(n, col, row, bold)</code>. <strong>Big clock</strong> is made this way, in
+<code>bold</code>.</p>
 <p>Operators: <code>+ - * / %</code>, comparisons <code>&lt; &lt;= &gt; &gt;= == !=</code> (1 for true, 0 for
 false), and <code>and</code>, <code>or</code>, <code>not</code>. There is no power operator: write <code>x * x</code>.</p>
 <p><strong>Colour</strong> (the last line):</p>
@@ -372,7 +396,8 @@ draws every pixel 50 times a second. The editor rates each one <strong>light</st
 milliseconds); all the examples are light or medium.</p>
 <ul>
 <li>Cheap: <code>+ - *</code>, the waves (<code>sin</code>, <code>cos</code>, <code>tri</code>, <code>saw</code>, <code>sqr</code>), <code>abs</code>,
-  <code>frac</code>, <code>min</code>, <code>max</code>, <code>clamp</code>, <code>step</code>, comparisons, <code>pal</code>.</li>
+  <code>frac</code>, <code>min</code>, <code>max</code>, <code>clamp</code>, <code>step</code>, comparisons, <code>pal</code>, <code>digit</code>,
+  <code>glyph</code> and <code>bit</code>.</li>
 <li>Dividing by a fixed number (<code>x/8</code>) is free: it becomes a multiply.</li>
 <li>Dear: <code>noise</code>, <code>len</code>, <code>sqrt</code>, <code>atan2</code>, <code>smoothstep</code>, <code>hash</code>, and dividing
   by something that changes from pixel to pixel. One of them is fine;

@@ -31,9 +31,9 @@ mod vm;
 
 pub use compile::{compact, compile_into, number, Error, Info, MAX_DEPTH, MAX_NODES, MAX_SOURCE};
 pub use program::{Op, Program, H, MAX_OPS, MAX_SCALARS, REGS, W};
-pub use tables::{Tables, ATAN};
+pub use tables::{Glyphs, Tables, ATAN};
 #[cfg(feature = "tables")]
-pub use tables::{OWN, PALETTES, SIN};
+pub use tables::{FONT_4X6, FONT_5X7, FONT_BOLD, OWN, PALETTES, SIN};
 pub use vm::{q16, render_rows, render_with, Inputs, Scratch, Q16_ONE};
 
 /// The lane width the effect uses: one panel row.
@@ -148,6 +148,15 @@ pub mod golden {
         ("smooth", "pal(ocean, smoothstep(0.2, 0.8, x) * smoothstep(1, 0, y))", 0, 0x7d51aaf40701e136),
         ("palettes", "pal(rainbow, x)", 0, 0xd2ee745daaab3f25),
         ("clock", "frame { s = second / 60 }\npal(amber, step(x, s) + 0.3 * step(y, minute / 60))", 0, 0x2fa28273c4507f25),
+        // The fonts and bits: every glyph of both fonts, digits out of
+        // range (-1, 10, 11), coordinates outside the cell, the steps once
+        // a frame and once a row, bit() of negative and fractional values.
+        ("glyphs", "ch = 32 + floor(px/5) + floor((31 - py)/8)*25\nhsv(ch/95, 1, glyph(ch, px % 5, (31 - py) % 8))", 0, 0xe1d356e86e222963),
+        ("glyphs-small", "ch = 32 + floor(px/4) + floor((31 - py)/6)*32\nhsv(ch/95, 0.5, glyph(ch, px % 4 - 0.5, (31 - py) % 6 + 0.75, small))", 0, 0x34cfed23cec69500),
+        ("digits", "rgb(digit(floor(px/5) % 12 - 1, px % 5, 31 - py), digit(floor(px/4) % 12 - 1, px % 4 - 1, 24 - py, small), bit(px, py % 8))", 0, 0xa7bad8a015931c40),
+        ("digit-levels", "frame { d = second % 10 }\nr = 31 - py\nrgb(digit(d, 2, r), glyph('A', 1, r - 8)*0.5 + digit(7, 1, 1)*0.25, glyph(':', px % 5, r - 16, small))", 0, 0x1f18467e4e514c89),
+        ("digits-bold", "rgb(digit(floor(px/5) % 12 - 1, px % 5 - 1, (31 - py) % 7 - 1, bold), digit(second % 10, floor(px/8) % 4, floor((31 - py)/6), bold), 0.2)", 0, 0x19904e2c8f6ffcab),
+        ("bits", "gray(bit(px*258 - 16000, floor(py/2) - 1) + bit(-px - 0.5, py)*0.5 + bit(t*1000, 3)*0.25)", 1500, 0xab556034d27ca745),
     ];
 
     /// The picture the [`OVER`] frames are drawn over: every byte value in
@@ -283,6 +292,26 @@ pub mod worst {
         format!("gray({s})")
     }
 
+    /// [`nested`] through `digit(…, 0, 0)` (a three-value call with its own
+    /// parser, `glyph_args`) instead of `sin(…)`, to the depth cap.
+    pub fn nested_digit() -> String {
+        let mut s = String::from("tme");
+        let mut k = 0;
+        while crate::compile(&format!("gray({s})"))
+            .is_err_and(|e| e.msg.starts_with("unknown name"))
+        {
+            s = format!("digit({s}, 0, 0)");
+            k += 1;
+            if k > 64 {
+                break;
+            }
+        }
+        // One less: the deepest that still reaches the name.
+        s = s.replacen("digit(", "", 1);
+        s.truncate(s.len() - ", 0, 0)".len());
+        format!("gray({s})")
+    }
+
     /// Parts inside parts, each drawn in a layer at another place, as deep
     /// as the cap allows, with a misspelt name at the bottom.
     pub fn parts_in_layers() -> String {
@@ -305,12 +334,13 @@ pub mod worst {
     /// A named generator.
     pub type Case = (&'static str, fn() -> String);
 
-    pub const ALL: [Case; 6] = [
+    pub const ALL: [Case; 7] = [
         ("many locals", many_locals),
         ("chain", chain),
         ("distinct terms", distinct),
         ("parts", parts),
         ("nested", nested),
+        ("nested digit", nested_digit),
         ("parts in layers", parts_in_layers),
     ];
 }

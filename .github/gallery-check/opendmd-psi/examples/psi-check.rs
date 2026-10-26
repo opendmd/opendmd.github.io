@@ -18,7 +18,9 @@
 //! doesn't compile.
 
 use opendmd_psi::golden::fnv;
-use opendmd_psi::{compile, q16, render_rows, Inputs, Scratch, H, MAX_OPS, OWN, REGS, W};
+use opendmd_psi::{
+    compile, q16, render_rows, Inputs, Scratch, H, MAX_OPS, MAX_SCALARS, OWN, REGS, W,
+};
 use std::io::Read;
 
 fn main() {
@@ -116,11 +118,12 @@ fn main() {
     .map(|e| e.1)
     .collect();
     println!(
-        "ok: {} of {MAX_OPS} steps (per frame {f}, per row {r}, per pixel {x}), {} layer{}, {} of {REGS} registers",
+        "ok: {} of {MAX_OPS} steps (per frame {f}, per row {r}, per pixel {x}), {} layer{}, {} of {REGS} registers, {} of {MAX_SCALARS} values",
         prog.len(),
         prog.layers(),
         if prog.layers() == 1 { "" } else { "s" },
-        prog.regs()
+        prog.regs(),
+        prog.values()
     );
     println!(
         "loop {} s; reads {}",

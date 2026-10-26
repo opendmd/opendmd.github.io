@@ -1,18 +1,73 @@
-//! The tables Psi reads: the sine and the palettes (lent by the caller, see
-//! [`Tables`]), and its own arctangent.
+//! The tables Psi reads: the sine, the palettes and the panel's fonts
+//! (lent by the caller, see [`Tables`]), and its own arctangent.
 //!
 //! All `static`, built at compile time by `const fn`s (f64 maths in const
 //! eval), so on the device they are in DROM like `opendmd_core::fx`'s.
 
 /// What a frame reads besides the program: the Q14 sine (256 entries, a
-/// turn) and the five 32-entry palettes, in `opendmd_core::fx::Palette`
-/// order (fire, ice, chrono, amber, rainbow). opendmd-core lends its own
-/// (`fx::SIN`, `fx::PALETTES`) so the firmware holds one copy; with the
-/// `tables` feature Psi has identical ones of its own ([`OWN`]).
+/// turn), the five 32-entry palettes, in `opendmd_core::fx::Palette`
+/// order (fire, ice, chrono, amber, rainbow), and the panel's fonts
+/// (`digit`, `glyph`): `opendmd_core::text`'s misc-fixed 4x6 (`small`) and
+/// 5x7 (`normal`), printable ASCII 32..=126, and the bold 3 × 5 digits
+/// (`bold`, 0..9 only), a byte a row, the most significant bit leftmost.
+/// opendmd-core lends its own (`fx::SIN`, `fx::PALETTES`, `fonts.rs`'s
+/// `FONT_4X6`/`FONT_5X7`/`FONT_BOLD`) so the firmware holds one
+/// copy; with the `tables` feature Psi has identical ones of its own
+/// ([`OWN`]; the fonts are core's very file, `include!`d).
 #[derive(Clone, Copy)]
 pub struct Tables<'a> {
     pub sin: &'a [i16; 256],
     pub palettes: [&'a [[u8; 3]; 32]; 5],
+    pub small: &'a [[u8; 6]; 95],
+    pub normal: &'a [[u8; 7]; 95],
+    pub bold: &'a [[u8; 5]; 10],
+}
+
+/// The fonts, as [`Tables::glyphs`] takes them.
+pub const NORMAL: u8 = 0;
+pub const SMALL: u8 = 1;
+/// Digits only.
+pub const BOLD: u8 = 2;
+
+/// A font as the glyph step reads it (see [`crate::fixed::glyph`]): `rows`
+/// glyph after glyph, `h` bytes each, `w` columns wide; a character `c` is
+/// glyph `c + off`, when `lo <= c < lo + n`.
+#[derive(Clone, Copy)]
+pub struct Glyphs<'a> {
+    pub rows: &'a [u8],
+    pub w: u32,
+    pub h: u32,
+    pub lo: i32,
+    pub n: u32,
+    pub off: i32,
+}
+
+impl<'a> Tables<'a> {
+    /// The font for `digit` (`n` 0..9 is the glyph of `'0' + n`) or
+    /// `glyph` (a character code, 32..126): [`NORMAL`] (a 5 × 7 cell),
+    /// [`SMALL`] (4 × 6) or [`BOLD`] (4 × 6, the digits 3 × 5; its table
+    /// is digits alone, so it is always `digit`'s).
+    pub fn glyphs(&self, font: u8, digit: bool) -> Glyphs<'a> {
+        let (rows, w, h) = match font {
+            NORMAL => (self.normal.as_flattened(), 5, 7),
+            SMALL => (self.small.as_flattened(), 4, 6),
+            // Five rows in the table: the sixth (the gap) is outside it.
+            _ => (self.bold.as_flattened(), 4, 5),
+        };
+        let (lo, n, off) = match (font, digit) {
+            (BOLD, _) => (0, 10, 0),
+            (_, true) => (0, 10, 16),
+            _ => (32, 95, -32),
+        };
+        Glyphs {
+            rows,
+            w,
+            h,
+            lo,
+            n,
+            off,
+        }
+    }
 }
 
 /// Psi's own copies of core's tables (the `tables` feature).
@@ -26,7 +81,17 @@ pub static OWN: Tables<'static> = Tables {
         &PALETTES[3],
         &PALETTES[4],
     ],
+    small: &FONT_4X6,
+    normal: &FONT_5X7,
+    bold: &FONT_BOLD,
 };
+
+#[cfg(feature = "tables")]
+mod fonts {
+    include!("../../opendmd-core/src/fonts.rs");
+}
+#[cfg(feature = "tables")]
+pub use fonts::{FONT_4X6, FONT_5X7, FONT_BOLD};
 
 const PI: f64 = core::f64::consts::PI;
 #[cfg(feature = "tables")]

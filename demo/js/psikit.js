@@ -36,10 +36,11 @@ export const TIP = (i) => `${i[0]} steps, about ${(i[6] / 1000).toFixed(1)} ms a
 // escaped text) and where its numbers are.
 export function marks(s, bad) {
   const toks = [], cls = new Array(s.length).fill('');
-  for (const m of s.matchAll(/(--|\/\/).*|[A-Za-z_]\w*|\d+\.?\d*|\.\d+/g)) {
-    const k = m[1] ? 'c' : /[\d.]/.test(m[0][0]) ? 'n' : '';
+  for (const m of s.matchAll(/(--|\/\/).*|'[ -~]'|[A-Za-z_]\w*|\d+\.?\d*|\.\d+/g)) {
+    const k = m[1] ? 'c' : /[\d.']/.test(m[0][0]) ? 'n' : '';
     let a = m.index;
-    if (k === 'n') {
+    // A character in quotes ('A') is a number, but not one to drag.
+    if (k === 'n' && m[0][0] !== "'") {
       // `-2` after an operator, a bracket or the start of a line is one number.
       if (s[a - 1] === '-' && /[-(,=*/+?:<>!%;\n]|^$/.test(s.slice(0, a - 1).trimEnd().slice(-1))) a--;
       toks.push({ s: a, e: m.index + m[0].length });

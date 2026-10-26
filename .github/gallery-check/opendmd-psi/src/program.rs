@@ -3,6 +3,19 @@
 //! allocation ([`Program::zeroed_in_place`]).
 
 use crate::fixed::{self, ONE};
+use crate::tables::{Glyphs, Tables};
+
+/// The font a glyph step (`code::DIGIT..=DIGIT_B`) reads.
+#[inline]
+pub(crate) fn glyphs<'a>(t: &Tables<'a>, c: u8) -> Glyphs<'a> {
+    use crate::tables::{BOLD, NORMAL, SMALL};
+    let font = match c {
+        code::DIGIT | code::GLYPH => NORMAL,
+        code::DIGIT_S | code::GLYPH_S => SMALL,
+        _ => BOLD,
+    };
+    t.glyphs(font, c != code::GLYPH && c != code::GLYPH_S)
+}
 
 /// The panel the VM draws: 128 × 32.
 pub const W: usize = 128;
@@ -64,7 +77,8 @@ pub(crate) mod code {
     pub const ATAN2: u8 = 17;
     pub const HASH: u8 = 18;
     pub const LEN: u8 = 19;
-    pub const LAST_BIN: u8 = 19;
+    pub const BIT: u8 = 20;
+    pub const LAST_BIN: u8 = 20;
     // unary
     pub const NEG: u8 = 32;
     pub const NOT: u8 = 33;
@@ -85,7 +99,16 @@ pub(crate) mod code {
     pub const MIX: u8 = 66;
     pub const SMOOTH: u8 = 67;
     pub const NOISE: u8 = 68;
-    pub const LAST_TERN: u8 = 68;
+    // a font's pixel: `digit(n, x, y)`, `glyph(c, x, y)`, in the normal
+    // font (5 × 7) and the small one (4 × 6); a table, like sin, so not
+    // folded
+    pub const DIGIT: u8 = 69;
+    pub const GLYPH: u8 = 70;
+    pub const DIGIT_S: u8 = 71;
+    pub const GLYPH_S: u8 = 72;
+    // the bold digits (`digit(n, x, y, bold)`; no glyph of them)
+    pub const DIGIT_B: u8 = 73;
+    pub const LAST_TERN: u8 = 73;
     // nullary, per pixel: the picture under the formula (its red, green,
     // blue, luminance), 0..1
     pub const U_R: u8 = 80;
@@ -103,6 +126,12 @@ pub(crate) mod code {
     /// `BLEND_*`), with a coverage operand (`d` for rgb and hsv, `b` for
     /// pal and gray).
     pub const OUT_LAYER: u8 = 100;
+
+    /// A step that reads a table (the sine, a font): never folded, run once
+    /// a frame when its operands are constants.
+    pub fn is_table(c: u8) -> bool {
+        matches!(c, SIN | COS | DIGIT..=DIGIT_B)
+    }
 
     /// A step that writes pixels rather than a value.
     pub fn is_colour(c: u8) -> bool {
@@ -155,15 +184,26 @@ pub(crate) mod code {
 
     /// The step's name, for listings.
     pub fn name(c: u8) -> &'static str {
-        const N: [&str; 20] = [
+        const N: [&str; 21] = [
             "add", "sub", "mul", "div", "mod", "mask", "lt", "le", "gt", "ge", "eq", "ne", "and",
-            "or", "min", "max", "step", "atan2", "hash", "len",
+            "or", "min", "max", "step", "atan2", "hash", "len", "bit",
         ];
         const U: [&str; 12] = [
             "neg", "not", "abs", "floor", "frac", "sin", "cos", "tri", "saw", "sqr", "sqrt",
             "recip",
         ];
-        const T: [&str; 5] = ["select", "clamp", "mix", "smooth", "noise"];
+        const T: [&str; 10] = [
+            "select",
+            "clamp",
+            "mix",
+            "smooth",
+            "noise",
+            "digit",
+            "glyph",
+            "digit_small",
+            "glyph_small",
+            "digit_bold",
+        ];
         match c {
             0..=LAST_BIN => N[c as usize],
             32..=LAST_UN => U[(c - 32) as usize],
@@ -285,6 +325,13 @@ impl Program {
         self.uses & (BACKDROP | UNDER) != 0
     }
 
+    /// Scalar slots in use (≤ [`MAX_SCALARS`]): the inputs, the constants
+    /// and the per-frame and per-row values — the "values" a formula may
+    /// have ~119 of besides the inputs.
+    pub fn values(&self) -> usize {
+        self.n_scalars as usize
+    }
+
     /// Lane registers the pixel steps use (≤ [`REGS`]).
     pub fn regs(&self) -> usize {
         self.regs as usize
@@ -332,6 +379,7 @@ impl Program {
             .iter()
             .map(|op| match op.code {
                 ADD | SUB | LT | LE | GT | GE | EQ | NE | AND | OR | MIN | MAX | STEP | MASK => 50,
+                BIT => 55,
                 MUL => 86,
                 MOD => 113,
                 DIV | RECIP => 685,
@@ -346,6 +394,7 @@ impl Program {
                 MIX => 130,
                 SMOOTH => 214,
                 NOISE => 855,
+                DIGIT..=DIGIT_B => 100,
                 U_R | U_G | U_B => 35,
                 U_L => 125,
                 c if is_colour(c) => {
@@ -455,10 +504,11 @@ impl Program {
 }
 
 /// The scalar evaluation of one arithmetic op: the per-frame and per-row
-/// steps, and the constant folder (which never asks for `sin`/`cos`, the
-/// only ops that need a table, hence the closure).
-#[inline]
-pub(crate) fn eval(c: u8, a: i32, b: i32, x: i32, sin: impl Fn(i32) -> i32) -> i32 {
+/// steps, and the constant folder (which never asks for the steps that read
+/// a table, [`code::is_table`], hence the `Option`: `None` there). Out of
+/// line: one copy for both (inlined, the ESP32 build carried two, 2.4 KB).
+#[inline(never)]
+pub(crate) fn eval(c: u8, a: i32, b: i32, x: i32, t: Option<&Tables>) -> i32 {
     use code::*;
     match c {
         ADD => fixed::add(a, b),
@@ -481,13 +531,14 @@ pub(crate) fn eval(c: u8, a: i32, b: i32, x: i32, sin: impl Fn(i32) -> i32) -> i
         ATAN2 => fixed::atan2(a, b),
         HASH => fixed::hash(a, b),
         LEN => fixed::len(a, b),
+        BIT => fixed::bit(a, b),
         NEG => fixed::neg(a),
         NOT => fixed::not(a),
         ABS => fixed::abs(a),
         FLOOR => fixed::floor(a),
         FRAC => fixed::frac(a),
-        SIN => sin(a),
-        COS => sin(a.wrapping_add(ONE / 4)),
+        SIN => t.map_or(0, |t| fixed::sin(t, a)),
+        COS => t.map_or(0, |t| fixed::cos(t, a)),
         TRI => fixed::tri(a),
         SAW => fixed::saw(a),
         SQR => fixed::sqr(a),
@@ -498,6 +549,7 @@ pub(crate) fn eval(c: u8, a: i32, b: i32, x: i32, sin: impl Fn(i32) -> i32) -> i
         MIX => fixed::mix(a, b, x),
         SMOOTH => fixed::smooth(a, b, x),
         NOISE => fixed::noise(a, b, x),
+        DIGIT..=DIGIT_B => t.map_or(0, |t| fixed::glyph(&glyphs(t, c), a, b, x)),
         _ => 0,
     }
 }

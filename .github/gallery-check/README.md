@@ -6,7 +6,7 @@ repository and checks the formulas it adds to `gallery/`.
 to `main`, with the gallery's page regenerated from `gallery/`, so a merged
 formula is live within minutes. Everything under `.github/` here (the
 workflows, `CODEOWNERS`, this file, the checker's source in `opendmd-psi/`
-and `opendmd-gallery/`, and the gallery page's generator in
+and `opendmd-gallery/`, the panel's fonts in `opendmd-core/src/fonts.rs`, and the gallery page's generator in
 `tools/gallery_page.py`) is installed by OpenDMD's `tools/site-publish.sh`
 from the main repository (`site/public-repo/`, `tools/`): change it there.
 
