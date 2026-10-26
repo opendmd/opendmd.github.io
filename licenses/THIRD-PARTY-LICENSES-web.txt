@@ -15,11 +15,12 @@ Silkscreen (the headings' font, a subset): OFL-1.1 [1]
   Jason Kottke's pixel font, fonts/silkscreen.woff2 (also inlined in the
   firmware's setup page).
 
-Game title lists (art/*.json): credit, no licence text
+Game title lists (the site's art-index/): credit, no licence text
   https://github.com/libretro-thumbnails
   The game names Create Art searches are taken from the file names of the
-  libretro-thumbnails collections, which publish no licence; the pictures
-  themselves are fetched from there at the user's request and never bundled.
+  libretro-thumbnails collections, which publish no licence; the web app
+  fetches them from the project site when you search, and the pictures from
+  those collections. Neither is bundled.
 
 Rust standard library: Apache-2.0 [13]
   https://github.com/rust-lang/rust

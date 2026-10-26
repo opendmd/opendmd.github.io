@@ -25,9 +25,9 @@
 // what the user sees before saving.
 //
 // Find's web sources are js/find.js' (Game art: a name index per platform
-// on the card, pictures from libretro-thumbnails; GifCities); a click on a
-// result loads it. The Library's "Search the web" hands its words over as
-// `app.artFind`. Nothing here says where anything is stored.
+// from the project site, pictures from libretro-thumbnails; GifCities); a
+// click on a result loads it. The Library's "Search the web" hands its words
+// over as `app.artFind`. Nothing here says where anything is stored.
 //
 // Smooth motion (js/smooth.js, imported when the switch is first used or a
 // listed GIF is opened): the switch beside speed and reverse analyses what

@@ -12,12 +12,15 @@
 // a plain GET). The GIFs themselves come from blob.gifcities.org, which lets
 // pages read them; web.archive.org does not. Results are unfiltered.
 //
-// Game art: a name index per platform on the card (art/<PLATFORM>.json, from
-// tools/art-index.py), pictures from the libretro-thumbnails repositories on
-// raw.githubusercontent.com, which lets pages read them.
+// Game art: a name index per platform, published on the project site
+// (art-index/v1/<PLATFORM>.json, from tools/art-index.py; not in the www
+// pack: the feature needs the internet anyway), fetched on the first search
+// of that platform and kept for the session; pictures from the
+// libretro-thumbnails repositories on raw.githubusercontent.com, which lets
+// pages read them.
 
 import { app } from './state.js';
-import { h, clear } from './util.js';
+import { h, clear, SITE } from './util.js';
 import { art as artModule } from './artmod.js';
 
 const GC_API = 'https://gifcities.archive.org/api/v1/gifsearch';
@@ -25,6 +28,9 @@ const GC_BLOB = 'https://blob.gifcities.org/gifcities/';
 const GC_LIMIT = 300;
 export const PLATFORMS = ['MD', 'SNES', 'GB', 'GBC', 'GBA', 'SATURN', 'NDS', 'NES', 'SMS', 'PCE', 'PS1', 'N64', 'ARCADE'];
 const RAW = 'https://raw.githubusercontent.com/libretro-thumbnails/';
+// The index's format is in its address: a web app asks for the version it
+// reads (tools/site.py ART_INDEX_FORMATS; a new shape is a new version).
+const ART_INDEX = 'art-index/v1/';
 const KINDS = [[1, 'Named_Titles', 'Title screen'], [2, 'Named_Snaps', 'In the game'], [4, 'Named_Boxarts', 'Box'], [8, 'Named_Logos', 'Logo']];
 
 // --- Game art -----------------------------------------------------------------
@@ -42,12 +48,22 @@ export async function thumb(url, hops = 3) {
   return b;
 }
 
+// Where the index is: the site, from a player (GitHub Pages answers with
+// `Access-Control-Allow-Origin: *`); beside the demo, same-origin, when this
+// page is the site's demo.
+export const artIndexBase = () => (app.demo || location.origin === new URL(SITE).origin
+  ? new URL('../' + ART_INDEX, location.href).href : SITE + ART_INDEX);
+
+// A platform's index, fetched once a session (a failure is forgotten, so
+// Try again fetches anew). The browser's HTTP cache keeps it between
+// visits as the site's headers allow (Pages: 10 minutes, then revalidated).
 const indexes = new Map();
 function index(p) {
   if (!indexes.has(p)) {
-    indexes.set(p, Promise.all([artModule(), fetch(`./art/${p}.json`)]).then(async ([art, r]) => {
+    indexes.set(p, Promise.all([artModule(), fetch(artIndexBase() + `${p}.json`)]).then(async ([art, r]) => {
       if (!r.ok) throw new Error(r.status);
       const d = await r.json();
+      if (!Array.isArray(d.names) || typeof d.kinds !== 'string') throw new Error('not an art index');
       d.norm = d.names.map((n) => app.wasm.normalizeTitle(art.cleanGameName(n)));
       return d;
     }).catch((e) => { indexes.delete(p); throw e; }));
@@ -122,7 +138,7 @@ export const sources = [
         || (o.shape === 'wide' ? x.w >= 2 * x.h : x.w < 2 * x.h && x.h < 2 * x.w)));
       return out.sort(o.sort === 'size' ? (a, b) => b.w * b.h - a.w * a.h : (a, b) => b.rank - a.rank);
     },
-    fail: 'GifCities didn’t answer. Try again in a moment',
+    fail: 'GifCities didn’t answer',
     caption: () => ['From the Internet Archive’s GeoCities collection. Results are unfiltered. ', h('a', { href: 'https://gifcities.org/', target: '_blank', rel: 'noopener' }, 'gifcities.org')],
   },
   {
@@ -137,7 +153,7 @@ export const sources = [
       { id: 'platform', type: 'select', value: PLATFORMS[0], search: true, label: 'Platform',
         items: async () => { const art = await artModule(); return PLATFORMS.map((p) => [p, art.consoleName(p) || p]); } },
     ],
-    fail: 'The game list could not be loaded',
+    fail: 'Game art needs the internet: the list of games couldn’t be reached',
     caption: () => ['Title screens, in-game shots, boxes and logos from the ', h('a', { href: 'https://github.com/libretro-thumbnails', target: '_blank', rel: 'noopener' }, 'libretro-thumbnails'), ' collections'],
   },
 ];
@@ -231,7 +247,7 @@ export function mountResults(el, { onPick, narrow }) {
       status.textContent = hits.length ? '' : `Nothing found for “${q}”`;
     } catch {
       if (t !== tok) return;
-      status.textContent = src.fail;
+      clear(status, src.fail + ' ', h('button.sm', { id: 'find-retry', onclick: run }, 'Try again'));
     }
     show();
   }
