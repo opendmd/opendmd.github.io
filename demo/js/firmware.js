@@ -2,7 +2,8 @@
 // first open; its own size line). Firmware: the running version (GET
 // /api/firmware), the updater's log behind "Update log", and "Update from
 // file…": a signed bundle (.odfw, docs/ota.md) checked here for its header
-// (an older version than the running one asks again: `older`), PUT with
+// (the other board's is refused; an older version than the running one asks
+// again: `older`), PUT with
 // progress, then /api/status polled until the player is back on the new
 // version; "Check for updates" is js/update.js, which reuses both. Security:
 // the optional API key (docs/api.md "Security"), made here, shown once.
@@ -62,11 +63,14 @@ export const put = (path, body, progress) => new Promise((res, rej) => {
   x.send(body);
 });
 
+export const board = (v) => ({ '4mb': 'DevKit (4 MB)', '8mb': 'OpenDMD board (8 MB)' })[v] || v;
+const td = new TextDecoder();
+
+// A bundle's flash layout (its magic), or null.
+export const fwVariant = (b) => b.length >= 140 && { 'ODFW1\0\0\0': '4mb', ODFW18mb: '8mb' }[td.decode(b.subarray(0, 8))] || null;
+
 // The bundle's version from its 140-byte header, or null if it is not one.
-export function fwHead(b) {
-  const td = new TextDecoder();
-  return b.length >= 140 && td.decode(b.subarray(0, 5)) === 'ODFW1' ? td.decode(b.subarray(8, 40)).replace(/\0+$/, '') : null;
-}
+export const fwHead = (b) => fwVariant(b) && td.decode(b.subarray(8, 40)).replace(/\0+$/, '');
 
 export async function sendFw(file, progress) {
   const { s, why } = await put('/api/firmware', file, progress);
@@ -102,12 +106,15 @@ export function fwCards(fw, sec) {
   const chk = h('button', { id: 'fw-check', onclick: () => import('./update.js').then((m) => m.check(ui)) }, 'Check for updates');
   const logText = h('div.log', { id: 'fw-log-text', style: 'white-space:pre-wrap' });
   const log = h('details', { id: 'fw-log', hidden: true }, h('summary', 'Update log'), logText);
-  let running = null;
+  let running = null, variant = null;
   async function load() {
     try {
       const f = await app.src.json('GET', '/api/firmware');
       running = f.version;
-      clear(facts, fact('Version', f.version), fact('Build', f.build), fact('Waiting to install', f.pending), fact('Last update', f.last));
+      variant = f.variant;
+      clear(facts, fact('Version', f.version), fact('Board', board(variant)),
+        variant === '4mb' && f.flash_size >= 8 << 20 && fact('Note', 'This board has 8 MB: install the OpenDMD board firmware over USB for more room'),
+        fact('Build', f.build), fact('Waiting to install', f.pending), fact('Last update', f.last));
       logText.textContent = f.log || '';
       log.hidden = !f.log;
     } catch (e) { clear(facts, fact('Version', 'unknown: ' + e.message)); }
@@ -116,8 +123,9 @@ export function fwCards(fw, sec) {
     const f = file.files[0];
     file.value = '';
     if (!f) return;
-    const v = fwHead(new Uint8Array(await f.slice(0, 140).arrayBuffer()));
+    const head = new Uint8Array(await f.slice(0, 140).arrayBuffer()), v = fwHead(head), b = board(variant);
     if (!v) return say('This is not an OpenDMD firmware file (.odfw)', 1);
+    if (variant && fwVariant(head) !== variant) return say(`This file is for the ${board(fwVariant(head))}, and this player runs the ${b} firmware. Use the ${b} update file`, 1);
     const ask = running && older(v, running) ? `Firmware ${v}: this is older than the firmware on the panel (${running}). Install it anyway?`
       : `Install firmware ${v}?`;
     if (!confirm(`${ask} The panel goes dark for about a minute.`)) return;

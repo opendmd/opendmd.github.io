@@ -574,6 +574,10 @@ struct Dag {
     /// formula quadratic (~0.2-0.35 ms on the host, tens of ms on the
     /// ESP32, per live edit).
     index: Vec<Id>,
+    /// The multiplies that per-pixel divisions by a constant became, as
+    /// (the multiply, the dividend, the divisor): a `floor` of one is
+    /// rebuilt with 1/k rounded up ([`fixed::recip_up`]).
+    divs: Vec<(Id, Id, i32)>,
 }
 
 /// Index slots: a power of two, twice [`MAX_NODES`] (4 KB, freed with the
@@ -726,10 +730,27 @@ impl Dag {
             }
             (code::ADD, Some(0), _) | (code::MUL, Some(ONE), _) => return Ok(b),
             (code::MUL, Some(0), _) | (code::MUL, _, Some(0)) => return self.constant(0, at),
-            // x / k: x · (1/k), exact for powers of two.
-            (code::DIV, None, Some(k)) if k != 0 => {
+            // x / k, x per pixel: x · (1/k), exact for powers of two. Once a
+            // frame or a row it stays a true division (exact, and it costs
+            // nothing per pixel), so `floor(minute/10)` is 5 at 50.
+            (code::DIV, None, Some(k)) if k != 0 && self.level(a) == LV_PIXEL => {
                 let r = self.constant(fixed::recip(k), at)?;
-                return self.op(code::MUL, [a, r, 0], at);
+                let m = self.op(code::MUL, [a, r, 0], at)?;
+                if self.konst(m).is_none() && !self.divs.iter().any(|d| d.0 == m) {
+                    self.divs.push((m, a, k));
+                }
+                return Ok(m);
+            }
+            // floor(x / k) per pixel: 1/k rounded up instead, so a whole
+            // number over a whole number that divides it floors to exactly
+            // that (rounded down, floor(px/10) was 1 at px = 20).
+            (code::FLOOR, None, _) if self.divs.iter().any(|d| d.0 == a) => {
+                let &(_, x, k) = self.divs.iter().find(|d| d.0 == a).unwrap();
+                let r = self.constant(fixed::recip_up(k), at)?;
+                let m = self.op(code::MUL, [x, r, 0], at)?;
+                if m != a {
+                    return self.op(code::FLOOR, [m, 0, 0], at);
+                }
             }
             // x / s, s per frame or per row: one division there, a multiply
             // per pixel.
@@ -2026,6 +2047,7 @@ fn compile_inner(src: &str, prog: &mut Program) -> Result<Info, Error> {
         dag: Dag {
             nodes: Vec::with_capacity(64),
             index: alloc::vec![NO; SLOTS],
+            divs: Vec::new(),
         },
         locals: Vec::new(),
         depth: 0,

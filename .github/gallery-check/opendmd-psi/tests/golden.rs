@@ -389,3 +389,52 @@ fn op_cap_is_a_friendly_error() {
     let e = compile(&src).unwrap_err();
     assert!(e.msg.contains("too long for the panel"), "{}", e.msg);
 }
+
+/// Division by a constant (2026-10-26): once a frame or a row it is a true
+/// division, so `floor(minute/10)` is 5 at 50..59 and `floor(hour/10)` 2 at
+/// 20..23 (it used to be a multiply by 1/10 rounded down: 20/10 came out
+/// 1.99998); per pixel it is a multiply by 1/k rounded up, exact under
+/// `floor` for whole numbers n with n·k < 65,536 (px, py, and i for k ≤ 16).
+#[test]
+fn division_by_a_constant_floors_whole_numbers_right() {
+    use opendmd_psi::Inputs;
+    let decode = |f: &[u8], at: usize| f[at * 3] as u32 + 256 * f[at * 3 + 1] as u32;
+    for k in [10u32, 60, 3, 7, 12] {
+        // Once a frame: n = hour·3600 + minute·60 + second, 0..=3600.
+        let src = format!(
+            "frame {{ n = hour*3600 + minute*60 + second; q = floor(n/{k}) }}\nrgb((q % 256)/255, floor(q/256)/255, n/{k} == q)"
+        );
+        let p = compile(&src).unwrap_or_else(|e| panic!("{}", e.render(&src)));
+        let mut s = Scratch::<128>::new();
+        let mut out = vec![0u8; W * H * 3];
+        for n in 0..=3600u32 {
+            let inp = Inputs {
+                t: 0,
+                hour: (n / 3600) as u8,
+                minute: (n % 3600 / 60) as u8,
+                second: (n % 60) as u8,
+                a: 0,
+                b: 0,
+                c: 0,
+            };
+            render_with::<128>(&p, &mut s, &inp, &OWN, &mut out);
+            assert_eq!(decode(&out, 0), n / k, "floor({n}/{k}) once a frame");
+            assert_eq!(out[2] == 255, n % k == 0, "{n}/{k} exact once a frame");
+        }
+        // Per pixel: n = i, 0..4095 (k = 60: px, 0..127).
+        let (n_src, top) = if k == 60 { ("px", 127) } else { ("i", 4095) };
+        let src = format!("q = floor({n_src}/{k})\nrgb((q % 256)/255, floor(q/256)/255, 0)");
+        let p = compile(&src).unwrap_or_else(|e| panic!("{}", e.render(&src)));
+        render_with::<128>(&p, &mut s, &inputs(0), &OWN, &mut out);
+        for at in 0..W * H {
+            let n = if k == 60 { (at % W) as u32 } else { at as u32 };
+            assert!(n <= top);
+            assert_eq!(
+                decode(&out, at),
+                n / k,
+                "floor({n}/{k}) per pixel (rgb {:?})",
+                &out[at * 3..at * 3 + 3]
+            );
+        }
+    }
+}

@@ -51,6 +51,31 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
   const facts = h('dl.facts', { id: 'st-facts' });
   // One quiet line, only when the card has had trouble (sdhealth on the device).
   const cardNote = h('p.cap', { id: 'st-card-note', hidden: true, style: 'margin-top:12px' });
+  // Card speed (card_speed): Safe (20 MHz) by default; Fast (40 MHz) drops a
+  // card with errors to Safe by itself, then one plain line and "Try Fast
+  // again". `full` (never slows) is API-only: no option, its own caption.
+  const csH = h('h3', 'Card speed'), csRun = saver(csH), csCap = h('p.cap', { id: 'st-cs-cap' });
+  const csSel = h('select', { id: 'st-card-speed', onchange: () => csRun(async () => {
+    const r = await app.src.putConfig({ card_speed: csSel.value });
+    await app.refreshConfig(); csSay(); csDone(r.card_speed_applied);
+  }) }, [['safe', 'Safe (recommended)'], ['fast', 'Fast']].map(([v, l]) => h('option', { value: v }, l)));
+  const csSlow = h('p.cap', { id: 'st-card-slow', hidden: true }, 'This card had errors at Fast, so it runs at Safe now. Playback is unaffected. ',
+    h('button.sm', { id: 'st-card-full', onclick: fullSpeed }, 'Try Fast again'));
+  const csSay = () => {
+    const v = csSel.value = app.config.card_speed || 'safe';
+    csCap.className = 'cap' + (v == 'full' ? ' bad' : '');
+    csCap.textContent = { safe: 'Plenty fast for every GIF, and safe on every card.',
+      fast: 'Faster card reads. Some cards return wrong data at this speed without an error; use Safe if GIFs look damaged.',
+      full: 'Full speed, set through the API: never slows down, even after errors.' }[v];
+  };
+  // "restart": the clock could not change in place, so the player restarts.
+  const csDone = async (a) => a == 'restart' ? waitForBoot(toast) : renderFacts(await app.refreshStatus());
+  async function fullSpeed() {
+    try {
+      const r = await app.src.json('POST', '/api/card/full-speed');
+      toast(r.rebooting ? 'restarting…' : 'Fast again', 'ok'); csDone(r.applied);
+    } catch (e) { toast('Fast: ' + e.message, 'bad'); }
+  }
   // Where and what this player is: its address, its firmware and this page's version; the API reference
   // (on the site, see apiDoc) and the third-party licences (licenses.txt, from licenses/ by make web).
   const about = h('dl.facts', { id: 'st-about' });
@@ -79,6 +104,7 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
     h('div.row', { style: 'margin-top:12px' },
       h('button', { id: 'st-reindex', title: 'Read the playlist and the card again (after changing the card elsewhere)', onclick: reindex }, 'Reload playlist'),
       h('button', { id: 'st-reboot-btn', onclick: reboot }, 'Reboot'))),
+    h('div.grp', { id: 'st-cs', hidden: c.card_speed == null }, csH, h('div.form.f2', h('label.stack', 'Speed', csSel)), csCap, csSlow),
     h('div.grp', { id: 'pc' }, pcH,
       note('Prepared copies play with less memory and start faster', 'Originals stay as they are.'),
       h('div.row.sp', h('span', cacheLine), cacheBtn),
@@ -100,7 +126,8 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
     const fact = (k, v, bad) => [h('dt', k), h('dd' + (bad ? '.bad' : ''), v)], m = s.misses, sd = s.sd;
     clear(facts,
       fact('Playlist', `${playlistLabel(s.manifest || setPath(app.config?.set))} · ${s.entries.toLocaleString()} GIFs` + (s.index_state === 'building' ? ' · updating…' : '')),
-      fact('Card', !sd.mounted ? 'Not mounted' : sd.formatting ? 'Formatting…' : sd.readable === false ? 'Not readable: needs FAT32' : bytes(sd.capacity_bytes), sd.readable === false || !sd.mounted),
+      fact('Card', !sd.mounted ? 'Not mounted' : sd.formatting ? 'Formatting…' : sd.readable === false ? 'Not readable: needs FAT32'
+        : bytes(sd.capacity_bytes) + (sd.clock_khz ? sd.clock_khz < 4e4 ? ' · Safe speed' : ' · Fast speed' : ''), sd.readable === false || !sd.mounted),
       fact('Running for', uptime(s.uptime_secs)),
       fact('Free memory', `${bytes(s.heap.free)} · lowest ${bytes(s.heap.floor)}`, s.heap.floor < 20000),
       [h('dt', 'Late frames'), h('dd', { id: 'st-late', title: m?.threshold_ms === undefined ? '' : `Frames ${m.threshold_ms} ms or more late. GIF changes: the new GIF's first frame, its transition and its first ${m.window_ms / 1000} s` }, late(m, s.deadline_misses))],
@@ -112,9 +139,9 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
       fact('API', h('a', { id: 'st-api', href: apiDoc(s), target: '_blank', rel: 'noopener' }, 'API reference')),
       fact('Licences', h('a', { id: 'st-licences', href: './licenses.txt', target: '_blank', rel: 'noopener' }, 'Open-source licences')));
     const errs = sd.failures || (!sd.mounted && sd.reboots) || 0;
-    cardNote.textContent = errs ? `Card errors: ${errs}, retrying`
-      : sd.fallback ? 'Card running at reduced speed after errors' : '';
-    cardNote.hidden = !cardNote.textContent;
+    cardNote.textContent = errs ? `Card errors: ${errs}, retrying` : '';
+    cardNote.hidden = !errs;
+    csSlow.hidden = !(sd.mounted && sd.fallback && app.config.card_speed == 'fast');
   }
   on('status', renderFacts);
 
@@ -234,7 +261,7 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
     if (!j.running && j.phase !== 'idle') loadCache();
   }
   on('prepare', renderJob);
-  const show = () => { renderFacts(app.status); renderJob(prep.job); loadCache(); };
+  const show = () => { csSay(); renderFacts(app.status); renderJob(prep.job); loadCache(); };
   show();
   // Leaving the tab: no more cache polls, and a panel test in progress ends.
   return { show, hide() { clearTimeout(cachePoll); app.endPanelTest?.(); } };

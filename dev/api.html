@@ -13,10 +13,10 @@
 <a class="skip" href="#main">Skip to the page</a>
 <div class="banner" role="note"><strong>Preview.</strong> OpenDMD isn't publicly launched yet: what's here works, but it may change, and the source code isn't public yet.</div>
 <div class="wrap">
-<nav aria-label="Site"><a class="brand" href="../index.html"><picture class="led" style="--cols:70;--rows:16"><img src="../art/wordmark.png" alt="OpenDMD" width="70" height="16"></picture></a><div class="links"><a href="../index.html">Overview</a><a href="../demo/" class='demo'>Try the demo</a><a href="../formulas/index.html">Formula gallery</a><h4>Guide</h4><a href="../guide/hardware.html">What you need</a><a href="../install/index.html">Install</a><a href="../guide/web-app.html">The web app</a><a href="../guide/create-art.html">Create Art</a><a href="../guide/effects.html">Effects and live items</a><a href="../guide/formulas.html">Formulas</a><a href="../guide/card.html">The SD card</a><a href="../guide/updating.html">Updating</a><a href="../guide/troubleshooting.html">Troubleshooting</a><h4>For developers</h4><a href="index.html">Building from source</a><a href="api.html" class='on'>HTTP API</a><a href="simulator.html">The simulator</a><a href="effects.html">Writing an effect</a><a href="pinout.html">Hardware pinout</a></div></nav>
+<nav aria-label="Site"><a class="brand" href="../index.html"><picture class="led" style="--cols:70;--rows:16"><img src="../art/wordmark.png" alt="OpenDMD" width="70" height="16"></picture></a><div class="links"><a href="../index.html">Overview</a><a href="../demo/" class='demo'>Try the demo</a><a href="../formulas/index.html">Formula gallery</a><h4>Guide</h4><a href="../guide/hardware.html">What you need</a><a href="../install/index.html">Install</a><a href="../card/index.html">Set up a card</a><a href="../guide/web-app.html">The web app</a><a href="../guide/create-art.html">Create Art</a><a href="../guide/effects.html">Effects and live items</a><a href="../guide/formulas.html">Formulas</a><a href="../guide/card.html">The SD card</a><a href="../guide/updating.html">Updating</a><a href="../guide/troubleshooting.html">Troubleshooting</a><h4>For developers</h4><a href="index.html">Building from source</a><a href="api.html" class='on'>HTTP API</a><a href="simulator.html">The simulator</a><a href="effects.html">Writing an effect</a><a href="pinout.html">Hardware pinout</a></div></nav>
 <main id="main">
 <h1 id="opendmd-http-api">OpenDMD HTTP API<a class="headerlink" href="#opendmd-http-api" title="Permanent link">#</a></h1>
-<p class="vers">The latest docs. The API of a particular release: <a href="api/v1.0.0-beta.8.html">1.0.0-beta.8</a> · <a href="api/v1.0.0-beta.7.html">1.0.0-beta.7</a> · <a href="api/v1.0.0-beta.6.html">1.0.0-beta.6</a></p>
+<p class="vers">The latest docs. The API of a particular release: <a href="api/v1.0.0-beta.9.html">1.0.0-beta.9</a> · <a href="api/v1.0.0-beta.8.html">1.0.0-beta.8</a> · <a href="api/v1.0.0-beta.7.html">1.0.0-beta.7</a> · <a href="api/v1.0.0-beta.6.html">1.0.0-beta.6</a></p>
 
 <p>Everything the web app does goes through this API, and a script can do the
 same. The source of truth is <code>firmware/src/http.rs</code>. In the examples <code>$DMD</code>
@@ -130,7 +130,7 @@ curl -s -X POST &quot;$DMD/api/skip?back=1&quot;
 <tbody>
 <tr>
 <td><code>version</code>, <code>variant</code></td>
-<td>firmware version and flash variant (<code>"4mb"</code>)</td>
+<td>firmware version and flash layout (<code>"4mb"</code>, the DevKit; <code>"8mb"</code>, the OpenDMD board)</td>
 </tr>
 <tr>
 <td><code>uptime_secs</code></td>
@@ -198,7 +198,7 @@ curl -s -X POST &quot;$DMD/api/skip?back=1&quot;
 </tr>
 <tr>
 <td><code>sd</code></td>
-<td><code>{mounted, readable, capacity_bytes, error, attempts, formatting, format_error, clock_khz, fallback, failures, reboots}</code>: the card; <code>readable</code> false if it mounts but its filesystem cannot be read (exFAT: nothing plays); <code>formatting</code>, <code>format_error</code>: <code>POST /api/card/format</code>; <code>error</code> why it is unmounted, unreadable or failing; <code>fallback</code> slowed after failing at full speed; <code>failures</code> errors in 60 s; <code>reboots</code> card-failure restarts in 15 min</td>
+<td><code>{mounted, readable, capacity_bytes, error, attempts, formatting, format_error, clock_khz, fallback, failures, reboots, probe, slowdowns, recoveries}</code>: the card; <code>readable</code> false if it mounts but its filesystem cannot be read (exFAT: nothing plays); <code>formatting</code>, <code>format_error</code>: <code>POST /api/card/format</code>; <code>error</code> why it is unmounted, unreadable or failing; <code>clock_khz</code> its SPI clock (20000 safe, 40000 fast; null unmounted); <code>fallback</code> a <code>fast</code> card slowed to 20 MHz after errors; <code>failures</code> errors in 60 s; <code>reboots</code> card-failure restarts in 15 min; <code>probe</code> the check of a card at full speed soon after it mounts: null, <code>waiting</code>, <code>running</code>, <code>clean</code>, <code>slowed</code>, <code>skipped</code>; <code>slowdowns</code> times <code>fast</code> slowed the card in place this boot; <code>recoveries</code> failed transfers the card was stopped after (CMD12)</td>
 </tr>
 <tr>
 <td><code>reset_reason</code>, <code>reset_note</code></td>
@@ -263,7 +263,8 @@ directory or a miss.</p>
 <p>Replies <code>{"ok":true,"rebooting":true}</code>, stops any card write, restarts.
 Bench test hooks: <code>?sd_fail=N</code> (next N card mounts fail),
 <code>?sd_io_fail=N&amp;sd_io_boots=B</code> (N card reads fail on each of B boots),
-<code>?sd_fallback=clear</code> (forget the card's slow clock).</p>
+<code>?sd_fallback=clear</code> (forget the card's slow clock at the next boot; see
+<code>POST /api/card/full-speed</code> for the live way).</p>
 <pre><code class="language-sh">curl -s -X POST $DMD/api/reboot
 </code></pre>
 <h3 id="post-apicardformat">POST /api/card/format<a class="headerlink" href="#post-apicardformat" title="Permanent link">#</a></h3>
@@ -273,6 +274,17 @@ until done (~a minute for 64 GB), then <code>sd.readable</code> true or
 <code>sd.format_error</code>. <code>400</code> no <code>confirm</code>; <code>409</code> no card, a readable one, or a
 format running.</p>
 <pre><code class="language-sh">curl -s $DMD/api/card/format --json '{&quot;confirm&quot;:true}'
+</code></pre>
+<h3 id="post-apicardfull-speed">POST /api/card/full-speed<a class="headerlink" href="#post-apicardfull-speed" title="Permanent link">#</a></h3>
+<p>"Try full speed again": forgets this card's slow clock (<code>sd.fallback</code>) and
+returns it to 40 MHz, in place (no restart) when a card is in; with
+<code>card_speed</code> <code>fast</code> it is then checked again, and slowed again at the first
+error. <code>{"ok":true,"applied":"now","clock_khz":40000}</code>; <code>"applied":
+"at_mount"</code> with no card; <code>"restart"</code> (with <code>"rebooting":true</code>) only if the
+clock could not be changed in place. <code>409</code> when <code>card_speed</code> is <code>safe</code>. Test
+hook (bench builds; a release ignores it): <code>?test_errors=N</code> fails the next N card transfers at full speed (the
+check is skipped), to watch <code>fast</code> slow a good card down.</p>
+<pre><code class="language-sh">curl -s -X POST $DMD/api/card/full-speed
 </code></pre>
 <h2 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">#</a></h2>
 <h3 id="get-apiconfig">GET /api/config<a class="headerlink" href="#get-apiconfig" title="Permanent link">#</a></h3>
@@ -402,6 +414,11 @@ format running.</p>
 <td>start-up show: <code>off</code>, <code>short</code>, <code>full</code> (from the next boot)</td>
 </tr>
 <tr>
+<td><code>card_speed</code></td>
+<td><code>safe</code></td>
+<td>the card's SPI clock: <code>safe</code> (20 MHz), <code>fast</code> (40 MHz; at a card error, 20 MHz from then on for that card, changed in place with the transfer retried, so nothing restarts), <code>full</code> (API and bench only: always 40 MHz, never slowed; errors restart the player as a failing card does). 20 MHz is the default because the SD spec only promises SPI up to 25 MHz, and a marginal card at 40 MHz was measured returning wrong data with no error; at 20 MHz the card still reads several times faster than playback (tens of KB/s) or WiFi downloads (~300 KB/s) use it. Older firmware's <code>auto</code> reads as <code>safe</code></td>
+</tr>
+<tr>
 <td><code>panel</code></td>
 <td>object</td>
 <td>panel timing: <code>clk_phase</code> true (rising edge) or false, <code>latch_blanking</code> 1..=4 (1), <code>driver</code> <code>shiftreg</code>, <code>fm6126a</code>, <code>fm6124</code>, <code>icn2038s</code>, <code>mbi5124</code>, <code>dp3246</code>, <code>i2s_speed</code> 8, 16, 20 MHz (8), <code>min_refresh</code> 30..=240 Hz (60)</td>
@@ -430,7 +447,9 @@ others at a restart, and revert with one. <code>"panel":null</code> saves the de
 <p>Reply: <code>{"ok":true, entries, index, index_ms, overrides, hidden,
 "brightness", "max_brightness", "reboot_required", "panel", …}</code> (the
 playlist fields as in "Fields that recur", the panel ones as above;
-<code>reboot_required</code>: a WiFi or panel change waits for a reboot).</p>
+<code>reboot_required</code>: a WiFi or panel change waits for a reboot). With
+<code>card_speed</code>, <code>card_speed_applied</code>: <code>now</code> (the clock changed in place),
+<code>at_mount</code> (no card in), <code>restart</code> (the clock could not be changed in place: saved, and the device restarts after the reply).</p>
 <p>Errors (nothing saved): <code>400</code> a value out of range or not one of the names
 (the message says which), e.g. <code>brightness N is above the maximum M; raise
 Maximum brightness first</code> (lowering <code>max_brightness</code> below the saved
@@ -755,26 +774,31 @@ version <code>GET /api/www</code> reports (<code>make www-push HOST=…</code> d
 curl -s $DMD/api/www
 </code></pre>
 <h2 id="firmware-update">Firmware update<a class="headerlink" href="#firmware-update" title="Permanent link">#</a></h2>
-<p>A signed bundle (<code>dist/opendmd-&lt;version&gt;.odfw</code>, <code>make fw-release</code>) is
+<p>A signed bundle (<code>dist/opendmd-&lt;version&gt;-&lt;variant&gt;.odfw</code>, <code>make fw-release</code>) is
 staged on the card (one is needed), checked and installed (<code>docs/ota.md</code>);
 <code>make fw-ota HOST=…</code> does it.</p>
 <h3 id="get-apifirmware">GET /api/firmware<a class="headerlink" href="#get-apifirmware" title="Permanent link">#</a></h3>
-<p><code>{"version","build","variant","pending","last","log"}</code>: the running
-version (a bundle's, and <code>/api/status</code>'s; <code>build</code> its image descriptor,
-<code>"&lt;version&gt; 4mb"</code>), a staged update not yet installed (or null), the last
+<p><code>{"version","build","variant","flash_size","pending","last","log"}</code>: the
+running version (a bundle's, and <code>/api/status</code>'s; <code>build</code> its image
+descriptor, <code>"&lt;version&gt; &lt;variant&gt;"</code>), the flash layout it is built for
+(<code>variant</code>: <code>4mb</code> or <code>8mb</code>) and the flash chip's real size in bytes
+(<code>flash_size</code>; a 4mb build on an 8 MB board reports 8388608), a staged
+update not yet installed (or null), the last
 line of the card's <code>/update/log.txt</code> and its last ≤ 1 KB of whole lines
 (<code>log</code>, the firmware's and the updater's; both null without a card or log).</p>
 <pre><code class="language-sh">curl -s $DMD/api/firmware
 </code></pre>
 <h3 id="put-apifirmware">PUT /api/firmware<a class="headerlink" href="#put-apifirmware" title="Permanent link">#</a></h3>
-<p>The bundle as the body (<code>411</code> no length, <code>413</code> too big). Header, size,
-SHA-256 and Ed25519 signature are checked: a failure is a <code>422</code> with the
-reason, nothing staged; cut short <code>408</code>; no card <code>503</code>. Another key's
-bundle is refused once the 140-byte header is in. Any validly
+<p>The bundle as the body (<code>411</code> no length, <code>413</code> too big). Header, the flash
+layout (the bundle's must be the player's <code>variant</code>), size, SHA-256,
+Ed25519 signature and the image's app descriptor are checked: a failure is
+a <code>422</code> with the reason, nothing staged; cut short <code>408</code>; no card <code>503</code>.
+Another key's bundle, or one for the other layout, is refused once the
+140-byte header is in. Any validly
 signed bundle is accepted, older ones too. Then
 <code>{"ok":true,"version":"…","rebooting":true}</code>; the panel is dark ~45 s from
 the end of the upload to playback while it installs.</p>
-<pre><code class="language-sh">curl -s -X PUT --data-binary @dist/opendmd-0.4.0.odfw $DMD/api/firmware
+<pre><code class="language-sh">curl -s -X PUT --data-binary @dist/opendmd-0.4.0-4mb.odfw $DMD/api/firmware
 </code></pre>
 <h2 id="live-items">Live items<a class="headerlink" href="#live-items" title="Permanent link">#</a></h2>
 <p>Paths beginning with <code>@</code> are drawn, not read from the card: for

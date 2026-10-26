@@ -7,7 +7,7 @@
 // the app's. Everything a link brings is shown as text, never as HTML.
 
 import init from '../demo/pkg/opendmd_web.js';
-import { link, parse, sliderName, about, TIP, marks } from '../demo/js/psikit.js';
+import { link, parse, sliderName, about, TIP, marks, sample } from '../demo/js/psikit.js';
 import { qr } from './qr.js';
 
 const $ = (id) => document.getElementById(id);
@@ -46,6 +46,8 @@ async function start() {
   const bad = ok ? null : P.errorAt();
   $('f-code').innerHTML = marks(f.src, bad).html + '\n'; // marks() escapes the text
   const mask = i[5] || 0;
+  // One that draws over a GIF is shown over the sample picture, as in the app.
+  const over = !!(mask & 32);
   if (ok) {
     $('f-cap').textContent = (cut ? $('f-cap').textContent + ' ' : '') + about(i);
     $('f-cap').title = TIP(i);
@@ -66,7 +68,8 @@ async function start() {
     if (ok && (k !== last || dirty)) {
       last = k; dirty = false;
       const d = new Date();
-      P.frame(k * D, d.getHours(), d.getMinutes(), d.getSeconds(), q(f.a), q(f.b), q(f.c));
+      if (over) new Uint8Array(mem.buffer, P.under(), 12288).set(sample());
+      P[over ? 'frameOver' : 'frame'](k * D, d.getHours(), d.getMinutes(), d.getSeconds(), q(f.a), q(f.b), q(f.c));
       pv.p.showRgb(new Uint8Array(mem.buffer, P.pixels(), 12288));
       $('f-panel').dataset.frames = -~$('f-panel').dataset.frames;
     }

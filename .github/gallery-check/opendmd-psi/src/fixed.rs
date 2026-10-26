@@ -89,6 +89,18 @@ pub fn recip(a: i32) -> i32 {
     div(ONE, a)
 }
 
+/// `1 / k` for the compiler's `x / k` (k a positive constant, x per pixel),
+/// rounded up instead of down: then a whole number divided by a whole
+/// number that divides it comes out exactly that or a hair above, never
+/// below, so `floor(px/10)` is right at 20, 30, … (rounded down, 20/10 was
+/// 1.99998). A negative k keeps `recip`.
+pub fn recip_up(k: i32) -> i32 {
+    if k <= 0 {
+        return recip(k);
+    }
+    sat(((1i64 << 32) + k as i64 - 1) / k as i64)
+}
+
 /// Floored modulo (the result takes the divisor's sign, as GLSL's `mod`):
 /// both are Q16.16, so it is the raw integers' remainder.
 #[inline(always)]

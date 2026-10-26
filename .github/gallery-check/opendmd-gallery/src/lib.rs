@@ -32,7 +32,7 @@
 //! build (on the merged files, before anything is published), and the
 //! tests here. `main.rs` is the command line.
 
-use opendmd_psi::{compile, render, Inputs, Program, Scratch, H, OWN, W};
+use opendmd_psi::{compile, render_rows, Inputs, Program, Scratch, H, OWN, W};
 
 pub mod png;
 
@@ -443,8 +443,34 @@ pub fn check_file_as(slug: &str, bytes: &[u8], trusted: bool) -> Result<Entry, V
     })
 }
 
+/// The picture a formula that draws over a GIF (`Program::over`: it reads
+/// `ur ug ub ul`, or its layers let what is under show through) is previewed
+/// over: the web app's sample (js/psikit.js `sample()`, a sky, a sun and
+/// hills; psi-check has a copy too), 128 × 32 RGB888, top row first.
+pub fn sample() -> Vec<u8> {
+    let mut p = vec![0u8; W * H * 3];
+    for i in 0..W * H {
+        let (x, y) = ((i % W) as f64, (i / W) as f64);
+        let (xi, yi) = (i % W, i / W);
+        let c = if y > 23.0 - 4.0 * (x / 13.0).sin() - 2.0 * (x / 5.0).sin() {
+            [30, (110 + (xi * 7 + yi * 13) % 50) as u8, 40]
+        } else if (x - 98.0).powi(2) + 1.5 * (y - 10.0).powi(2) < 50.0 {
+            [255, 215, 80]
+        } else {
+            [
+                (40 + yi * 6) as u8,
+                (60 + yi * 4) as u8,
+                (170 - yi * 3) as u8,
+            ]
+        };
+        p[i * 3..i * 3 + 3].copy_from_slice(&c);
+    }
+    p
+}
+
 /// One 128 × 32 RGB888 frame at `ms` into the loop, the sliders where the
-/// entry starts them and the clock at [`CLOCK`].
+/// entry starts them and the clock at [`CLOCK`]; a formula that draws over
+/// a GIF is drawn over [`sample`], as the web app's editor shows it.
 pub fn frame(prog: &Program, values: &[Option<u8>; 3], ms: u32) -> Vec<u8> {
     // As the web app's Math.round(v * 65536) (never a tie for hundredths).
     let q = |v: Option<u8>| ((i32::from(v.unwrap_or(0)) << 16) + 50) / 100;
@@ -459,7 +485,16 @@ pub fn frame(prog: &Program, values: &[Option<u8>; 3], ms: u32) -> Vec<u8> {
     };
     let mut scratch: Box<Scratch<128>> = Box::new(Scratch::new());
     let mut out = vec![0u8; W * H * 3];
-    render(prog, &mut scratch, &inputs, &OWN, &mut out);
+    let under = prog.over().then(sample);
+    render_rows(
+        prog,
+        &mut scratch,
+        &inputs,
+        &OWN,
+        under.as_deref(),
+        u32::MAX,
+        &mut out,
+    );
     out
 }
 

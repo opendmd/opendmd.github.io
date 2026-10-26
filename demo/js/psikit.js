@@ -1,8 +1,8 @@
 // Formulas' shared parts, one copy for the web app's Formulas view
 // (js/formulas.js) and the site's share page (/f/, which imports this file
 // from the demo): the share link's encoder and decoder, the sliders' names,
-// what a formula is in a sentence, and the code's highlighting. No imports
-// and no DOM: plain functions.
+// what a formula is in a sentence, the code's highlighting and the sample
+// picture. No imports and no DOM: plain functions.
 
 export const MAX_SRC = 4096, MAX_NAME = 60;
 
@@ -57,4 +57,21 @@ export function marks(s, bad) {
   }
   if (bad && bad[0] >= s.length) html += '<span class=" e"> </span>';
   return { html, toks };
+}
+
+// The sample picture a Formula that draws over a GIF (info()[5] & 32) is
+// shown over when there is no GIF: a sky, a sun and hills, 128 × 32 RGB, top
+// row first. opendmd-gallery's `sample()` (the site's thumbnails) and
+// psi-check draw the same.
+let SAMPLE = null;
+export function sample() {
+  if (!SAMPLE) {
+    SAMPLE = new Uint8Array(12288);
+    for (let i = 0; i < 4096; i++) {
+      const x = i % 128, y = i >> 7;
+      SAMPLE.set(y > 23 - 4 * Math.sin(x / 13) - 2 * Math.sin(x / 5) ? [30, 110 + (x * 7 + y * 13) % 50, 40]
+        : (x - 98) ** 2 + 1.5 * (y - 10) ** 2 < 50 ? [255, 215, 80] : [40 + y * 6, 60 + y * 4, 170 - y * 3], i * 3);
+    }
+  }
+  return SAMPLE;
 }

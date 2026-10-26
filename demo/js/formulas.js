@@ -12,7 +12,7 @@ import { app } from './state.js';
 import { PanelPreview } from './preview.js';
 import { h, clear, store, toast, debounce, saver, base, SITE } from './util.js';
 import { popup, closeMenu } from './overrides.js';
-import { link as mklink, parse, sliderName, about, TIP, marks } from './psikit.js';
+import { link as mklink, parse, sliderName, about, TIP, marks, sample } from './psikit.js';
 
 let P = null, mod = null, gen = 0;
 const psi = () => (mod ??= import(`../pkg-psi/opendmd_psi_web.js${gen ? '?' + gen : ''}`).then(async (m) => { P = { ...m, mem: (await m.default()).memory }; })
@@ -57,19 +57,8 @@ const info = (src) => (take(src) && T(() => P.info(), null)) || [];
 const isOver = (f) => !!(info(f.src)[5] & 32);
 
 // --- What is under: the GIF picked (`U`: its name, RGB frames and when each
-// ends), else a sample picture (a sky, a sun and hills, drawn here).
-let U = null, SAMPLE = null;
-function sample() {
-  if (!SAMPLE) {
-    SAMPLE = new Uint8Array(12288);
-    for (let i = 0; i < 4096; i++) {
-      const x = i % 128, y = i >> 7;
-      SAMPLE.set(y > 23 - 4 * Math.sin(x / 13) - 2 * Math.sin(x / 5) ? [30, 110 + (x * 7 + y * 13) % 50, 40]
-        : (x - 98) ** 2 + 1.5 * (y - 10) ** 2 < 50 ? [255, 215, 80] : [40 + y * 6, 60 + y * 4, 170 - y * 3], i * 3);
-    }
-  }
-  return SAMPLE;
-}
+// ends), else a sample picture (js/psikit.js: a sky, a sun and hills).
+let U = null;
 function underAt(ms) {
   if (!U) return sample();
   const t = ms % U.total;

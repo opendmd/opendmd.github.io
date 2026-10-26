@@ -8,14 +8,16 @@
 // first and checks its header, so a failed download installs nothing; then
 // the firmware (the same PUT and wait as "Update from file…"), then the web
 // app (PUT /api/www, docs/www-pack.md), then the page reloads: its code is
-// the old web app's.
+// the old web app's. The firmware is the release's file for the player's
+// flash layout (`variants.<variant>.firmware`; a release.json from before
+// there were two names only `firmware`, the 4mb one).
 
 import { app } from './state.js';
 import { h, store, SITE } from './util.js';
-import { older, fwHead, sendFw, put, restart } from './firmware.js';
+import { older, fwHead, fwVariant, board, sendFw, put, restart } from './firmware.js';
 
 export const RELEASE = SITE + 'install/release.json';
-const WWW_MAX = 1310720; // the www partition
+const WWW_MAX = 1310720; // the smaller www partition (4mb): one pack fits both layouts
 const td = new TextDecoder();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const bare = (v) => String(v).replace(/^v/i, '');
@@ -27,6 +29,11 @@ export function wver(s) {
   return m ? [m[1], !!m[2]] : [null, true];
 }
 const nice = (s) => { const [b, dev] = wver(s); return dev ? (b ? `${b}, development build` : 'a development build') : b; };
+// The release's firmware file for a player of flash layout `variant`.
+export const fwFile = (rel, variant) => {
+  const f = rel?.variants?.[variant]?.firmware;
+  return typeof f === 'string' ? f : (!variant || variant === '4mb') && typeof rel?.firmware === 'string' ? rel.firmware : null;
+};
 
 // GET `u` from the release site; with `progress`, the body as a Blob.
 // Every failure in words: offline, unreachable (or no CORS: the browser
@@ -65,21 +72,24 @@ export async function check(ui) {
     const rel = await get(u, 'The release information');
     if (typeof rel?.version !== 'string' || typeof rel.firmware !== 'string') throw new Error(`The release information on ${new URL(u).host} is not readable`);
     // One request at a time to the player.
-    const fwv = (await app.src.json('GET', '/api/firmware')).version;
+    const { version: fwv, variant } = await app.src.json('GET', '/api/firmware');
     const wv = (await app.src.json('GET', '/api/www')).version;
-    const v = bare(rel.version), fwUp = older(fwv, v), ahead = older(v, fwv);
+    const file = fwFile(rel, variant);
+    const v = bare(rel.version), newer = older(fwv, v), fwUp = newer && !!file, ahead = older(v, fwv);
     // The web app: any other version is an update, unless the firmware is
     // ahead of the release, or this is a development build of the release or
     // later (then the release would be a step back).
     const [wb, dev] = wver(wv), [rb] = wver(rel.www_version);
     const wwwUp = !ahead && !!rel.www && !!rel.www_version && wv !== rel.www_version && !(dev && wb && rb && !older(wb, rb));
-    if (!fwUp && !wwwUp) {
+    if (newer && !file && !wwwUp) {
+      say(`Firmware ${v} is out, but not for the ${board(variant)}`);
+    } else if (!fwUp && !wwwUp) {
       say(ahead ? `This player’s firmware (${bare(fwv)}) is newer than the latest release (${v})` : `Up to date (${v}${dev ? ', development build' : ''})`);
     } else {
       say([fwUp && `Firmware ${v} is out (this player has ${bare(fwv)}).`,
         wwwUp && `Web app ${nice(rel.www_version)} is out (this one is ${nice(wv) || 'unknown'}).`,
         fwUp && 'The panel goes dark for about a minute while it installs.'].filter(Boolean).join(' '));
-      row.prepend(h('button.pri', { id: 'fw-upd', onclick: (e) => { e.target.remove(); update(ui, rel, u, fwUp && v, wwwUp); } }, 'Update'));
+      row.prepend(h('button.pri', { id: 'fw-upd', onclick: (e) => { e.target.remove(); update(ui, rel, u, fwUp && { v, file, variant }, wwwUp); } }, 'Update'));
     }
   } catch (e) { say(e.message, 1); }
   ui.busy(false);
@@ -93,10 +103,11 @@ async function update(ui, rel, u, fw, www) {
   barBox.hidden = false;
   try {
     // Everything down first: a failure here leaves the player as it was.
-    const fb = fw && await get(new URL(rel.firmware, u).href, 'The firmware', (p) => show('Downloading the firmware', p));
+    const fb = fw && await get(new URL(fw.file, u).href, 'The firmware', (p) => show('Downloading the firmware', p));
     const wb = www && await get(new URL(rel.www, u).href, 'The web app', (p) => show('Downloading the web app', p));
     const head = async (b, n) => new Uint8Array(await b.slice(0, n).arrayBuffer());
-    if (fb && fwHead(await head(fb, 140)) !== fw) throw new Error('The firmware download is not the release it should be. Nothing was installed');
+    const fh = fb && await head(fb, 140);
+    if (fb && (fwHead(fh) !== fw.v || (fw.variant && fwVariant(fh) !== fw.variant))) throw new Error('The firmware download is not the release it should be. Nothing was installed');
     if (wb) {
       const b = await head(wb, 64);
       if (wb.size < 64 || wb.size > WWW_MAX || td.decode(b.subarray(0, 4)) !== 'ODWP' || new DataView(b.buffer).getUint32(8, true) !== wb.size
@@ -105,8 +116,8 @@ async function update(ui, rel, u, fw, www) {
     if (fb) {
       await sendFw(fb, (p) => show('Sending the firmware to the player', p));
       barBox.hidden = true;
-      await restart(fw, say);
-      done = `Firmware updated to ${fw}`;
+      await restart(fw.v, say);
+      done = `Firmware updated to ${fw.v}`;
       app.refreshStatus().catch(() => {});
       ui.load();
     }

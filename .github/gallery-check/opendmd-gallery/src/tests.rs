@@ -220,7 +220,7 @@ fn the_examples_pass() {
         "/../opendmd-web/www/formulas.json"
     ))
     .unwrap();
-    let mut n = 0;
+    let (mut n, mut over) = (0, 0);
     for line in text.lines().filter(|l| l.starts_with('{')) {
         let name = string_field(line, "name");
         let desc = string_field(line, "desc");
@@ -229,9 +229,42 @@ fn the_examples_pass() {
         let e = check_file_as("example", file.as_bytes(), true)
             .unwrap_or_else(|p| panic!("{name}: {p:?}"));
         assert_eq!(e.src, format!("{src}\n"));
+        // Its thumbnail is lit (as site-smoke checks the gallery page: some
+        // pixel's r + g + b over 90); one that draws over a GIF is drawn
+        // over the sample picture, not black.
+        let prog = compile(&e.src).unwrap();
+        let f = frame(&prog, &e.values, thumb_ms(e.loop_ms));
+        assert!(
+            f.chunks(3)
+                .any(|p| p.iter().map(|&v| u32::from(v)).sum::<u32>() > 90),
+            "{name}: its thumbnail is dark"
+        );
+        over += usize::from(prog.over());
         n += 1;
     }
     assert_eq!(n, 27);
+    assert!(over >= 6, "the examples that draw over a GIF: {over}");
+}
+
+/// A formula that draws over a GIF is previewed over the sample picture
+/// (the web app's, byte for byte as its js/psikit.js draws it); one that
+/// doesn't, over nothing.
+#[test]
+fn over_the_sample() {
+    let s = sample();
+    assert_eq!(s.len(), W * H * 3);
+    // A pixel of each part: the sky (top left), the sun, the hills.
+    assert_eq!(&s[..3], &[40, 60, 170]);
+    assert_eq!(&s[(10 * W + 98) * 3..][..3], &[255, 215, 80]);
+    assert_eq!(s[(31 * W) * 3], 30);
+    let shown = compile("rgb(ur, ug, ub)").unwrap();
+    assert!(shown.over());
+    let f = frame(&shown, &[None; 3], 0);
+    let close = f.iter().zip(&s).all(|(a, b)| a.abs_diff(*b) <= 1);
+    assert!(close, "rgb(ur, ug, ub) is the sample");
+    let own = compile("rgb(0, 0, 0)").unwrap();
+    assert!(!own.over());
+    assert!(frame(&own, &[None; 3], 0).iter().all(|&v| v == 0));
 }
 
 /// A JSON string field, the simple way (the file is one object a line).

@@ -13,7 +13,7 @@
 <a class="skip" href="#main">Skip to the page</a>
 <div class="banner" role="note"><strong>Preview.</strong> OpenDMD isn't publicly launched yet: what's here works, but it may change, and the source code isn't public yet.</div>
 <div class="wrap">
-<nav aria-label="Site"><a class="brand" href="../index.html"><picture class="led" style="--cols:70;--rows:16"><img src="../art/wordmark.png" alt="OpenDMD" width="70" height="16"></picture></a><div class="links"><a href="../index.html">Overview</a><a href="../demo/" class='demo'>Try the demo</a><a href="../formulas/index.html">Formula gallery</a><h4>Guide</h4><a href="hardware.html">What you need</a><a href="../install/index.html">Install</a><a href="web-app.html">The web app</a><a href="create-art.html">Create Art</a><a href="effects.html">Effects and live items</a><a href="formulas.html" class='on'>Formulas</a><a href="card.html">The SD card</a><a href="updating.html">Updating</a><a href="troubleshooting.html">Troubleshooting</a><h4>For developers</h4><a href="../dev/index.html">Building from source</a><a href="../dev/api.html">HTTP API</a><a href="../dev/simulator.html">The simulator</a><a href="../dev/effects.html">Writing an effect</a><a href="../dev/pinout.html">Hardware pinout</a></div></nav>
+<nav aria-label="Site"><a class="brand" href="../index.html"><picture class="led" style="--cols:70;--rows:16"><img src="../art/wordmark.png" alt="OpenDMD" width="70" height="16"></picture></a><div class="links"><a href="../index.html">Overview</a><a href="../demo/" class='demo'>Try the demo</a><a href="../formulas/index.html">Formula gallery</a><h4>Guide</h4><a href="hardware.html">What you need</a><a href="../install/index.html">Install</a><a href="../card/index.html">Set up a card</a><a href="web-app.html">The web app</a><a href="create-art.html">Create Art</a><a href="effects.html">Effects and live items</a><a href="formulas.html" class='on'>Formulas</a><a href="card.html">The SD card</a><a href="updating.html">Updating</a><a href="troubleshooting.html">Troubleshooting</a><h4>For developers</h4><a href="../dev/index.html">Building from source</a><a href="../dev/api.html">HTTP API</a><a href="../dev/simulator.html">The simulator</a><a href="../dev/effects.html">Writing an effect</a><a href="../dev/pinout.html">Hardware pinout</a></div></nav>
 <main id="main">
 <h1 id="formulas">Formulas<a class="headerlink" href="#formulas" title="Permanent link">#</a></h1>
 <p><img alt="Formulas: the examples, and Plasma playing in its details" src="../docs/images/formulas.png" /></p>
@@ -25,10 +25,16 @@ and watch.</p>
 <p>Open <strong>Formulas</strong> (Ψ) in the app's menu. Formulas work in the
 <a href="https://opendmd.github.io/demo/">online demo</a> too, with no player at all.</p>
 <h2 id="the-gallery">The gallery<a class="headerlink" href="#the-gallery" title="Permanent link">#</a></h2>
-<p>Formulas opens on the examples (plasma, fire, rain, a clock, a sunrise that
-follows the time of day, and more) and the formulas you've saved. Pick one
-to see it playing in the panel look, with its sliders if it has any. From
-there:</p>
+<p>Formulas opens on the examples (Big clock, plasma, fire, rain, a clock
+face, and more) and the formulas you've saved. Pick one
+to see it playing in the panel look, with its sliders if it has any.</p>
+<p><strong>Big clock</strong>, the first example, shows what a GIF can't do: it draws
+the real time in big rainbow digits, with a bar along the bottom that
+fills once a minute, a step a second. Check it against your watch. A GIF
+can't know the time; one that only showed each minute of a day would
+already be 2.7 MB, and with the seconds and the moving colours it would
+be gigabytes. The formula is 1.5 KB.</p>
+<p>From there:</p>
 <ul>
 <li><strong>Remix</strong> (an example) or <strong>Edit</strong> (one of yours) opens it in the editor.</li>
 <li><strong>Save as GIF…</strong> makes a GIF of it in <a href="create-art.html">Create Art</a>.</li>
@@ -417,7 +423,8 @@ The details are in the gallery's
 for loops longer than about 5 seconds, and at most 240 frames), and opens
 it in <a href="create-art.html">Create Art</a>, titled with its name. Add text, trim it
 or change its speed there, then save it to your card: it plays on the panel
-like any other GIF and goes in playlists.</p>
+like any other GIF and goes in playlists. A formula with a long loop, or one that follows the
+clock, keeps only those few seconds, as they look when you save.</p>
 <p>Formulas you save are kept in this browser. Another browser, or a cleared
 browser, won't have them: share a link to yourself to move one.</p>
 <h2 id="coming-next">Coming next<a class="headerlink" href="#coming-next" title="Permanent link">#</a></h2>

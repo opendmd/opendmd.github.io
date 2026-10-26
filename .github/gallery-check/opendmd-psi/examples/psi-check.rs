@@ -235,7 +235,7 @@ fn q(v: f64) -> i32 {
     q16((v.clamp(-32767.0, 32767.0) * 10000.0).round() as i32, 10000)
 }
 
-/// The web app's sample picture (js/formulas.js: a sky, a sun and hills),
+/// The web app's sample picture (js/psikit.js: a sky, a sun and hills),
 /// what the editor draws an over-the-GIF formula over: 128 × 32 RGB, top
 /// row first.
 fn sample() -> Vec<u8> {
