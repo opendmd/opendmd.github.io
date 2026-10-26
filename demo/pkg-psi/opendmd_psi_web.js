@@ -91,6 +91,34 @@ export function info() {
 }
 
 /**
+ * Any formula as a look (Settings › Look, the editor's "Use as the
+ * look"): `src` drawn over the GIF with `blend` (`over screen add
+ * multiply max min`) at `amount` percent, as the text the player is sent
+ * (`opendmd_psi::look`), compiled — [`info`] and [`error`] then describe
+ * the look. Empty when the formula or the look does not compile.
+ * @param {string} src
+ * @param {string} blend
+ * @param {number} amount
+ * @returns {string}
+ */
+export function look(src, blend, amount) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(src, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(blend, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.look(ptr0, len0, ptr1, len1, amount);
+        deferred3_0 = ret[0];
+        deferred3_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
  * Where the frame is in the module's memory: 128 × 32 RGB888 bytes, top
  * row first (a view on it is good until the next call).
  * @returns {number}

@@ -39,17 +39,14 @@ export function setPath(set) {
   return !set ? '/filelist.txt' : set.startsWith('filelist.') ? '/' + set : `/sets/${set}.txt`;
 }
 
-// A listing that fails for any reason but "not there" (a request the busy
-// device dropped or refused with a 503) is tried twice more: an empty list
-// would show Playlists or a Library category with nothing in it until a
-// reload. A 404 (a picked folder without it, a directory gone) is [].
+// A directory's entries; a 404 (a picked folder without it, a directory
+// gone) is []. A busy device's 503 or a dropped request is retried inside
+// `list` (source.js `queued`, the one retry layer, ~45 s): an empty list
+// would show Playlists or a Library folder with nothing in it until a reload.
 export async function listOr(dir) {
-  for (let attempt = 1; ; attempt++) {
-    try { return await app.src.list(dir); } catch (e) {
-      if (e && e.status === 404) return [];
-      if (attempt >= 3) throw e;
-      await new Promise((r) => setTimeout(r, 700 * attempt));
-    }
+  try { return await app.src.list(dir); } catch (e) {
+    if (e && e.status === 404) return [];
+    throw e;
   }
 }
 
@@ -96,14 +93,15 @@ export const app = {
     ];
   },
 
+  // (A device, or the demo's player: js/demo.js.)
   async refreshStatus(recent) {
-    if (!this.device) return null;
+    if (!this.src?.config) return null;
     this.status = await this.src.status(recent);
     emit('status', this.status);
     return this.status;
   },
   async refreshConfig() {
-    if (!this.device) return null;
+    if (!this.src?.config) return null;
     this.config = await this.src.config();
     emit('config', this.config);
     return this.config;

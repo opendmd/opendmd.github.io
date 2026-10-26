@@ -135,7 +135,7 @@ fn main() {
         }
     );
     println!(
-        "panel: ~{:.1} ms a frame: {rating} (light ≤ 5 ms, medium ≤ 8 ms; the gallery and GIF looks take ≤ 8 ms)",
+        "panel: ~{:.1} ms a frame: {rating} (light ≤ 5 ms, medium ≤ 8 ms; GIF looks take ≤ 12 ms)",
         us as f64 / 1000.0
     );
     if listing {

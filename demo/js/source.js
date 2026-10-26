@@ -20,7 +20,26 @@ async function check(res) {
   if (res.ok) return res;
   let msg = res.statusText;
   try { msg = (await res.json()).error || msg; } catch { /* not JSON */ }
-  throw new HttpError(res.status, `${res.status}: ${msg}`);
+  throw Object.assign(new HttpError(res.status, `${res.status}: ${msg}`), { after: +res.headers.get('Retry-After') || 0 });
+}
+
+// The device's stream task sends listings, GIFs and copies one at a
+// time: a full queue is a 503 at once (Retry-After: 1). This is the one
+// retry layer for them (thumbs.js has its own back-off, cancelling as it
+// goes): a 503, or a request the busy device dropped, is
+// asked again after 2-4 s (jittered, so two tabs drift apart; never sooner
+// than Retry-After), for about 45 s in all, then the error stands.
+const RETRY_FOR = 45000;
+export async function queued(fn) {
+  const t0 = Date.now();
+  for (;;) {
+    try { return await fn(); } catch (e) {
+      const busy = e?.status === 503 || e?.status === 0 || e instanceof TypeError;
+      const wait = Math.max((e?.after || 0) * 1000, 2000 + Math.random() * 2000);
+      if (!busy || Date.now() - t0 + wait > RETRY_FOR) throw e;
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
 }
 
 // The API key (Settings › Device › Security) goes with every request; a
@@ -73,14 +92,14 @@ export class DeviceSource {
   // The playback cache: {total, prepared, state: "ready"|"counting"}; the
   // card paths of every prepared copy; and forgetting a GIF's copy.
   cache() { return this.json('GET', '/api/cache', undefined, 15000); }
-  async cacheList() { return (await this.json('GET', '/api/cache/list', undefined, 180000)).paths; }
+  async cacheList() { return (await queued(() => this.json('GET', '/api/cache/list', undefined, 180000))).paths; }
   forget(path) { return this.json('POST', '/api/cache/forget', { path }); }
   // Rename a GIF: its prepared copy, Smooth motion line and failure line
   // follow on the device; playlists and overrides are the caller's.
   move(from, to) { return this.json('POST', '/api/files/move', { from, to }); }
   // GIFs that can never be prepared ([{path, reason}], the device's
   // /cache/.failed), and recording one. Not in every firmware yet.
-  cacheFailed() { return this.json('GET', '/api/cache/failed'); }
+  cacheFailed() { return queued(() => this.json('GET', '/api/cache/failed')); }
   cacheFail(path, reason) { return this.json('POST', '/api/cache/failed', { path, reason }); }
   // A playlist's per-GIF overrides, parsed: {set, playlist, overrides: [...]}.
   overrides(set) { return this.json('GET', '/api/overrides?set=' + encodeURIComponent(set)); }
@@ -90,16 +109,18 @@ export class DeviceSource {
   wake(minutes) { return this.json('POST', '/api/wake', { minutes }); }
 
   async list(dir) {
-    const r = await this.json('GET', '/api/files?dir=' + encodeURIComponent(dir));
+    const r = await queued(() => this.json('GET', '/api/files?dir=' + encodeURIComponent(dir)));
     return r.entries;
   }
+  // Card files: a GIF or copy meets a full stream queue as a 503 at once
+  // (a playlist after 2 s), asked again by `queued`.
   async readText(path) {
-    try { return await (await this.req('GET', enc(path))).text(); } catch (e) {
+    try { return await queued(async () => (await this.req('GET', enc(path))).text()); } catch (e) {
       if (e.status === 404) return null;
       throw e;
     }
   }
-  async readBytes(path) { return new Uint8Array(await (await this.req('GET', enc(path))).arrayBuffer()); }
+  async readBytes(path) { return queued(async () => new Uint8Array(await (await this.req('GET', enc(path))).arrayBuffer())); }
   // A manifest path (`/filelist.*`, `/sets/*`) is installed by the device's
   // main task (the `.idx` goes first, then a reindex if it is active).
   writeFile(path, data) { return this.json('PUT', '/api/files' + enc(path), data); }

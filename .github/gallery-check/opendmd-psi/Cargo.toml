@@ -1,6 +1,6 @@
 [package]
 name = "opendmd-psi"
-version = "1.0.0-beta.10"
+version = "1.0.0-beta.11"
 edition = "2021"
 description = "Psi: OpenDMD's per-pixel effects language (Formulas) — a compiler and a row-vectorised Q16.16 VM, no_std."
 license = "MIT OR Apache-2.0"
@@ -23,6 +23,14 @@ tables = []
 
 [[test]]
 name = "golden"
+required-features = ["tables"]
+
+[[test]]
+name = "estimate"
+required-features = ["tables"]
+
+[[test]]
+name = "look"
 required-features = ["tables"]
 
 [[test]]

@@ -97,9 +97,9 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
   }) });
   const autoBox = h('div', { hidden: true, style: 'margin-top:12px' }, autoLine, h('label', always, 'Also while playing (slower)'));
 
-  const fw = h('div.grp', { id: 'st-fw', hidden: true }), sec = h('div.grp', { id: 'st-sec', hidden: true }), pt = h('div.grp', { id: 'st-panel', hidden: true });
+  const fw = h('div.grp', { id: 'st-fw', hidden: true }), sec = h('div.grp', { id: 'st-sec', hidden: true }), pt = h('div.grp', { id: 'st-panel', hidden: true }), ps = h('div.grp', { id: 'st-sync', hidden: true });
   import('./firmware.js').then((m) => m.fwCards(fw, sec));
-  import('./panel.js').then((m) => m.panelCard(pt));
+  import('./panel.js').then((m) => { m.syncCard(ps); m.panelCard(pt); });
   el.append(h('div.grp', { id: 'st-status' }, h('h3', 'Status'), facts, cardNote,
     h('div.row', { style: 'margin-top:12px' },
       h('button', { id: 'st-reindex', title: 'Read the playlist and the card again (after changing the card elsewhere)', onclick: reindex }, 'Reload playlist'),
@@ -118,7 +118,7 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
       h('p.cap', 'Give each display its own name: it becomes http://<name>.local/'),
       h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-scan', onclick: scan }, 'Scan for networks'), nets),
       h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-save-net', onclick: async () => f.hostname.reportValidity() && await nameCheck() && save(['wifi_ssid', 'wifi_pass', 'hostname'], netRun) }, 'Save network')), moved),
-    pt, fw, sec, h('div.grp', h('h3', 'About'), about));
+    ps, pt, fw, sec, h('div.grp', h('h3', 'About'), about));
 
   const late = (m, n) => m?.steady === undefined ? n.toLocaleString() : `${m.steady.toLocaleString()} during play · ${m.switch.toLocaleString()} at GIF changes`;
   function renderFacts(s) {
@@ -185,9 +185,12 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
     clear(nets, h('span.muted', 'Scanning…'));
     try {
       const aps = await app.src.wifiScan();
-      clear(nets, aps.sort((a, b) => b.rssi - a.rssi).map((ap) => h('button.chip', {
-        onclick: () => { f.wifi_ssid.value = ap.ssid; f.wifi_pass.focus(); },
-      }, ap.ssid || '(hidden)', h('small', `${ap.rssi} dBm${ap.secure ? ' · secure' : ' · open'}`))));
+      // "Enterprise" networks (a username as well as a password): no 802.1X in the firmware.
+      const ent = (ap) => /-Ent$/.test(ap.auth);
+      clear(nets, aps.sort((a, b) => b.rssi - a.rssi).map((ap) => h('button.chip', ent(ap)
+        ? { disabled: true, title: 'Needs a work or school login: not supported' }
+        : { onclick: () => { f.wifi_ssid.value = ap.ssid; f.wifi_pass.focus(); } },
+      ap.ssid || '(hidden)', h('small', ent(ap) ? 'not supported' : `${ap.rssi} dBm${ap.secure ? ' · secure' : ' · open'}`))));
     } catch (e) { clear(nets, h('span.bad', e.message)); }
   }
 

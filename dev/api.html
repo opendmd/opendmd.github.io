@@ -16,7 +16,7 @@
 <nav aria-label="Site"><a class="brand" href="../index.html"><picture class="led" style="--cols:70;--rows:16"><img src="../art/wordmark.png" alt="OpenDMD" width="70" height="16"></picture></a><div class="links"><a href="../index.html">Overview</a><a href="../demo/" class='demo'>Try the demo</a><a href="../formulas/index.html">Formula gallery</a><h4>Guide</h4><a href="../guide/hardware.html">What you need</a><a href="../install/index.html">Install</a><a href="../card/index.html">Set up a card</a><a href="../guide/web-app.html">The web app</a><a href="../guide/create-art.html">Create Art</a><a href="../guide/effects.html">Effects and live items</a><a href="../guide/formulas.html">Formulas</a><a href="../guide/card.html">The SD card</a><a href="../guide/updating.html">Updating</a><a href="../guide/troubleshooting.html">Troubleshooting</a><h4>For developers</h4><a href="index.html">Building from source</a><a href="api.html" class='on'>HTTP API</a><a href="simulator.html">The simulator</a><a href="effects.html">Writing an effect</a><a href="pinout.html">Hardware pinout</a></div></nav>
 <main id="main">
 <h1 id="opendmd-http-api">OpenDMD HTTP API<a class="headerlink" href="#opendmd-http-api" title="Permanent link">#</a></h1>
-<p class="vers">The latest docs. The API of a particular release: <a href="api/v1.0.0-beta.10.html">1.0.0-beta.10</a> · <a href="api/v1.0.0-beta.9.html">1.0.0-beta.9</a> · <a href="api/v1.0.0-beta.8.html">1.0.0-beta.8</a> · <a href="api/v1.0.0-beta.7.html">1.0.0-beta.7</a> · <a href="api/v1.0.0-beta.6.html">1.0.0-beta.6</a></p>
+<p class="vers">The latest docs. The API of a particular release: <a href="api/v1.0.0-beta.11.html">1.0.0-beta.11</a> · <a href="api/v1.0.0-beta.10.html">1.0.0-beta.10</a> · <a href="api/v1.0.0-beta.9.html">1.0.0-beta.9</a> · <a href="api/v1.0.0-beta.8.html">1.0.0-beta.8</a> · <a href="api/v1.0.0-beta.7.html">1.0.0-beta.7</a> · <a href="api/v1.0.0-beta.6.html">1.0.0-beta.6</a></p>
 
 <p>Everything the web app does goes through this API, and a script can do the
 same. The source of truth is <code>firmware/src/http.rs</code>. In the examples <code>$DMD</code>
@@ -37,8 +37,10 @@ curl -s $DMD/api/status
   a web app pack ≤ 1,310,720 B. Uploads are streamed, any size, but no data
   for 5 s, or 120 s in all, is a <code>408</code>. A body needs a <code>Content-Length</code>.</li>
 <li><strong>One thing at a time.</strong> One server task, at most 7 open connections
-  (<code>HTTP_MAX_SOCKETS</code>). Transfers run one at a time, two more waiting; a
-  third gets <code>503</code> + <code>Retry-After: 1</code> after 2 s. Short of memory, a listing
+  (<code>HTTP_MAX_SOCKETS</code>). Transfers and the listings (<code>/api/files</code>,
+  <code>/api/cache/list</code>, <code>/api/cache/failed</code>) run one at a time, two more
+  waiting; a third transfer gets <code>503</code> + <code>Retry-After: 1</code> after 2 s, a
+  listing at once. Short of memory, a listing
   or transfer is refused up front: <code>503</code> + <code>Retry-After: 2</code>. Retry after the
   delay; do not fire requests in parallel.</li>
 <li><strong>Slow commands.</strong> A playlist change waits up to 60 s for the index
@@ -193,8 +195,8 @@ curl -s -X POST &quot;$DMD/api/skip?back=1&quot;
 <td><code>{steady, switch, threshold_ms, window_ms, worst_steady_ms, by_cause, late_ms}</code>: frames ≥ <code>threshold_ms</code> late in play (<code>steady</code>) or at a GIF change (<code>switch</code>: first frame, transition, first <code>window_ms</code>); all late frames by cause (<code>open</code>, <code>read</code>, <code>decode</code>, <code>transition</code>, <code>blit</code>, <code>log</code>, <code>other</code>, <code>wake</code>) and ms late (<code>"&lt;5"</code> … <code>"&gt;=500"</code>)</td>
 </tr>
 <tr>
-<td><code>gifs_started</code>, <code>streams_aborted</code>, <code>log_drops</code></td>
-<td>files opened; responses cut short; log lines dropped</td>
+<td><code>gifs_started</code>, <code>streams_aborted</code>, <code>log_drops</code>, <code>stream_stack</code></td>
+<td>files opened; responses cut short; log lines dropped; the file task's least unused stack after a job, bytes (null before one)</td>
 </tr>
 <tr>
 <td><code>sd</code></td>
@@ -202,7 +204,11 @@ curl -s -X POST &quot;$DMD/api/skip?back=1&quot;
 </tr>
 <tr>
 <td><code>reset_reason</code>, <code>reset_note</code></td>
-<td><code>poweron</code>, <code>software</code>, <code>panic</code>, <code>task watchdog</code>, <code>brownout</code>, …; <code>"card failure"</code>, <code>"different card"</code> or null</td>
+<td><code>poweron</code>, <code>software</code>, <code>panic</code>, <code>interrupt watchdog</code>, <code>task watchdog</code>, <code>brownout</code>, <code>external</code>, …; why this boot's restart was made in plain words — <code>"card failure"</code>, <code>"different card"</code>, <code>"restarted on request"</code>, <code>"restarted to apply a card speed change"</code>, <code>"crashed (panic)"</code>, <code>"restarted without a recorded reason"</code>, … — or null after a power-on</td>
+</tr>
+<tr>
+<td><code>restarts</code></td>
+<td>the last 8 restarts, newest first (this boot's first), kept across restarts, cleared by a power-on: <code>{reason, reset, uptime_s, heap_free, largest, where?}</code>. <code>reason</code>: <code>api_reboot</code>, <code>firmware_update</code>, <code>ap_timeout</code> (setup network timed out), <code>card_full_speed</code>, <code>card_speed</code>, <code>fresh_heap</code> (playlist index needed a fresh heap), <code>panel_trial</code>, <code>card_failure</code>, <code>new_card</code>, <code>card_lost</code> (SPI device lost), <code>card_retry</code>, <code>panic</code>, <code>stack_overflow</code>, <code>diag_abort</code> (a <code>diag-heap</code> build's heap check), or, when the restart wrote nothing, from the reset alone: <code>power_on</code> (also the EN/reset button: the ESP32 reports it as a power-on, and the list starts again), <code>brownout</code>, <code>unrecorded</code> (a software restart), <code>unrecorded_crash</code>. <code>reset</code>: the chip's reset after it (<code>reset_reason</code>'s words; null if no boot has seen it yet). <code>uptime_s</code>, <code>heap_free</code>, <code>largest</code>: when it was written (for <code>unrecorded</code>/<code>unrecorded_crash</code>/<code>brownout</code>, the last heartbeat's, ≤ 30 s earlier; null when unknown; <code>largest</code> null for <code>panic</code>, <code>stack_overflow</code> and <code>diag_abort</code>, which do not walk the heap). <code>where</code>: a panic's <code>file:line message</code> (message ≤ 48 B), the overflowing task (<code>task &lt;name&gt;</code>), the heap check's site, or for <code>unrecorded_crash</code> the last failed allocation if it came at most 35 s before the last heartbeat or after it (up to ~65 s before the crash; it may have been a deliberate, handled probe)</td>
 </tr>
 <tr>
 <td><code>overrides</code>, <code>hidden</code></td>
@@ -248,6 +254,10 @@ curl -s -X POST &quot;$DMD/api/skip?back=1&quot;
 <td><code>max_brightness</code>, <code>brightness_safe_max</code>, <code>safe_start_until</code></td>
 <td>the saved ceiling; the safe default (144); uptime second the start-up limit ends (null after)</td>
 </tr>
+<tr>
+<td><code>scan</code></td>
+<td>null when the firmware cannot read the panel's scan position; else <code>{row_us, sync, blits, torn, in_pair, waited, wait_us, wait_max_us, gave_up, split_on, split, split_ok, unsplit, spin_us}</code>, counts since boot: <code>row_us</code> one row pair's share of the measured refresh (µs), <code>sync</code> = <code>panel_sync</code>; of the <code>blits</code>, <code>torn</code> left a seam (a row pair shown complete a refresh after another) and <code>in_pair</code> wrote a pair while it was being scanned; with <code>panel_sync</code>, <code>waited</code> waited for the scan (<code>wait_us</code> in all, wrapping; <code>wait_max_us</code>) and <code>gave_up</code> could not within the frame's slack; with <code>panel_split</code> (<code>split_on</code>), <code>split</code> blits went up in two passes, <code>split_ok</code> of them with the bottom exactly one refresh after the top, and <code>unsplit</code> went up whole for want of time; <code>spin_us</code> the waits' busy part (µs in all, wrapping; the rest is asleep)</td>
+</tr>
 </tbody>
 </table>
 <pre><code class="language-sh">curl -s $DMD/api/status | jq .now_playing
@@ -264,7 +274,13 @@ directory or a miss.</p>
 Bench test hooks: <code>?sd_fail=N</code> (next N card mounts fail),
 <code>?sd_io_fail=N&amp;sd_io_boots=B</code> (N card reads fail on each of B boots),
 <code>?sd_fallback=clear</code> (forget the card's slow clock at the next boot; see
-<code>POST /api/card/full-speed</code> for the live way).</p>
+<code>POST /api/card/full-speed</code> for the live way), and in <code>bench</code> builds only
+<code>?panic=1</code> (replies <code>{"ok":true,"panicking":true}</code>, then panics on purpose;
+<code>reset_reason</code> in <code>/api/status</code> reads <code>panic</code> after the restart, and
+<code>restarts[0]</code> is <code>{"reason":"panic", "where":"http.rs:… test panic …"}</code>), and
+<code>?overflow=1</code> (replies <code>{"ok":true,"overflowing":true}</code>, then overwrites the
+httpd task's stack canary so FreeRTOS's overflow check fires; <code>restarts[0]</code>
+is <code>{"reason":"stack_overflow", "where":"task httpd"}</code>).</p>
 <pre><code class="language-sh">curl -s -X POST $DMD/api/reboot
 </code></pre>
 <h3 id="post-apicardformat">POST /api/card/format<a class="headerlink" href="#post-apicardformat" title="Permanent link">#</a></h3>
@@ -371,7 +387,7 @@ check is skipped), to watch <code>fast</code> slow a good card down.</p>
 <tr>
 <td><code>follow_host</code></td>
 <td>string</td>
-<td>the RePlayOS box, <code>host</code> or <code>host:port</code> (≤ 64)</td>
+<td>the RePlayOS box, <code>host</code> or <code>host:port</code> (≤ 64; the port 1-65535 in digits, else 400)</td>
 </tr>
 <tr>
 <td><code>follow_code_set</code></td>
@@ -401,7 +417,7 @@ check is skipped), to watch <code>fast</code> slow a good card down.</p>
 <tr>
 <td><code>look_formula</code></td>
 <td><code>""</code></td>
-<td>a formula drawn over everything that plays, before the tint and glow: <code>""</code> or its <code>@fx:psi?src=…</code> path (≤ 2,048 B, else <code>413</code>; one that does not compile or is too heavy to draw over GIFs is a <code>400</code> with the reason, nothing saved)</td>
+<td>a formula drawn over everything that plays, before the tint and glow: <code>""</code> or its <code>@fx:psi?src=…</code> path (≤ 2,048 B, else <code>413</code>; one that does not compile, is too heavy to draw over GIFs (12 ms estimated), or covers the GIF entirely is a <code>400</code> with the reason, nothing saved). The web app sends any Formula here composed with a blend and an amount (<code>look_blend</code>, <code>look_amount</code>): the formula pasted in as <code>part look { … }</code>, then <code>layer &lt;blend&gt; { look(x, y, &lt;amount&gt;) }</code> (<code>look(x, y, &lt;amount&gt;)</code> alone for over; the formula's <code>loop</code> first when it isn't 8 s); over at 100 % is the formula itself</td>
 </tr>
 <tr>
 <td><code>look_formula_name</code></td>
@@ -409,9 +425,29 @@ check is skipped), to watch <code>fast</code> slow a good card down.</p>
 <td>its name, for display (≤ 60 characters, one line)</td>
 </tr>
 <tr>
+<td><code>look_blend</code></td>
+<td><code>over</code></td>
+<td>the blend the web app composed <code>look_formula</code> with, for display: <code>over</code>, <code>screen</code>, <code>add</code>, <code>multiply</code>, <code>max</code> (Lighten), <code>min</code> (Darken); else <code>400</code>. Not applied by the player: <code>look_formula</code> is what plays. Looks saved before it read <code>over</code>, and so does a <code>look_formula</code> sent without <code>look_blend</code> or <code>look_amount</code> (drawn as it is)</td>
+</tr>
+<tr>
+<td><code>look_amount</code></td>
+<td><code>100</code></td>
+<td>and the amount, 0..=100 (%), for display; else <code>400</code>. Looks saved before it read <code>100</code></td>
+</tr>
+<tr>
 <td><code>boot_show</code></td>
 <td><code>short</code></td>
 <td>start-up show: <code>off</code>, <code>short</code>, <code>full</code> (from the next boot)</td>
+</tr>
+<tr>
+<td><code>panel_sync</code></td>
+<td><code>true</code></td>
+<td>refresh-synchronised frames: each frame waits (within its slack before the next) for a point in the panel's scan where writing it shows no seam; applied at once. <code>/api/status</code> <code>scan</code> counts seams either way</td>
+</tr>
+<tr>
+<td><code>panel_split</code></td>
+<td><code>true</code></td>
+<td>with <code>panel_sync</code>: each frame's bottom half (rows 16-31) goes up a refresh after its top half. The panel lights rows r and r+16 together, top to bottom, so a frame shown whole is lit almost a refresh later at row 15 than at row 16 (moving edges step at the half line); split, the lighting time rises smoothly down all 32 rows. A frame whose next is due too soon for the second pass goes up whole; applied at once</td>
 </tr>
 <tr>
 <td><code>card_speed</code></td>

@@ -41,8 +41,8 @@ pal(rainbow, frac(d*1.5 - t/2))
   that licence.
 - An optional fifth line sets where the sliders start:
   `-- values: a=0.3 b=1` (each 0 to 1).
-- The formula must work, and be light enough for the display: at most 8 ms
-  a frame (the editor says "light" or "medium", not "heavy").
+- The formula must work, and be light enough for the display: at most 10 ms
+  a frame as the editor estimates it.
 - The whole file at most 4 KB.
 
 One formula per file; one or a few files per pull request; only files in

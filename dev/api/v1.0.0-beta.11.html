@@ -1,0 +1,886 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="description" content="OpenDMD: open firmware and a web app for the DMDoS LED dot-matrix display.">
+<title>OpenDMD HTTP API (1.0.0-beta.11) · OpenDMD</title>
+<link rel="preload" href="../../fonts/silkscreen.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="../../site.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to the page</a>
+<div class="banner" role="note"><strong>Preview.</strong> OpenDMD isn't publicly launched yet: what's here works, but it may change, and the source code isn't public yet.</div>
+<div class="wrap">
+<nav aria-label="Site"><a class="brand" href="../../index.html"><picture class="led" style="--cols:70;--rows:16"><img src="../../art/wordmark.png" alt="OpenDMD" width="70" height="16"></picture></a><div class="links"><a href="../../index.html">Overview</a><a href="../../demo/" class='demo'>Try the demo</a><a href="../../formulas/index.html">Formula gallery</a><h4>Guide</h4><a href="../../guide/hardware.html">What you need</a><a href="../../install/index.html">Install</a><a href="../../card/index.html">Set up a card</a><a href="../../guide/web-app.html">The web app</a><a href="../../guide/create-art.html">Create Art</a><a href="../../guide/effects.html">Effects and live items</a><a href="../../guide/formulas.html">Formulas</a><a href="../../guide/card.html">The SD card</a><a href="../../guide/updating.html">Updating</a><a href="../../guide/troubleshooting.html">Troubleshooting</a><h4>For developers</h4><a href="../index.html">Building from source</a><a href="../api.html" class='on'>HTTP API</a><a href="../simulator.html">The simulator</a><a href="../effects.html">Writing an effect</a><a href="../pinout.html">Hardware pinout</a></div></nav>
+<main id="main">
+<h1 id="opendmd-http-api">OpenDMD HTTP API<a class="headerlink" href="#opendmd-http-api" title="Permanent link">#</a></h1>
+<p class="vers">This page describes the HTTP API of <strong>OpenDMD 1.0.0-beta.11</strong>. <a href="../api.html">The latest version</a></p>
+
+<p>Everything the web app does goes through this API, and a script can do the
+same. The source of truth is <code>firmware/src/http.rs</code>. In the examples <code>$DMD</code>
+is the player's address.</p>
+<pre><code class="language-sh">DMD=http://opendmd.local
+curl -s $DMD/api/status
+</code></pre>
+<h2 id="ground-rules">Ground rules<a class="headerlink" href="#ground-rules" title="Permanent link">#</a></h2>
+<ul>
+<li><strong>Plain HTTP.</strong> Anyone who can reach the player can change its settings,
+  delete files and rewrite its firmware, unless an API key is set (see
+  "Security"). Keep it on a trusted network; never forward a port to it.</li>
+<li><strong>JSON in, JSON out.</strong> Bodies are JSON unless a route takes raw bytes,
+  with <code>Content-Type: application/json</code> (<code>415</code> otherwise; <code>curl --json</code>
+  sets it). Every error is a non-2xx status with <code>{"error":"&lt;why&gt;"}</code>, except
+  <code>405</code> (a route that exists for another method), the server's <code>text/html</code>.</li>
+<li><strong>Size limits.</strong> JSON bodies ≤ 8 KB (<code>413</code> over), the schedule ≤ 2 KB,
+  a web app pack ≤ 1,310,720 B. Uploads are streamed, any size, but no data
+  for 5 s, or 120 s in all, is a <code>408</code>. A body needs a <code>Content-Length</code>.</li>
+<li><strong>One thing at a time.</strong> One server task, at most 7 open connections
+  (<code>HTTP_MAX_SOCKETS</code>). Transfers and the listings (<code>/api/files</code>,
+  <code>/api/cache/list</code>, <code>/api/cache/failed</code>) run one at a time, two more
+  waiting; a third transfer gets <code>503</code> + <code>Retry-After: 1</code> after 2 s, a
+  listing at once. Short of memory, a listing
+  or transfer is refused up front: <code>503</code> + <code>Retry-After: 2</code>. Retry after the
+  delay; do not fire requests in parallel.</li>
+<li><strong>Slow commands.</strong> A playlist change waits up to 60 s for the index
+  rebuild, other commands 10 s, then <code>504</code>; no player running, <code>503</code>.</li>
+<li><strong>Paths</strong> are card-absolute (<code>/gifs/Consoles/SNES_Super_Metroid_01.gif</code>),
+  percent-encoded in URLs; one that leaves the card is a <code>400</code>.</li>
+</ul>
+<h3 id="fields-that-recur">Fields that recur<a class="headerlink" href="#fields-that-recur" title="Permanent link">#</a></h3>
+<p>Commands that touch the playlist answer with what the player now has:</p>
+<table>
+<thead>
+<tr>
+<th>field</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>entries</code></td>
+<td>number of entries in the playlist in play</td>
+</tr>
+<tr>
+<td><code>index</code></td>
+<td><code>"loaded"</code> (the index on the card was current), <code>"built"</code> (rebuilt now), <code>"in-ram"</code>, or <code>null</code> (the playlist was not touched)</td>
+</tr>
+<tr>
+<td><code>index_ms</code></td>
+<td>how long opening or building the index took, ms</td>
+</tr>
+<tr>
+<td><code>overrides</code></td>
+<td>per-GIF overrides resolved into the playlist</td>
+</tr>
+<tr>
+<td><code>hidden</code></td>
+<td>entries hidden from it ("Hide from this playlist")</td>
+</tr>
+</tbody>
+</table>
+<p>A <strong>playlist name</strong> (<code>set</code>): <code>""</code> is <code>/filelist.txt</code>, <code>filelist.&lt;x&gt;</code> is
+that file at the root, any other name is <code>/sets/&lt;name&gt;.txt</code>. No <code>/</code> or <code>..</code>.</p>
+<h2 id="playback">Playback<a class="headerlink" href="#playback" title="Permanent link">#</a></h2>
+<h3 id="post-apiplay">POST /api/play<a class="headerlink" href="#post-apiplay" title="Permanent link">#</a></h3>
+<p>Play one file now (with the transition, from its prepared copy if there is
+one), then the playlist carries on.</p>
+<p>Body: <code>{"path": string}</code>, a card-absolute GIF path or a live item (see
+"Live items"). <code>"live":true</code>: only replace a formula on screen (<code>409</code> if
+none is; <code>400</code> for any other path). <code>"over":true</code> with a formula: draw it
+over the file on screen instead of playing it, until the playlist moves on
+to another file (in place of the <code>look_formula</code> meanwhile); with <code>"live"</code>
+it changes that formula (<code>409</code> once the playlist has moved on); <code>"path":""</code>
+takes it off. <code>"over"</code> skips the card-path check (the path is a formula or
+<code>""</code>); with no playlist running it is a <code>503</code>; a formula that covers the GIF
+entirely (it reads none of <code>ur ug ub ul</code> and nothing shows through it) or is
+too heavy to draw over GIFs is a <code>400</code> with the reason.</p>
+<p>Reply: <code>{"ok":true,"path":"…"}</code> (with <code>"over":true</code> when drawn over).</p>
+<p>Errors: <code>400</code> neither card-absolute nor a live item, or a bad formula;
+<code>404</code> the file does not open (what was playing carries on); <code>415</code> not a
+GIF, or a live item this firmware does not know (<code>@fx:nonsense</code>); <code>503</code> no
+playlist running; <code>413</code> body over 8 KB, or a formula over 2,048 B.</p>
+<pre><code class="language-sh">curl -s $DMD/api/play --json '{&quot;path&quot;:&quot;/gifs/Consoles/SNES_Super_Metroid_01.gif&quot;}'
+curl -s $DMD/api/play --json '{&quot;path&quot;:&quot;@clock?seconds=1&amp;date=1&quot;}'
+</code></pre>
+<h3 id="post-apipause">POST /api/pause<a class="headerlink" href="#post-apipause" title="Permanent link">#</a></h3>
+<p>Toggle pause. Reply: <code>{"ok":true,"paused":bool}</code>, the new state.</p>
+<p>While paused the panel holds its frame and the player lets go of the file
+(its memory goes to preparing copies and downloads), so resuming brings in
+the next entry, with the transition, from the held frame.</p>
+<pre><code class="language-sh">curl -s -X POST $DMD/api/pause
+</code></pre>
+<h3 id="post-apiskip">POST /api/skip<a class="headerlink" href="#post-apiskip" title="Permanent link">#</a></h3>
+<p>Move on to the next entry now. No body. Reply: <code>{"ok":true}</code> (at once; the
+skip happens on the player's next frame).</p>
+<p><code>?back=1</code> is Previous: play the <code>recent</code> entry one older than the one on
+screen (again: older still) as <code>/api/play</code> does; <code>404</code> at the oldest.</p>
+<pre><code class="language-sh">curl -s -X POST $DMD/api/skip
+curl -s -X POST &quot;$DMD/api/skip?back=1&quot;
+</code></pre>
+<h2 id="status-and-health">Status and health<a class="headerlink" href="#status-and-health" title="Permanent link">#</a></h2>
+<h3 id="get-apistatus">GET /api/status<a class="headerlink" href="#get-apistatus" title="Permanent link">#</a></h3>
+<p>A cheap snapshot (the web app polls it twice a second); counts since boot.</p>
+<table>
+<thead>
+<tr>
+<th>field</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>version</code>, <code>variant</code></td>
+<td>firmware version and flash layout (<code>"4mb"</code>, the DevKit; <code>"8mb"</code>, the OpenDMD board)</td>
+</tr>
+<tr>
+<td><code>uptime_secs</code></td>
+<td>seconds since boot</td>
+</tr>
+<tr>
+<td><code>t_ms</code></td>
+<td>the player's clock, ms, as the reply was built</td>
+</tr>
+<tr>
+<td><code>ip</code>, <code>wifi</code>, <code>hostname</code></td>
+<td>address; <code>"sta"</code> or <code>"ap"</code> (setup mode); name</td>
+</tr>
+<tr>
+<td><code>mdns</code></td>
+<td>the name mDNS answers to (<code>&lt;mdns&gt;.local</code>): <code>hostname</code>, or <code>&lt;hostname&gt;-2</code> when another device has it; <code>""</code> without mDNS</td>
+</tr>
+<tr>
+<td><code>now_playing</code></td>
+<td><code>{ordinal, path, title, elapsed_ms, frame}</code>: <code>elapsed_ms</code> the position in the file at <code>t_ms</code> (loops included); <code>frame</code> 1-based</td>
+</tr>
+<tr>
+<td><code>paused</code></td>
+<td>bool</td>
+</tr>
+<tr>
+<td><code>recent</code>, <code>recent_at</code></td>
+<td>with <code>?recent=1</code>: up to 16 files played, newest first, once each; the index of the one on screen</td>
+</tr>
+<tr>
+<td><code>entries</code>, <code>manifest</code></td>
+<td>playlist length; the playlist file in play (<code>/sdcard/…</code>)</td>
+</tr>
+<tr>
+<td><code>index_state</code></td>
+<td><code>"ready"</code>, <code>"building"</code> or <code>"unavailable"</code></td>
+</tr>
+<tr>
+<td><code>www_version</code>, <code>www</code></td>
+<td>the web app's version (null if none is good); <code>GET /api/www</code>'s object</td>
+</tr>
+<tr>
+<td><code>heap</code></td>
+<td><code>{free, floor, idf_min, transitions_cut}</code>: bytes now, lowest, the system's lowest; transitions the heap gate cut since boot (a probe build adds <code>main_stack</code>, the main task's stack bytes never used, and <code>pushed</code>, pixels pushed to the panel)</td>
+</tr>
+<tr>
+<td><code>heap_floor_at</code></td>
+<td><code>{task0, task1, largest}</code>: tasks on each core and the largest free block at the lowest; null until then</td>
+</tr>
+<tr>
+<td><code>refresh_hz</code></td>
+<td>panel refresh rate</td>
+</tr>
+<tr>
+<td><code>deadline_misses</code>, <code>worst_lateness_ms</code></td>
+<td>all late frames; the latest, ms</td>
+</tr>
+<tr>
+<td><code>misses</code></td>
+<td><code>{steady, switch, threshold_ms, window_ms, worst_steady_ms, by_cause, late_ms}</code>: frames ≥ <code>threshold_ms</code> late in play (<code>steady</code>) or at a GIF change (<code>switch</code>: first frame, transition, first <code>window_ms</code>); all late frames by cause (<code>open</code>, <code>read</code>, <code>decode</code>, <code>transition</code>, <code>blit</code>, <code>log</code>, <code>other</code>, <code>wake</code>) and ms late (<code>"&lt;5"</code> … <code>"&gt;=500"</code>)</td>
+</tr>
+<tr>
+<td><code>gifs_started</code>, <code>streams_aborted</code>, <code>log_drops</code>, <code>stream_stack</code></td>
+<td>files opened; responses cut short; log lines dropped; the file task's least unused stack after a job, bytes (null before one)</td>
+</tr>
+<tr>
+<td><code>sd</code></td>
+<td><code>{mounted, readable, capacity_bytes, error, attempts, formatting, format_error, clock_khz, fallback, failures, reboots, probe, slowdowns, recoveries, fat_index}</code>: the card; <code>readable</code> false if it mounts but its filesystem cannot be read (exFAT: nothing plays); <code>formatting</code>, <code>format_error</code>: <code>POST /api/card/format</code>; <code>error</code> why it is unmounted, unreadable or failing; <code>clock_khz</code> its SPI clock (20000 safe, 40000 fast; null unmounted); <code>fallback</code> a <code>fast</code> card slowed to 20 MHz after errors; <code>failures</code> errors in 60 s; <code>reboots</code> card-failure restarts in 15 min; <code>probe</code> the check of a card at full speed soon after it mounts: null, <code>waiting</code>, <code>running</code>, <code>clean</code>, <code>slowed</code>, <code>skipped</code>; <code>slowdowns</code> times <code>fast</code> slowed the card in place this boot; <code>recoveries</code> failed transfers the card was stopped after (CMD12); <code>fat_index</code> <code>{files, hits, misses, builds, stale}</code> diagnostics of the index that opens GIFs without a directory scan</td>
+</tr>
+<tr>
+<td><code>reset_reason</code>, <code>reset_note</code></td>
+<td><code>poweron</code>, <code>software</code>, <code>panic</code>, <code>interrupt watchdog</code>, <code>task watchdog</code>, <code>brownout</code>, <code>external</code>, …; why this boot's restart was made in plain words — <code>"card failure"</code>, <code>"different card"</code>, <code>"restarted on request"</code>, <code>"restarted to apply a card speed change"</code>, <code>"crashed (panic)"</code>, <code>"restarted without a recorded reason"</code>, … — or null after a power-on</td>
+</tr>
+<tr>
+<td><code>restarts</code></td>
+<td>the last 8 restarts, newest first (this boot's first), kept across restarts, cleared by a power-on: <code>{reason, reset, uptime_s, heap_free, largest, where?}</code>. <code>reason</code>: <code>api_reboot</code>, <code>firmware_update</code>, <code>ap_timeout</code> (setup network timed out), <code>card_full_speed</code>, <code>card_speed</code>, <code>fresh_heap</code> (playlist index needed a fresh heap), <code>panel_trial</code>, <code>card_failure</code>, <code>new_card</code>, <code>card_lost</code> (SPI device lost), <code>card_retry</code>, <code>panic</code>, <code>stack_overflow</code>, <code>diag_abort</code> (a <code>diag-heap</code> build's heap check), or, when the restart wrote nothing, from the reset alone: <code>power_on</code> (also the EN/reset button: the ESP32 reports it as a power-on, and the list starts again), <code>brownout</code>, <code>unrecorded</code> (a software restart), <code>unrecorded_crash</code>. <code>reset</code>: the chip's reset after it (<code>reset_reason</code>'s words; null if no boot has seen it yet). <code>uptime_s</code>, <code>heap_free</code>, <code>largest</code>: when it was written (for <code>unrecorded</code>/<code>unrecorded_crash</code>/<code>brownout</code>, the last heartbeat's, ≤ 30 s earlier; null when unknown; <code>largest</code> null for <code>panic</code>, <code>stack_overflow</code> and <code>diag_abort</code>, which do not walk the heap). <code>where</code>: a panic's <code>file:line message</code> (message ≤ 48 B), the overflowing task (<code>task &lt;name&gt;</code>), the heap check's site, or for <code>unrecorded_crash</code> the last failed allocation if it came at most 35 s before the last heartbeat or after it (up to ~65 s before the crash; it may have been a deliberate, handled probe)</td>
+</tr>
+<tr>
+<td><code>overrides</code>, <code>hidden</code></td>
+<td>as in "Fields that recur"</td>
+</tr>
+<tr>
+<td><code>mode</code>, <code>mode_until</code></td>
+<td><code>normal</code>, <code>dim</code> or <code>off</code> (night mode); until <code>"HH:MM"</code></td>
+</tr>
+<tr>
+<td><code>time</code>, <code>tz</code>, <code>time_synced_s</code></td>
+<td><code>"HH:MM"</code> (null before network time); zone name; seconds since the last sync</td>
+</tr>
+<tr>
+<td><code>wake_until</code></td>
+<td>while <code>/api/wake</code> holds the schedule off, <code>"HH:MM"</code></td>
+</tr>
+<tr>
+<td><code>schedule</code></td>
+<td><code>{rule, set, until}</code>: the rule in force (by position), its playlist, its end</td>
+</tr>
+<tr>
+<td><code>cache</code></td>
+<td><code>{state, prepared, total}</code>, see <code>GET /api/cache</code></td>
+</tr>
+<tr>
+<td><code>context</code></td>
+<td>Follow RePlayOS: <code>{source:"replayos", enabled, state, system, platform, console, game, matches, since, step, error}</code>; <code>state</code> <code>off</code>, <code>unreachable</code>, <code>attract</code>, <code>starting</code>, <code>game</code>, <code>cooldown</code>, for <code>since</code> s</td>
+</tr>
+<tr>
+<td><code>look</code>, <code>glow</code>, <code>glow_held</code></td>
+<td>tint and glow as applied; bytes the glow holds</td>
+</tr>
+<tr>
+<td><code>formula_look</code></td>
+<td>null, or the formula drawn over what plays: <code>{"source": "setting"\|"over_gif", "held": bytes (0: no room, the picture goes up as it is), "frame_us": mean render, "frame_ms": its own frame time (0: it follows the picture)}</code>, with <code>"error"</code> when the saved <code>look_formula</code> can no longer be drawn (e.g. after a firmware change)</td>
+</tr>
+<tr>
+<td><code>attract_live</code></td>
+<td>the live item Follow RePlayOS shows in the menus, else null</td>
+</tr>
+<tr>
+<td><code>max_brightness</code>, <code>brightness_safe_max</code>, <code>safe_start_until</code></td>
+<td>the saved ceiling; the safe default (144); uptime second the start-up limit ends (null after)</td>
+</tr>
+<tr>
+<td><code>scan</code></td>
+<td>null when the firmware cannot read the panel's scan position; else <code>{row_us, sync, blits, torn, in_pair, waited, wait_us, wait_max_us, gave_up, split_on, split, split_ok, unsplit, spin_us}</code>, counts since boot: <code>row_us</code> one row pair's share of the measured refresh (µs), <code>sync</code> = <code>panel_sync</code>; of the <code>blits</code>, <code>torn</code> left a seam (a row pair shown complete a refresh after another) and <code>in_pair</code> wrote a pair while it was being scanned; with <code>panel_sync</code>, <code>waited</code> waited for the scan (<code>wait_us</code> in all, wrapping; <code>wait_max_us</code>) and <code>gave_up</code> could not within the frame's slack; with <code>panel_split</code> (<code>split_on</code>), <code>split</code> blits went up in two passes, <code>split_ok</code> of them with the bottom exactly one refresh after the top, and <code>unsplit</code> went up whole for want of time; <code>spin_us</code> the waits' busy part (µs in all, wrapping; the rest is asleep)</td>
+</tr>
+</tbody>
+</table>
+<pre><code class="language-sh">curl -s $DMD/api/status | jq .now_playing
+</code></pre>
+<h3 id="get-apistat">GET /api/stat<a class="headerlink" href="#get-apistat" title="Permanent link">#</a></h3>
+<p><code>?path=&lt;card path&gt;</code>: whether a file or directory exists, its size.</p>
+<p>Reply: <code>{"path","exists","size","is_dir"}</code>; <code>size</code> in bytes, null for a
+directory or a miss.</p>
+<p>Errors: <code>400</code> no <code>path=</code>, or not card-absolute.</p>
+<pre><code class="language-sh">curl -s &quot;$DMD/api/stat?path=/filelist.txt&quot;
+</code></pre>
+<h3 id="post-apireboot">POST /api/reboot<a class="headerlink" href="#post-apireboot" title="Permanent link">#</a></h3>
+<p>Replies <code>{"ok":true,"rebooting":true}</code>, stops any card write, restarts.
+Bench test hooks: <code>?sd_fail=N</code> (next N card mounts fail),
+<code>?sd_io_fail=N&amp;sd_io_boots=B</code> (N card reads fail on each of B boots),
+<code>?sd_fallback=clear</code> (forget the card's slow clock at the next boot; see
+<code>POST /api/card/full-speed</code> for the live way), and in <code>bench</code> builds only
+<code>?panic=1</code> (replies <code>{"ok":true,"panicking":true}</code>, then panics on purpose;
+<code>reset_reason</code> in <code>/api/status</code> reads <code>panic</code> after the restart, and
+<code>restarts[0]</code> is <code>{"reason":"panic", "where":"http.rs:… test panic …"}</code>), and
+<code>?overflow=1</code> (replies <code>{"ok":true,"overflowing":true}</code>, then overwrites the
+httpd task's stack canary so FreeRTOS's overflow check fires; <code>restarts[0]</code>
+is <code>{"reason":"stack_overflow", "where":"task httpd"}</code>).</p>
+<pre><code class="language-sh">curl -s -X POST $DMD/api/reboot
+</code></pre>
+<h3 id="post-apicardformat">POST /api/card/format<a class="headerlink" href="#post-apicardformat" title="Permanent link">#</a></h3>
+<p>Formats the card FAT32, erasing it: <code>{"confirm":true}</code>, only for a card
+that mounts but cannot be read (<code>sd.readable</code> false: exFAT). <code>202</code> <code>{"ok":true,"formatting":true}</code>; <code>sd.formatting</code>
+until done (~a minute for 64 GB), then <code>sd.readable</code> true or
+<code>sd.format_error</code>. <code>400</code> no <code>confirm</code>; <code>409</code> no card, a readable one, or a
+format running.</p>
+<pre><code class="language-sh">curl -s $DMD/api/card/format --json '{&quot;confirm&quot;:true}'
+</code></pre>
+<h3 id="post-apicardfull-speed">POST /api/card/full-speed<a class="headerlink" href="#post-apicardfull-speed" title="Permanent link">#</a></h3>
+<p>"Try full speed again": forgets this card's slow clock (<code>sd.fallback</code>) and
+returns it to 40 MHz, in place (no restart) when a card is in; with
+<code>card_speed</code> <code>fast</code> it is then checked again, and slowed again at the first
+error. <code>{"ok":true,"applied":"now","clock_khz":40000}</code>; <code>"applied":
+"at_mount"</code> with no card; <code>"restart"</code> (with <code>"rebooting":true</code>) only if the
+clock could not be changed in place. <code>409</code> when <code>card_speed</code> is <code>safe</code>. Test
+hook (bench builds; a release ignores it): <code>?test_errors=N</code> fails the next N card transfers at full speed (the
+check is skipped), to watch <code>fast</code> slow a good card down.</p>
+<pre><code class="language-sh">curl -s -X POST $DMD/api/card/full-speed
+</code></pre>
+<h2 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">#</a></h2>
+<h3 id="get-apiconfig">GET /api/config<a class="headerlink" href="#get-apiconfig" title="Permanent link">#</a></h3>
+<p>The saved settings (never the WiFi password or the RePlayOS code).</p>
+<table>
+<thead>
+<tr>
+<th>field</th>
+<th>type, default</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>wifi_ssid</code></td>
+<td>string</td>
+<td>network to join</td>
+</tr>
+<tr>
+<td><code>wifi_pass_set</code></td>
+<td>bool</td>
+<td>a password is saved (write it as <code>wifi_pass</code>)</td>
+</tr>
+<tr>
+<td><code>brightness</code></td>
+<td>0..=<code>max_brightness</code>, 96</td>
+<td>panel brightness</td>
+</tr>
+<tr>
+<td><code>max_brightness</code></td>
+<td>16..=255, 144</td>
+<td>the ceiling <code>brightness</code> may not pass</td>
+</tr>
+<tr>
+<td><code>dwell_min</code>, <code>dwell_max</code></td>
+<td>seconds, 3 and 30</td>
+<td>how long a file stays up (at least 1; <code>dwell_max</code> ≥ <code>dwell_min</code>)</td>
+</tr>
+<tr>
+<td><code>shuffle</code></td>
+<td>bool, true</td>
+<td>shuffle the playlist</td>
+</tr>
+<tr>
+<td><code>platforms</code></td>
+<td>string, <code>""</code></td>
+<td>comma-separated platform prefixes to play, e.g. <code>"MD,SNES"</code>; empty = all</td>
+</tr>
+<tr>
+<td><code>set</code></td>
+<td>string, <code>""</code></td>
+<td>the playlist (see "Fields that recur")</td>
+</tr>
+<tr>
+<td><code>hostname</code></td>
+<td>string, <code>"opendmd"</code></td>
+<td>name on the network (<code>opendmd.local</code>): 1-32 of <code>a-z 0-9 -</code>, no <code>-</code> at either end (lowercased)</td>
+</tr>
+<tr>
+<td><code>tz</code>, <code>tz_name</code></td>
+<td>strings, <code>"UTC0"</code>, <code>"UTC"</code></td>
+<td>POSIX time zone (<code>GMT0IST,M3.5.0/1,M10.5.0</code>, ≤ 64 characters); its display name (≤ 64)</td>
+</tr>
+<tr>
+<td><code>transition</code></td>
+<td><code>dissolve</code></td>
+<td><code>dissolve</code>, <code>wipe_left</code>, <code>wipe_right</code>, <code>wipe_down</code>, <code>wipe_up</code>, <code>blinds</code>, <code>push</code>, <code>fade</code>, <code>none</code></td>
+</tr>
+<tr>
+<td><code>transition_ms</code></td>
+<td>20..=2000, 400</td>
+<td>transition length</td>
+</tr>
+<tr>
+<td><code>auto_prepare</code></td>
+<td><code>idle</code></td>
+<td>prepare copies by itself: <code>idle</code> (when the panel is idle), <code>always</code> (also while playing, slower), <code>off</code></td>
+</tr>
+<tr>
+<td><code>follow</code></td>
+<td>bool, false</td>
+<td>Follow RePlayOS</td>
+</tr>
+<tr>
+<td><code>follow_host</code></td>
+<td>string</td>
+<td>the RePlayOS box, <code>host</code> or <code>host:port</code> (≤ 64; the port 1-65535 in digits, else 400)</td>
+</tr>
+<tr>
+<td><code>follow_code_set</code></td>
+<td>bool</td>
+<td>its code is saved (write it as <code>follow_code</code>, ≤ 64, one line)</td>
+</tr>
+<tr>
+<td><code>attract_set</code></td>
+<td>string or null</td>
+<td>the playlist shown in RePlayOS's menus; null = the current one</td>
+</tr>
+<tr>
+<td><code>attract</code></td>
+<td>string, <code>""</code></td>
+<td>shown in the menus instead of a playlist: <code>""</code>, <code>"clock"</code>, <code>"text:&lt;message&gt;"</code> (≤ 200 characters, one line), <code>"fx:&lt;effect&gt;[?options]"</code></td>
+</tr>
+<tr>
+<td><code>look</code></td>
+<td><code>colour</code></td>
+<td>tint: <code>colour</code> (<code>color</code>), <code>amber</code>, <code>red</code>, <code>green</code>, <code>blue</code>, <code>white</code></td>
+</tr>
+<tr>
+<td><code>glow</code></td>
+<td><code>off</code></td>
+<td>phosphor glow: <code>off</code>, <code>short</code>, <code>long</code></td>
+</tr>
+<tr>
+<td><code>look_formula</code></td>
+<td><code>""</code></td>
+<td>a formula drawn over everything that plays, before the tint and glow: <code>""</code> or its <code>@fx:psi?src=…</code> path (≤ 2,048 B, else <code>413</code>; one that does not compile, is too heavy to draw over GIFs (12 ms estimated), or covers the GIF entirely is a <code>400</code> with the reason, nothing saved). The web app sends any Formula here composed with a blend and an amount (<code>look_blend</code>, <code>look_amount</code>): the formula pasted in as <code>part look { … }</code>, then <code>layer &lt;blend&gt; { look(x, y, &lt;amount&gt;) }</code> (<code>look(x, y, &lt;amount&gt;)</code> alone for over; the formula's <code>loop</code> first when it isn't 8 s); over at 100 % is the formula itself</td>
+</tr>
+<tr>
+<td><code>look_formula_name</code></td>
+<td><code>""</code></td>
+<td>its name, for display (≤ 60 characters, one line)</td>
+</tr>
+<tr>
+<td><code>look_blend</code></td>
+<td><code>over</code></td>
+<td>the blend the web app composed <code>look_formula</code> with, for display: <code>over</code>, <code>screen</code>, <code>add</code>, <code>multiply</code>, <code>max</code> (Lighten), <code>min</code> (Darken); else <code>400</code>. Not applied by the player: <code>look_formula</code> is what plays. Looks saved before it read <code>over</code>, and so does a <code>look_formula</code> sent without <code>look_blend</code> or <code>look_amount</code> (drawn as it is)</td>
+</tr>
+<tr>
+<td><code>look_amount</code></td>
+<td><code>100</code></td>
+<td>and the amount, 0..=100 (%), for display; else <code>400</code>. Looks saved before it read <code>100</code></td>
+</tr>
+<tr>
+<td><code>boot_show</code></td>
+<td><code>short</code></td>
+<td>start-up show: <code>off</code>, <code>short</code>, <code>full</code> (from the next boot)</td>
+</tr>
+<tr>
+<td><code>panel_sync</code></td>
+<td><code>true</code></td>
+<td>refresh-synchronised frames: each frame waits (within its slack before the next) for a point in the panel's scan where writing it shows no seam; applied at once. <code>/api/status</code> <code>scan</code> counts seams either way</td>
+</tr>
+<tr>
+<td><code>panel_split</code></td>
+<td><code>true</code></td>
+<td>with <code>panel_sync</code>: each frame's bottom half (rows 16-31) goes up a refresh after its top half. The panel lights rows r and r+16 together, top to bottom, so a frame shown whole is lit almost a refresh later at row 15 than at row 16 (moving edges step at the half line); split, the lighting time rises smoothly down all 32 rows. A frame whose next is due too soon for the second pass goes up whole; applied at once</td>
+</tr>
+<tr>
+<td><code>card_speed</code></td>
+<td><code>safe</code></td>
+<td>the card's SPI clock: <code>safe</code> (20 MHz), <code>fast</code> (40 MHz; at a card error, 20 MHz from then on for that card, changed in place with the transfer retried, so nothing restarts), <code>full</code> (API and bench only: always 40 MHz, never slowed; errors restart the player as a failing card does). 20 MHz is the default because the SD spec only promises SPI up to 25 MHz, and a marginal card at 40 MHz was measured returning wrong data with no error; at 20 MHz the card still reads several times faster than playback (tens of KB/s) or WiFi downloads (~300 KB/s) use it. Older firmware's <code>auto</code> reads as <code>safe</code></td>
+</tr>
+<tr>
+<td><code>panel</code></td>
+<td>object</td>
+<td>panel timing: <code>clk_phase</code> true (rising edge) or false, <code>latch_blanking</code> 1..=4 (1), <code>driver</code> <code>shiftreg</code>, <code>fm6126a</code>, <code>fm6124</code>, <code>icn2038s</code>, <code>mbi5124</code>, <code>dp3246</code>, <code>i2s_speed</code> 8, 16, 20 MHz (8), <code>min_refresh</code> 30..=240 Hz (60)</td>
+</tr>
+<tr>
+<td><code>panel_now</code>, <code>panel_next</code>, <code>panel_trial_s</code></td>
+<td></td>
+<td>what runs; what a restart would run, else null; seconds until the trial reverts, else null</td>
+</tr>
+</tbody>
+</table>
+<pre><code class="language-sh">curl -s $DMD/api/config
+</code></pre>
+<h3 id="put-apiconfig">PUT /api/config<a class="headerlink" href="#put-apiconfig" title="Permanent link">#</a></h3>
+<p>A partial update: only the fields to change, named as above (plus
+<code>wifi_pass</code>, and <code>follow_code</code>, <code>""</code> clearing it). Applied at once:
+brightness, look and glow repaint the panel; a transition applies from the
+next file; a new <code>set</code>, <code>platforms</code> or <code>shuffle</code> rebuilds the playlist in
+place; a new <code>hostname</code> at once (mDNS re-announces, status <code>mdns</code> says the
+name it took; DHCP sends it from the next lease renewal). WiFi changes take
+effect after a reboot.</p>
+<p>Panel timing is tried: a <code>panel</code> object (any of its fields) runs for 60 s,
+then reverts unless <code>"panel_confirm":true</code> keeps it (<code>false</code> undoes it; with
+<code>panel</code>, it saves at once). <code>clk_phase</code> and <code>latch_blanking</code> apply live; the
+others at a restart, and revert with one. <code>"panel":null</code> saves the defaults.</p>
+<p>Reply: <code>{"ok":true, entries, index, index_ms, overrides, hidden,
+"brightness", "max_brightness", "reboot_required", "panel", …}</code> (the
+playlist fields as in "Fields that recur", the panel ones as above;
+<code>reboot_required</code>: a WiFi or panel change waits for a reboot). With
+<code>card_speed</code>, <code>card_speed_applied</code>: <code>now</code> (the clock changed in place),
+<code>at_mount</code> (no card in), <code>restart</code> (the clock could not be changed in place: saved, and the device restarts after the reply).</p>
+<p>Errors (nothing saved): <code>400</code> a value out of range or not one of the names
+(the message says which), e.g. <code>brightness N is above the maximum M; raise
+Maximum brightness first</code> (lowering <code>max_brightness</code> below the saved
+<code>brightness</code> lowers it too); <code>404 {"error":"set not found"}</code> the playlist
+does not open; <code>409</code> a confirm with no trial, or a taken <code>hostname</code> (below); <code>413</code> over 8 KB. With a
+card in, a new <code>platforms</code> (or a <code>set</code> change with a filter kept) is checked
+against the playlist that would be in force (a schedule rule's <code>set</code> if one
+applies) before anything is saved: one that would leave it empty is a <code>400</code>
+naming the filter; one whose playlist cannot be built at all is refused too
+(<code>500</code>, nothing saved). Follow RePlayOS's game and attract playlists are not
+checked up front; if a filter leaves nothing to play, Now says so and offers
+Clear filter.</p>
+<pre><code class="language-sh">curl -s -X PUT $DMD/api/config --json '{&quot;brightness&quot;:64,&quot;transition&quot;:&quot;wipe_left&quot;,&quot;transition_ms&quot;:300}'
+curl -s -X PUT $DMD/api/config --json '{&quot;set&quot;:&quot;consoles&quot;,&quot;shuffle&quot;:true}'
+curl -s -X PUT $DMD/api/config --json '{&quot;panel&quot;:{&quot;clk_phase&quot;:false}}'
+</code></pre>
+<h3 id="get-apiname-check">GET /api/name-check<a class="headerlink" href="#get-apiname-check" title="Permanent link">#</a></h3>
+<p><code>?name=kitchen</code>: does another device answer to <code>kitchen.local</code>? Asked over
+mDNS (≤ 1.2 s): <code>{"name","valid","taken","by"}</code> (<code>by</code> its address;
+<code>taken</code> null if it could not ask: an invalid name, setup mode, the network
+busy; never for this player's own name). A taken <code>hostname</code> in <code>PUT
+/api/config</code> is a <code>409</code> <code>{"error":"name taken: …","name","by"}</code>.</p>
+<h3 id="post-apipaneltest">POST /api/panel/test<a class="headerlink" href="#post-apipaneltest" title="Permanent link">#</a></h3>
+<p>The guided panel-timing test: the panel shows four test pictures, each
+under A then B (2 s each, the letter in the bottom-right corner), and
+nothing plays. <code>{"setting":"clk_phase"}</code> (A rising, B falling) or
+<code>"latch_blanking"</code> (A as saved, B two more, at most 4; from 4, two fewer)
+starts or restarts it; <code>{"stop":true}</code> ends it. It also ends after 120 s
+or on any <code>PUT /api/config</code>; either way the saved timing and playback come
+back. Nothing is saved (<code>panel_now</code> stays the saved values): save the pick
+with <code>"panel_confirm":true</code>. Reply: <code>{"ok":true, "setting","a","b",
+"left_s"}</code> (<code>a</code>, <code>b</code> as <code>panel</code>). <code>409</code> during a trial, with a change
+waiting for a restart, with the panel off for the night, or <code>clk_phase</code>
+on <code>mbi5124</code>/<code>dp3246</code>.</p>
+<pre><code class="language-sh">curl -s $DMD/api/panel/test --json '{&quot;setting&quot;:&quot;clk_phase&quot;}'
+</code></pre>
+<h3 id="get-apiwifiscan">GET /api/wifi/scan<a class="headerlink" href="#get-apiwifiscan" title="Permanent link">#</a></h3>
+<p>The networks in range (2.4 GHz, named, the strongest of each name), a
+couple of seconds' scan: <code>[{"ssid","rssi","channel","auth","secure"}]</code>,
+<code>rssi</code> in dBm. Empty in setup (access-point) mode: a scan would drop the
+browser that asked. <code>504</code> if it takes over 12 s.</p>
+<pre><code class="language-sh">curl -s $DMD/api/wifi/scan
+</code></pre>
+<h2 id="files-and-gifs">Files and GIFs<a class="headerlink" href="#files-and-gifs" title="Permanent link">#</a></h2>
+<p>The card's files are served as they are:</p>
+<table>
+<thead>
+<tr>
+<th>method</th>
+<th>path</th>
+<th>what</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GET</td>
+<td><code>/gifs/…</code></td>
+<td>a GIF</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/sets/…</code></td>
+<td>a playlist (<code>/sets/&lt;name&gt;.txt</code>) or its overrides (<code>.meta</code>)</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/cache/…</code></td>
+<td>a prepared copy</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/filelist.txt</code>, <code>/filelist.&lt;x&gt;</code></td>
+<td>a playlist at the card's root</td>
+</tr>
+</tbody>
+</table>
+<p>With a <code>Content-Length</code> and the type from the extension; playlists and
+<code>.meta</code> are <code>text/plain</code> and <code>no-cache</code>. A missing file is a <code>404</code>.</p>
+<pre><code class="language-sh">curl -s -O $DMD/gifs/Consoles/SNES_Super_Metroid_01.gif
+</code></pre>
+<h3 id="get-apifiles">GET /api/files<a class="headerlink" href="#get-apifiles" title="Permanent link">#</a></h3>
+<p><code>?dir=&lt;card path&gt;</code> (default <code>/</code>), <code>&amp;sizes=1</code> for sizes. A directory
+listing, streamed:</p>
+<p><code>{"dir":"/gifs","entries":[{"name","size","dir"}],"count":N,"sizes":bool}</code></p>
+<p><code>size</code> is null without <code>sizes=1</code>: each costs a directory scan, minutes for
+a folder of thousands. <code>404</code> no such directory.</p>
+<pre><code class="language-sh">curl -s &quot;$DMD/api/files?dir=/sets&amp;sizes=1&quot;
+</code></pre>
+<h3 id="put-apifilespath">PUT /api/files/&lt;path&gt;<a class="headerlink" href="#put-apifilespath" title="Permanent link">#</a></h3>
+<p>Write a file anywhere on the card, the body its bytes; directories are
+created, a file replaced (the player moves off it first).</p>
+<p>Reply: <code>{"ok":true,"path":"/…","bytes":N}</code>.</p>
+<p>A playlist (<code>/filelist.*</code>, <code>/sets/*</code>) is installed as by
+<code>PUT /api/sets/&lt;name&gt;</code>, with its reply; an overrides file (<code>.meta</code>)
+rebuilds its playlist if in play. With a GIF, upload its prepared copy
+too, or forget the old one.</p>
+<p>Errors: <code>400</code> path escapes the card; <code>408</code> the body stalled; <code>503</code> busy
+(retry).</p>
+<pre><code class="language-sh">curl -s -X PUT --data-binary @Super_Metroid.gif $DMD/api/files/gifs/Consoles/SNES_Super_Metroid_01.gif
+</code></pre>
+<h3 id="delete-apifilespath">DELETE /api/files/&lt;path&gt;<a class="headerlink" href="#delete-apifilespath" title="Permanent link">#</a></h3>
+<p>Delete a file (the player moves off it first): a GIF with its prepared
+copy, a playlist with its index; an overrides file rebuilds its playlist.
+An empty directory under <code>/gifs/</code> too. Reply: <code>{"ok":true}</code>.</p>
+<p><code>?recursive=1</code> removes a whole directory, only under <code>/cache/</code> (and the
+retired <code>/odm/</code>), else <code>400</code>; 4 s of work a request:
+<code>{"ok":true,"path","removed":N,"done":bool}</code>, ask again until <code>done</code>.</p>
+<p>Errors: <code>404</code> not there; <code>409</code> the playlist in play, or a directory not
+empty.</p>
+<pre><code class="language-sh">curl -s -X DELETE $DMD/api/files/gifs/Consoles/SNES_Super_Metroid_01.gif
+curl -s -X DELETE &quot;$DMD/api/files/cache?recursive=1&quot;
+</code></pre>
+<h3 id="post-apifilesmove">POST /api/files/move<a class="headerlink" href="#post-apifilesmove" title="Permanent link">#</a></h3>
+<p>Rename a GIF: <code>{"from":"/gifs/A/x.gif","to":"/gifs/B/y.gif"}</code>. Its prepared
+copy follows; playlists and overrides are <em>not</em> rewritten (the web app
+does that).</p>
+<p>Reply: <code>{"ok":true,"from","to","copy":"moved"|"removed"|"none","smooth":bool,"failed":bool}</code>.</p>
+<p>Errors: <code>400</code> not two different <code>/gifs/….gif</code> paths; <code>404</code> no <code>from</code>;
+<code>409</code> <code>to</code> exists (a change of case is fine).</p>
+<pre><code class="language-sh">curl -s $DMD/api/files/move --json '{&quot;from&quot;:&quot;/gifs/Other/a.gif&quot;,&quot;to&quot;:&quot;/gifs/Arcade/ARCADE_A_01.gif&quot;}'
+</code></pre>
+<h2 id="playlists">Playlists<a class="headerlink" href="#playlists" title="Permanent link">#</a></h2>
+<p>A playlist is a text file, a card path a line: read at <code>/sets/&lt;name&gt;.txt</code>,
+listed by <code>GET /api/files?dir=/sets</code>, picked by <code>PUT /api/config {"set":…}</code>,
+deleted by <code>DELETE /api/files/sets/&lt;name&gt;.txt</code>.</p>
+<h3 id="put-apisetsname">PUT /api/sets/&lt;name&gt;<a class="headerlink" href="#put-apisetsname" title="Permanent link">#</a></h3>
+<p>Write <code>/sets/&lt;name&gt;.txt</code> (<code>.txt</code> added if missing), the body the file;
+reindexed at once if in play.</p>
+<p>Reply: <code>{"ok":true,"path":"/sdcard/sets/&lt;name&gt;.txt", entries, index,
+index_ms, overrides, hidden}</code>. <code>400</code> a name with <code>/</code> or <code>..</code>.</p>
+<pre><code class="language-sh">printf '/gifs/Consoles/SNES_Super_Metroid_01.gif\n' &gt; consoles.txt
+curl -s -X PUT --data-binary @consoles.txt $DMD/api/sets/consoles
+</code></pre>
+<h3 id="put-apimanifest">PUT /api/manifest<a class="headerlink" href="#put-apimanifest" title="Permanent link">#</a></h3>
+<p>The same for the card's default playlist, <code>/filelist.txt</code>.</p>
+<pre><code class="language-sh">curl -s -X PUT --data-binary @filelist.txt $DMD/api/manifest
+</code></pre>
+<h3 id="post-apireindex">POST /api/reindex<a class="headerlink" href="#post-apireindex" title="Permanent link">#</a></h3>
+<p>Rebuild the playlist in play's index (after the card changed some other
+way). Reply: <code>{"ok":true, entries, "index":"built", index_ms, …}</code>.</p>
+<pre><code class="language-sh">curl -s -X POST $DMD/api/reindex
+</code></pre>
+<h2 id="overrides-and-schedule">Overrides and schedule<a class="headerlink" href="#overrides-and-schedule" title="Permanent link">#</a></h2>
+<h3 id="get-apioverrides">GET /api/overrides<a class="headerlink" href="#get-apioverrides" title="Permanent link">#</a></h3>
+<p><code>?set=&lt;playlist name&gt;</code>. A playlist's per-GIF overrides, streamed:</p>
+<p><code>{"set","playlist":"/filelist.txt","overrides":[{"path", "never"?, "w"?, "dwell"?, "dwell_x"?, "loops"?}]}</code></p>
+<p><code>never</code> hidden; <code>w</code> weight (Favourite 3, Play less 0.5); <code>dwell</code> seconds,
+or <code>dwell_x</code> times the usual; <code>loops</code>. To change them, write the <code>.meta</code>
+beside the playlist (<code>/sets/&lt;name&gt;.meta</code>, <code>/filelist.meta</code>), a line per GIF:
+its path, then tab-separated <code>never</code>, <code>w=&lt;n&gt;</code>, <code>dwell=&lt;s&gt;</code> or <code>dwell=&lt;k&gt;x</code>,
+<code>loops=&lt;n&gt;</code>.</p>
+<pre><code class="language-sh">curl -s &quot;$DMD/api/overrides?set=&quot;
+printf '/gifs/Consoles/SNES_Super_Metroid_01.gif\tw=3\n' &gt; filelist.meta
+curl -s -X PUT --data-binary @filelist.meta $DMD/api/files/filelist.meta
+</code></pre>
+<h3 id="get-apischedule">GET /api/schedule<a class="headerlink" href="#get-apischedule" title="Permanent link">#</a></h3>
+<p>The schedule as saved, or <code>{"rules":[],"night":null}</code>.</p>
+<pre><code class="language-sh">curl -s $DMD/api/schedule
+</code></pre>
+<h3 id="put-apischedule">PUT /api/schedule<a class="headerlink" href="#put-apischedule" title="Permanent link">#</a></h3>
+<p>Replace the schedule (≤ 2 KB, at most 16 rules):</p>
+<pre><code class="language-json">{&quot;rules&quot;:[{&quot;days&quot;:[1,2,3,4,5],&quot;from&quot;:&quot;18:00&quot;,&quot;to&quot;:&quot;23:00&quot;,&quot;set&quot;:&quot;consoles&quot;,&quot;brightness&quot;:96}],
+ &quot;night&quot;:{&quot;from&quot;:&quot;23:30&quot;,&quot;to&quot;:&quot;07:00&quot;,&quot;mode&quot;:&quot;off&quot;,&quot;brightness&quot;:8}}
+</code></pre>
+<p><code>days</code> 1 (Monday) to 7 (empty or absent: every day); <code>set</code> and
+<code>brightness</code> optional. The first matching rule wins; <code>to</code> ≤ <code>from</code> runs past
+midnight. <code>night</code> (every day, beats every rule) has <code>mode</code> <code>"off"</code> (panel
+dark) or <code>"dim"</code> (at <code>brightness</code>, default 8). Rules change what plays, not
+the saved settings. Nothing applies before the clock is set from the
+network.</p>
+<p>Reply: <code>{"ok":true,"rules":N,"night":bool}</code>. Errors: <code>400</code> a bad time, day,
+mode or playlist name (the message names the rule); <code>404</code> <code>set not found:
+&lt;names&gt;</code>; <code>413</code> over 2 KB.</p>
+<pre><code class="language-sh">curl -s -X PUT $DMD/api/schedule --json '{&quot;rules&quot;:[],&quot;night&quot;:{&quot;from&quot;:&quot;00:00&quot;,&quot;to&quot;:&quot;07:00&quot;,&quot;mode&quot;:&quot;off&quot;}}'
+</code></pre>
+<h3 id="post-apiwake">POST /api/wake<a class="headerlink" href="#post-apiwake" title="Permanent link">#</a></h3>
+<p>Suspend the schedule for a while (normal mode, the saved playlist):
+<code>{"minutes":N}</code>, 0..=1440; 0 resumes it now. Reply:
+<code>{"ok":true,"minutes":N,"wake_until":"HH:MM"|null}</code>. <code>400</code> over 1440.</p>
+<pre><code class="language-sh">curl -s $DMD/api/wake --json '{&quot;minutes&quot;:60}'
+</code></pre>
+<h2 id="prepared-copies">Prepared copies<a class="headerlink" href="#prepared-copies" title="Permanent link">#</a></h2>
+<p>A prepared copy is a smaller GIF the player plays in place of the original.
+The player makes them when idle (<code>auto_prepare</code>); the web app makes them
+faster and uploads them to <code>/cache/&lt;Category&gt;/&lt;xx&gt;/&lt;name&gt;.gif</code>
+(<code>docs/cache-format.md</code>).</p>
+<h3 id="get-apicache">GET /api/cache<a class="headerlink" href="#get-apicache" title="Permanent link">#</a></h3>
+<p>How many of the playlist's files are prepared:</p>
+<p><code>{"total","prepared","state","count_ms","auto"}</code>: the playlist's length;
+how many have a copy or play as they are (null until counted); <code>"counting"</code> or <code>"ready"</code> (poll
+until ready); the last count's ms. <code>auto</code>, the player's own preparing:
+<code>{"mode","state","reason","policy","session","failed","avg_full_s","avg_drip_s","eta_s","current"}</code>:
+<code>mode</code> = <code>auto_prepare</code>; <code>state</code> <code>idle</code>, <code>running</code>, <code>paused</code>, <code>done</code>;
+<code>reason</code> it is not running (<code>off</code>, <code>playing</code>, <code>gif on screen</code>, <code>low
+memory</code>, <code>busy</code>, <code>transition</code>, <code>reindex</code>, <code>no playlist</code>, <code>card error</code>);
+<code>policy</code> <code>full</code> or <code>drip</code> (pace); <code>session</code> copies since boot; <code>failed</code>
+GIFs it cannot prepare; <code>avg_*_s</code> s per file per pace; <code>eta_s</code> s left at
+the full pace; <code>current</code> the GIF in hand.</p>
+<pre><code class="language-sh">curl -s $DMD/api/cache
+</code></pre>
+<h3 id="get-apicachelist">GET /api/cache/list<a class="headerlink" href="#get-apicachelist" title="Permanent link">#</a></h3>
+<p>Every prepared copy, streamed: <code>{"paths":["/cache/…"],"count":N}</code>.
+Subtract it from a playlist for what is left to prepare.</p>
+<pre><code class="language-sh">curl -s $DMD/api/cache/list | jq .count
+</code></pre>
+<h3 id="get-apicachefailed">GET /api/cache/failed<a class="headerlink" href="#get-apicachefailed" title="Permanent link">#</a></h3>
+<p>The GIFs with no copy, streamed:
+<code>[{"path":"/gifs/…","reason":"image truncated"}]</code>, <code>[]</code> if none. Reason
+<code>more than 256 colours…</code>: it plays as it is (done).</p>
+<pre><code class="language-sh">curl -s $DMD/api/cache/failed
+</code></pre>
+<h3 id="post-apicachefailed">POST /api/cache/failed<a class="headerlink" href="#post-apicachefailed" title="Permanent link">#</a></h3>
+<p>Record a GIF the browser could not prepare either (or one that plays as it
+is), so the player skips it too: <code>{"path":"/gifs/….gif","reason":string}</code> (kept to one line, ≤ 200
+characters). Reply: <code>{"ok":true,"path","added":bool}</code> (false: it was
+there). <code>400</code> not a <code>/gifs/….gif</code> path.</p>
+<pre><code class="language-sh">curl -s $DMD/api/cache/failed --json '{&quot;path&quot;:&quot;/gifs/Other/broken.gif&quot;,&quot;reason&quot;:&quot;image truncated&quot;}'
+</code></pre>
+<h3 id="delete-apicachefailed">DELETE /api/cache/failed<a class="headerlink" href="#delete-apicachefailed" title="Permanent link">#</a></h3>
+<p>Forget the whole list, so replaced GIFs are tried again. Reply:
+<code>{"ok":true,"cleared":bool}</code> (false: none).</p>
+<pre><code class="language-sh">curl -s -X DELETE $DMD/api/cache/failed
+</code></pre>
+<h3 id="post-apicacheforget">POST /api/cache/forget<a class="headerlink" href="#post-apicacheforget" title="Permanent link">#</a></h3>
+<p>Delete one GIF's prepared copy (after replacing the GIF):
+<code>{"path":"/gifs/….gif"}</code> (on the panel, the player moves on first).
+Reply: <code>{"ok":true,"path","removed":bool}</code>. <code>400</code> not a <code>/gifs/….gif</code> path.</p>
+<pre><code class="language-sh">curl -s $DMD/api/cache/forget --json '{&quot;path&quot;:&quot;/gifs/Consoles/SNES_Super_Metroid_01.gif&quot;}'
+</code></pre>
+<h2 id="follow-replayos">Follow RePlayOS<a class="headerlink" href="#follow-replayos" title="Permanent link">#</a></h2>
+<p>With <code>follow</code> on, the panel follows a RePlayOS box: the game's art while a
+game runs, the attract playlist (or <code>attract</code>) in the menus. Set with
+<code>PUT /api/config</code> (<code>follow</code>, <code>follow_host</code>, <code>follow_code</code>, <code>attract_set</code>,
+<code>attract</code>); its state is <code>/api/status</code> <code>context</code>.</p>
+<h3 id="post-apifollowtest">POST /api/follow/test<a class="headerlink" href="#post-apifollowtest" title="Permanent link">#</a></h3>
+<p>Ask the box for its version and status, saving nothing:
+<code>{"host"?: string, "code"?: string}</code> (absent: the saved ones; an empty body
+is fine). Up to ~20 s.</p>
+<p>Reply: <code>{"ok","reachable","version","status","view","system","game","error"}</code>;
+<code>status</code> is the box's HTTP status (401: wrong code). An early failure has
+only <code>ok</code>, <code>reachable</code>, <code>error</code> (and <code>version</code>).</p>
+<pre><code class="language-sh">curl -s $DMD/api/follow/test --json '{&quot;host&quot;:&quot;192.168.0.20&quot;,&quot;code&quot;:&quot;1234&quot;}'
+</code></pre>
+<h2 id="network">Network<a class="headerlink" href="#network" title="Permanent link">#</a></h2>
+<p>The player joins the WiFi network in its settings. With none, or after
+failing to join twice, it raises an open network, <code>OpenDMD-Setup</code>, as a
+captive portal (unknown paths redirect to <code>/</code>), and restarts every 10
+minutes to try again.</p>
+<table>
+<thead>
+<tr>
+<th>method</th>
+<th>path</th>
+<th>what</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GET</td>
+<td><code>/</code></td>
+<td>the web app (in setup mode with no good web app in flash, the setup page)</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/setup</code></td>
+<td>the built-in setup page: join a network</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/hotspot-detect.html</code>, <code>/generate_204</code>, …</td>
+<td>captive-portal probes: a redirect to <code>/</code> in setup mode, else 404</td>
+</tr>
+</tbody>
+</table>
+<p>Over USB, the browser installer sets it with Improv Serial instead (the
+player joins at once, no reboot). Over HTTP, set the network with <code>PUT /api/config</code>, then reboot:</p>
+<pre><code class="language-sh">curl -s -X PUT $DMD/api/config --json '{&quot;wifi_ssid&quot;:&quot;MyNet&quot;,&quot;wifi_pass&quot;:&quot;secret&quot;}'
+curl -s -X POST $DMD/api/reboot
+</code></pre>
+<h2 id="security">Security<a class="headerlink" href="#security" title="Permanent link">#</a></h2>
+<p>This keeps out casual use (a guest, a script, another web page in your
+browser), not someone on the same WiFi: it is plain HTTP.</p>
+<ul>
+<li>A <code>POST</code>/<code>PUT</code>/<code>DELETE</code> whose <code>Origin</code> is another host than its <code>Host</code>
+  is a <code>403</code> (no <code>Origin</code>, as from curl, is fine).</li>
+<li><strong>API key</strong> (Settings → Device → Security): with <code>api_key</code> set (<code>PUT
+  /api/config</code>, 8..64 of <code>A-Z a-z 0-9 . _ ~ -</code>, <code>""</code> = off; <code>GET</code> shows
+  <code>api_key_set</code>), the API and the card's files need <code>Authorization: Bearer
+  &lt;key&gt;</code> or <code>?key=&lt;key&gt;</code>, else <code>401</code>. Not the web app's files or <code>/setup</code>,
+  nor in setup mode (<code>OpenDMD-Setup</code>), where a lost key can be cleared.</li>
+</ul>
+<pre><code class="language-sh">K='Authorization: Bearer &lt;key&gt;'
+curl -s -H &quot;$K&quot; $DMD/api/status
+curl -s -X PUT $DMD/api/config -H &quot;$K&quot; --json '{&quot;api_key&quot;:&quot;&quot;}'
+</code></pre>
+<h2 id="web-app-update">Web app update<a class="headerlink" href="#web-app-update" title="Permanent link">#</a></h2>
+<p>The web app is one file in the player's flash, a www pack
+(<code>docs/www-pack.md</code>): <code>opendmd-web/www.pack</code> from <code>make web</code>,
+<code>dist/opendmd-&lt;version&gt;-www.pack</code> in a release. Served at <code>/…</code> and <code>/www/…</code>.</p>
+<h3 id="get-apiwww">GET /api/www<a class="headerlink" href="#get-apiwww" title="Permanent link">#</a></h3>
+<p><code>{"version","bytes","entries","ok","error","staged"}</code>: the pack's version
+(<code>git describe</code> of its build), size, file count, whether it verified, why
+not (erased, damaged, an update cut short, being written), whether this
+boot's last update was staged on the card (null: none, or refused at its
+header).</p>
+<pre><code class="language-sh">curl -s $DMD/api/www
+</code></pre>
+<h3 id="put-apiwww">PUT /api/www<a class="headerlink" href="#put-apiwww" title="Permanent link">#</a></h3>
+<p>Write a new pack (the whole file). Its header is checked before anything
+is erased: not a pack, an unknown format, or a length not the body's is a
+<code>400</code> at once, and the app in flash stays. With a card, the pack is staged
+there and read back (size, CRC; failed reads retried): a <code>408</code> (cut short),
+<code>422</code> (bad CRC) or <code>500</code> (unreadable) leaves the old app. Then it is
+written to flash (~7 s for 800 KB) and served at once, no reboot. If that
+write fails (<code>500</code>), pages are <code>503</code> and the next restart writes the pack
+from the card, or push again. Without a usable card, a <code>408</code>/<code>422</code> leaves
+pages <code>503</code> until a good pack is written.</p>
+<p>Reply: <code>GET /api/www</code>'s object (<code>staged</code> false: no card staging). <code>411</code> no
+length; <code>413</code> too big. Any good pack is accepted, older or newer: check the
+version <code>GET /api/www</code> reports (<code>make www-push HOST=…</code> does).</p>
+<pre><code class="language-sh">curl -s -X PUT --data-binary @opendmd-web/www.pack $DMD/api/www
+curl -s $DMD/api/www
+</code></pre>
+<h2 id="firmware-update">Firmware update<a class="headerlink" href="#firmware-update" title="Permanent link">#</a></h2>
+<p>A signed bundle (<code>dist/opendmd-&lt;version&gt;-&lt;variant&gt;.odfw</code>, <code>make fw-release</code>) is
+staged on the card (one is needed), checked and installed (<code>docs/ota.md</code>);
+<code>make fw-ota HOST=…</code> does it.</p>
+<h3 id="get-apifirmware">GET /api/firmware<a class="headerlink" href="#get-apifirmware" title="Permanent link">#</a></h3>
+<p><code>{"version","build","variant","flash_size","pending","last","log"}</code>: the
+running version (a bundle's, and <code>/api/status</code>'s; <code>build</code> its image
+descriptor, <code>"&lt;version&gt; &lt;variant&gt;"</code>), the flash layout it is built for
+(<code>variant</code>: <code>4mb</code> or <code>8mb</code>) and the flash chip's real size in bytes
+(<code>flash_size</code>; a 4mb build on an 8 MB board reports 8388608), a staged
+update not yet installed (or null), the last
+line of the card's <code>/update/log.txt</code> and its last ≤ 1 KB of whole lines
+(<code>log</code>, the firmware's and the updater's; both null without a card or log).</p>
+<pre><code class="language-sh">curl -s $DMD/api/firmware
+</code></pre>
+<h3 id="put-apifirmware">PUT /api/firmware<a class="headerlink" href="#put-apifirmware" title="Permanent link">#</a></h3>
+<p>The bundle as the body (<code>411</code> no length, <code>413</code> too big). Header, the flash
+layout (the bundle's must be the player's <code>variant</code>), size, SHA-256,
+Ed25519 signature and the image's app descriptor are checked: a failure is
+a <code>422</code> with the reason, nothing staged; cut short <code>408</code>; no card <code>503</code>.
+Another key's bundle, or one for the other layout, is refused once the
+140-byte header is in. Any validly
+signed bundle is accepted, older ones too. Then
+<code>{"ok":true,"version":"…","rebooting":true}</code>; the panel is dark ~45 s from
+the end of the upload to playback while it installs.</p>
+<pre><code class="language-sh">curl -s -X PUT --data-binary @dist/opendmd-0.4.0-4mb.odfw $DMD/api/firmware
+</code></pre>
+<h2 id="live-items">Live items<a class="headerlink" href="#live-items" title="Permanent link">#</a></h2>
+<p>Paths beginning with <code>@</code> are drawn, not read from the card: for
+<code>POST /api/play</code>, a playlist line, <code>attract</code>. Options follow <code>?</code> as
+<code>key=value</code> pairs joined by <code>&amp;</code>; unknown keys and bad values are ignored
+(the default stays). Colours are <code>RRGGBB</code> (or <code>%23RRGGBB</code>, <code>#RRGGBB</code>).</p>
+<p><strong><code>@clock</code></strong> — the time (local, from the network; <code>--:--</code> until set).
+<code>style=big|small</code> (default big), <code>seconds=1</code>, <code>date=1</code> (the date under it),
+<code>h12=1</code> (12-hour), <code>color=RRGGBB</code>. One loop is one second.</p>
+<pre><code class="language-sh">curl -s $DMD/api/play --json '{&quot;path&quot;:&quot;@clock?style=small&amp;seconds=1&amp;color=ff8000&quot;}'
+</code></pre>
+<p><strong><code>@text</code></strong> — scrolling text. <code>msg=&lt;url-encoded&gt;</code> (≤ 200 characters, ASCII
+shown), <code>speed=&lt;ms per pixel&gt;</code> (20..=1000, default 40),
+<code>font=big|normal|small</code> (default big), <code>color=RRGGBB</code>, <code>scroll=0</code> (still,
+centred, if it fits). A loop is one pass across the panel.</p>
+<pre><code class="language-sh">curl -s $DMD/api/play --json '{&quot;path&quot;:&quot;@text?msg=Game%20over&amp;speed=30&amp;color=00ff00&quot;}'
+</code></pre>
+<p><strong><code>@fx:&lt;effect&gt;</code></strong> — a live effect: <code>tunnel</code>, <code>rotozoom</code>, <code>starfield</code> or
+<code>wire</code>. For all: <code>speed=1..4</code> (default 2), <code>fps=100|50|25</code> (default 100),
+<code>palette=fire|ice|chrono|amber|rainbow</code>, <code>cycle=1</code> (cycle the palette).
+<code>tunnel</code>: <code>twist=0..3</code>, <code>drift=1</code>, <code>texture=checker|rings|noise</code>,
+<code>layers=1|2</code>. <code>rotozoom</code>: <code>zoom=1..4</code>, <code>floor=1</code> (a perspective floor),
+<code>wobble=0..3</code>, <code>texture=…</code>, <code>layers=1|2</code>. <code>starfield</code>: <code>density=1..3</code>,
+<code>warp=0</code>. <code>wire</code>: <code>shape=cube|octahedron|icosahedron|torus|tesseract|morph</code>,
+<code>color=RRGGBB</code>, <code>shade=0</code>. An unknown effect is a <code>415</code>.</p>
+<pre><code class="language-sh">curl -s $DMD/api/play --json '{&quot;path&quot;:&quot;@fx:wire?shape=tesseract&amp;speed=3&quot;}'
+</code></pre>
+<p><strong><code>@fx:psi</code></strong> — a formula (the app's Formulas): <code>src=&lt;url-encoded
+formula&gt;</code>, <code>a=</code>, <code>b=</code>, <code>c=</code> (sliders, 0..1), <code>fps=50|100|25</code> (default 50).
+A heavy one is shown at fewer frames a second; status
+<code>now_playing.formula</code> has <code>frame_us</code>, <code>frame_ms</code>, <code>asked_ms</code> and
+<code>compile_us</code>.</p>
+<p><strong><code>@boot</code></strong> — the start-up show. <code>len=short|full|card</code> (<code>card</code>: the status
+card), and for it <code>v=&lt;version&gt;</code>, <code>ip=&lt;address&gt;</code>, <code>ap=&lt;network&gt;</code>,
+<code>note=&lt;text&gt;</code> (≤ 32 characters each).</p>
+<pre><code class="language-sh">curl -s $DMD/api/play --json '{&quot;path&quot;:&quot;@boot?len=full&quot;}'
+</code></pre>
+<p>Also <code>@power-on</code> (the power-on effect) and <code>@card:&lt;title&gt;|&lt;subtitle&gt;</code> (a
+title card, 3 s).</p>
+</main>
+<footer><p>OpenDMD is an independent, open-source project. It is not made by or affiliated with
+<a href="https://dmdos.net/">DMDoS</a>: the display, its board (by <a href="https://mortaca.com">MORTACA</a>),
+the build guide and the GIF pack all come from dmdos.net. The animations on this site are recordings of
+OpenDMD's own effects and the CC0 <a href="https://kenney.nl/assets/pixel-platformer">Kenney</a> sprites.
+Code under <a href="../../LICENSE-MIT.txt">MIT</a> or <a href="../../LICENSE-APACHE.txt">Apache 2.0</a>;
+<a href="../../licenses/">third-party licences</a>.</p></footer>
+</div>
+</body>
+</html>

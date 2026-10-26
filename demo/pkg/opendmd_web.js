@@ -150,6 +150,16 @@ export class Preview {
         wasm.preview_setLook(this.__wbg_ptr, gamma, gain, bloom, flat);
     }
     /**
+     * Draw over every frame, before the tint and glow (the panel's Formula
+     * look; the web demo draws it with Psi): `f(rgb)` gets the 128 × 32
+     * RGB888 frame as a `Uint8Array` and changes it in place, every tick
+     * while it is set. `undefined` stops.
+     * @param {Function | null} [f]
+     */
+    setOver(f) {
+        wasm.preview_setOver(this.__wbg_ptr, isLikeNone(f) ? 0 : addToExternrefTable0(f));
+    }
+    /**
      * @param {boolean} paused
      */
     setPaused(paused) {
@@ -418,6 +428,10 @@ function __wbg_get_imports() {
         __wbg___wbindgen_throw_5d9e815e6fdf150f: function(arg0, arg1) {
             throw new Error(getStringFromWasm0(arg0, arg1));
         },
+        __wbg_call_6bcf8d3e20937e46: function() { return handleError(function (arg0, arg1, arg2) {
+            const ret = arg0.call(arg1, arg2);
+            return ret;
+        }, arguments); },
         __wbg_error_757e9472f8410341: function(arg0, arg1) {
             let deferred0_0;
             let deferred0_1;
@@ -501,6 +515,10 @@ function __wbg_get_imports() {
             const ret = Array.isArray(arg0);
             return ret;
         },
+        __wbg_length_31bdaf014f5fbde2: function(arg0) {
+            const ret = arg0.length;
+            return ret;
+        },
         __wbg_length_4e1adc0d42e23620: function(arg0) {
             const ret = arg0.length;
             return ret;
@@ -521,6 +539,10 @@ function __wbg_get_imports() {
             const ret = new Array();
             return ret;
         },
+        __wbg_new_from_slice_4ee02165f9de919e: function(arg0, arg1) {
+            const ret = new Uint8Array(getArrayU8FromWasm0(arg0, arg1));
+            return ret;
+        },
         __wbg_new_with_u8_clamped_array_and_sh_15a008af56aca047: function() { return handleError(function (arg0, arg1, arg2, arg3) {
             const ret = new ImageData(getClampedArrayU8FromWasm0(arg0, arg1), arg2 >>> 0, arg3 >>> 0);
             return ret;
@@ -536,6 +558,9 @@ function __wbg_get_imports() {
         __wbg_performance_d96ad0b441f4510a: function(arg0) {
             const ret = arg0.performance;
             return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
+        },
+        __wbg_prototypesetcall_ae9f5e7459250748: function(arg0, arg1, arg2) {
+            Uint8Array.prototype.set.call(getArrayU8FromWasm0(arg0, arg1), arg2);
         },
         __wbg_push_bfdf956ba476f65b: function(arg0, arg1) {
             const ret = arg0.push(arg1);
@@ -615,6 +640,11 @@ function addToExternrefTable0(obj) {
     const idx = wasm.__externref_table_alloc();
     wasm.__wbindgen_externrefs.set(idx, obj);
     return idx;
+}
+
+function getArrayU8FromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
 }
 
 function getClampedArrayU8FromWasm0(ptr, len) {

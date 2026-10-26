@@ -25,6 +25,7 @@ extern crate alloc;
 
 mod compile;
 pub mod fixed;
+pub mod look;
 mod program;
 mod tables;
 mod vm;
@@ -157,6 +158,14 @@ pub mod golden {
         ("digit-levels", "frame { d = second % 10 }\nr = 31 - py\nrgb(digit(d, 2, r), glyph('A', 1, r - 8)*0.5 + digit(7, 1, 1)*0.25, glyph(':', px % 5, r - 16, small))", 0, 0x1f18467e4e514c89),
         ("digits-bold", "rgb(digit(floor(px/5) % 12 - 1, px % 5 - 1, (31 - py) % 7 - 1, bold), digit(second % 10, floor(px/8) % 4, floor((31 - py)/6), bold), 0.2)", 0, 0x19904e2c8f6ffcab),
         ("bits", "gray(bit(px*258 - 16000, floor(py/2) - 1) + bit(-px - 0.5, py)*0.5 + bit(t*1000, 3)*0.25)", 1500, 0xab556034d27ca745),
+        // About the middle and from the top; pick of per-frame values per
+        // pixel (one step), of per-row values per row, per frame, of
+        // per-pixel values (compares and selects), k out of range both
+        // ways and fractional; colour literals, mixes of them, nested.
+        ("centred", "loop 4\nhsv(angle + t/4, frac(r*2), 1 - ty/40 + cx*cy*0.1)", 1000, 0xa8e6660c580785fc),
+        ("pick", "frame { s = second/60; m = minute/60 }\nk = px/16 - 1.5\nrgb(pick(k, s, m, 0.25, 1), pick(py/8, y, 1 - y, 0.5) + pick(minute % 3, 0.1, 0.2), pick(px/40, x, y, ur + 0.5))", 0, 0x6ee236d2d1be0235),
+        ("colours", "loop 2\nk = sin(t/2)*0.5 + 0.5\nmix(mix(#000, #f80, x), mix(#123456, rgb(y, k, 1 - y), x), smoothstep(0.2, 0.8, y))", 500, 0xb2b7af7010efe215),
+        ("colour-rgb", "rgb(mix(#fff, #08c, cy*2 + 1), r*0.6)", 0, 0x4f171c37bb61e199),
     ];
 
     /// The picture the [`OVER`] frames are drawn over: every byte value in
@@ -186,6 +195,7 @@ pub mod golden {
         ("cover", "layer { rgb(1, 0, 0, x) }\nlayer over { pal(ice, y, 0.25) }\nlayer { gray(0.5, step(px % 8, 1)) }", 0, true, 0x4c437de4180ecfbe),
         ("hidden", "layer add { noise(x*8, y*4, t) }\nlayer { hsv(x, 1, 1) }\nlayer multiply { gray(1 - ul*0.5) }", 0, true, 0x6e7731edba40d20b),
         ("alone", "layer { hsv(x, 1, 1) }\nlayer add { gray(ur + 0.2, 0.5) }", 0, false, 0xb62345c4247f9a5),
+        ("cover-colour", "layer multiply { mix(#fff, #400000, r*0.7) }\nlayer { rgb(#ffbf4d, step(abs(cy), 0.1)) }\nlayer screen { mix(rgb(ur, ug, ub), #304050, x) }", 0, true, 0x7679d76ab8dfdd68),
         ("scoped", "frame { s = sin(t) }\nk = x*4\nlayer { v = frac(k + s)\nrgb(v, ub, 0) }\nlayer screen { v = frac(k*2 - y)\nframe { q = cos(t) }\npal(fire, v*q, 0.75) }", 2500, true, 0xe01c5295366f8613),
     ];
 }
@@ -263,7 +273,9 @@ pub mod worst {
             let next = format!(
                 "part p{k} {{\n{s}v = p{j}(x*0.5, y).v + p{j}(y, x).v + p{j}(x + 0.1, y).v + p{j}(x, y*2).v + p{j}(1 - x, y).v\ngray(v)\n}}\n"
             );
-            if path_len(&format!("{next}p{k}")) > 2048 || k > 4 {
+            if path_len(&format!("{next}p{k}")) > 2048
+                || crate::compile(&format!("{next}p{k}")).is_err_and(|e| e.msg.contains("too deep"))
+            {
                 return format!("{s}p{j}");
             }
             s = next;
@@ -312,6 +324,33 @@ pub mod worst {
         format!("gray({s})")
     }
 
+    /// Colours mixed inside colours (`mix(mix(…), #fff, 0.5)`, the colour
+    /// parser's own recursion) to the depth cap, a misspelt name at the
+    /// bottom.
+    pub fn nested_mix() -> String {
+        deepest("mix(#000, #fff, tme)", |s| format!("mix({s}, #fff, 0.5)"))
+    }
+
+    /// `pick(pick(…), 1)` (a list of values, read out of line) to the depth
+    /// cap, a misspelt name at the bottom.
+    pub fn nested_pick() -> String {
+        deepest("pick(tme, 1)", |s| format!("pick({s}, 1)"))
+    }
+
+    /// The deepest `wrap` of `leaf` (as a whole line) that still reaches the
+    /// misspelt name at its bottom.
+    fn deepest(leaf: &str, wrap: impl Fn(&str) -> String) -> String {
+        let mut s = String::from(leaf);
+        for _ in 0..64 {
+            let next = wrap(&s);
+            if !crate::compile(&next).is_err_and(|e| e.msg.starts_with("unknown name")) {
+                break;
+            }
+            s = next;
+        }
+        s
+    }
+
     /// Parts inside parts, each drawn in a layer at another place, as deep
     /// as the cap allows, with a misspelt name at the bottom.
     pub fn parts_in_layers() -> String {
@@ -334,13 +373,15 @@ pub mod worst {
     /// A named generator.
     pub type Case = (&'static str, fn() -> String);
 
-    pub const ALL: [Case; 7] = [
+    pub const ALL: [Case; 9] = [
         ("many locals", many_locals),
         ("chain", chain),
         ("distinct terms", distinct),
         ("parts", parts),
         ("nested", nested),
         ("nested digit", nested_digit),
+        ("nested mix", nested_mix),
+        ("nested pick", nested_pick),
         ("parts in layers", parts_in_layers),
     ];
 }

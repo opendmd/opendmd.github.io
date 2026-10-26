@@ -1,8 +1,31 @@
 // Settings › Device › Panel timing (loaded with the Device tab; its own size
-// line): /api/config `panel`, each change a trial (docs/firmware.md).
+// line): /api/config `panel`, each change a trial (docs/firmware.md); and
+// Moving pictures: `panel_sync`, `panel_split`, saved at once.
 
 import { app } from './state.js';
-import { h, on, note, toast } from './util.js';
+import { h, on, note, saver, toast } from './util.js';
+
+export function syncCard(el) {
+  if (!('panel_sync' in app.config)) return;
+  const hd = h('h3', 'Moving pictures'), run = saver(hd);
+  const box = (id, key, text) => {
+    const i = h('input', { type: 'checkbox', id, onchange: () => run(async () => { await app.src.putConfig({ [key]: i.checked }); await app.refreshConfig(); }) });
+    return [i, h('label', { style: 'display:block' }, i, text)];
+  };
+  const [a, la] = box('ps-sync', 'panel_sync', 'Sync to the panel’s refresh (stops tearing)');
+  const [b, lb] = box('ps-split', 'panel_split', 'Delay the bottom half one refresh (no step at mid-height on fast scrollers)');
+  const sync = (c) => {
+    if (!c || !('panel_sync' in c)) return;
+    a.checked = c.panel_sync;
+    b.checked = c.panel_split;
+    b.disabled = !c.panel_sync;
+    lb.classList.toggle('muted', !c.panel_sync);
+  };
+  el.append(hd, la, lb);
+  el.hidden = false;
+  on('config', sync);
+  sync(app.config);
+}
 
 const D = { clk_phase: true, latch_blanking: 1, driver: 'shiftreg', i2s_speed: 8, min_refresh: 60 };
 const n = (a, u) => a.map((v) => [v, v + u]);

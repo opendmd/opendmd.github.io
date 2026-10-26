@@ -18,8 +18,11 @@
 import { app } from './state.js';
 import { art } from './artmod.js';
 import { prepareBytes, playsAsIs, madeCopy } from './prepare.js';
-import { dfetch } from './source.js';
+import { dfetch, queued } from './source.js';
 import { h, clear, enc, toast } from './util.js';
+
+// A copy rewritten: its thumbnail (js/thumbs.js, if loaded or kept) is made again.
+const forgetThumb = (path) => import('./thumbs.js').then((m) => m.forget(path)).catch(() => {});
 
 export const LIST = '/sets/.smooth';
 const lc = (s) => s.toLowerCase();
@@ -46,6 +49,15 @@ export async function smoother(bytes, { tween = false, alive } = {}) {
   return null;
 }
 
+// What to say when there is little or nothing to smooth (`s.hint`): a slow
+// scroll that moves a pixel at a time is already as smooth as the panel's
+// pixels allow, which is not the same as nothing moving.
+export function quietText(hint) {
+  if (hint === 'steady') return 'This already moves one pixel at a time, as smooth as the panel can show';
+  if (hint === 'fast') return 'Its frames are too quick to fit smoother steps between';
+  return 'Nothing here slides across the screen in steps it can smooth';
+}
+
 // The smoothed file the panel plays for this GIF (its bytes).
 export async function smoothCopy(bytes) {
   const s = await smoother(bytes, { tween: true });
@@ -62,7 +74,12 @@ const writeList = (list) => app.src.writeFile(LIST, list.map((p) => p + '\n').jo
 // is in (the device ignores Range; asking costs nothing).
 async function isSmooth(path) {
   const m = await art();
-  const res = await dfetch(enc(app.wasm.cachePathFor(path)), { headers: { Range: 'bytes=0-1023' } });
+  // (A full stream queue is a 503 at once: asked again, `queued`.)
+  const res = await queued(async () => {
+    const r = await dfetch(enc(app.wasm.cachePathFor(path)), { headers: { Range: 'bytes=0-1023' } });
+    if (r.status === 503) throw { status: 503, after: +r.headers.get('Retry-After') || 1 };
+    return r;
+  });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   const r = res.body.getReader();
@@ -110,6 +127,7 @@ export async function set(path, on) {
     }
     await writeList([...rest, path]);
     await app.src.writeFile(dest, copy);
+    forgetThumb(path);
     madeCopy(path);
   } else {
     await prepareBytes(path, gif);
@@ -139,6 +157,7 @@ export async function keep(path, bytes, on, ready) {
       : `Smooth motion could not be made for this one (${e.message || e}); it plays as it is`;
   }
   if (copy) { await app.src.writeFile(dest, copy); madeCopy(path); } else await prepareBytes(path, bytes);
+  forgetThumb(path);
   return warn;
 }
 
@@ -155,6 +174,7 @@ export async function detail(box, it, bytes, pv, cap) {
   held = null;
   box.hidden = true;
   box.dataset.state = 'analysing';
+  delete box.dataset.hint;
   clear(box);
   let s, on;
   const t0 = performance.now();
@@ -170,7 +190,17 @@ export async function detail(box, it, bytes, pv, cap) {
   if (!alive()) { s.free(); return; }
   held = s;
   box.dataset.analyseMs = Math.round(performance.now() - t0);
-  if ((!s.offered || !s.fits) && !on) { box.dataset.state = 'none'; return; }
+  if ((!s.offered || !s.fits) && !on) {
+    box.dataset.state = 'none';
+    // Moving, but nothing to add (a 1 px scroll, or frames too quick): say
+    // why rather than leave the switch's absence unexplained.
+    if (s.fits && (s.hint === 'steady' || s.hint === 'fast')) {
+      box.dataset.hint = s.hint;
+      clear(box, h('div.cap', { id: 'lib-smooth-text' }, quietText(s.hint)));
+      box.hidden = false;
+    }
+    return;
+  }
 
   let showing = false;
   const msg = h('div.cap', { id: 'lib-smooth-msg' });

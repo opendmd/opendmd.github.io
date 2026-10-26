@@ -5,7 +5,7 @@
  * the page can yield between them: `new Smoother(gifBytes)`, then
  * `analyse(n)` until it returns true (`n` frames a call; `decoded` counts
  * them), then the analysis (`frames`, `pairs`, `tweened`, `added`,
- * `percent`, `offered`); `tween(n)` until true, then `gif()` — the tweened
+ * `percent`, `offered`, `hint`); `tween(n)` until true, then `gif()` — the tweened
  * frames as a plain GIF, what the preview plays — and `prepare()`, the
  * smoothed prepared copy (marked). Throws on a GIF that does not decode.
  */
@@ -73,6 +73,25 @@ export class Smoother {
         var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
         wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
         return v1;
+    }
+    /**
+     * Why there is little or nothing to smooth, for the wording:
+     * `"offered"`, `"steady"` (it moves 1 px at a time: already as smooth
+     * as whole pixels allow), `"fast"` (big steps in frames too short to
+     * split) or `"nothing"` (nothing slides).
+     * @returns {string}
+     */
+    get hint() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.smoother_hint(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
     }
     /**
      * @param {Uint8Array} gif

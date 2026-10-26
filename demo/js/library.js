@@ -1,107 +1,23 @@
-// Library: the GIFs on the player by category, and Details for the one
-// picked (finding new art on the web is Create Art's, js/studio.js). See
-// "The Library's layout" in CLAUDE.md.
+// Library: the GIFs on the player as a tree of folders (js/tree.js), and
+// Details for the one picked (finding new art on the web is Create Art's,
+// js/studio.js). See "The Library's layout" in CLAUDE.md.
 
-import { app, playlistLabel, listOr } from './state.js';
+import { app, playlistLabel } from './state.js';
 import { Overrides, glyphs, menu, moreButton, actions, fav } from './overrides.js';
 import { PanelPreview } from './preview.js';
-import { prepareBytes } from './prepare.js';
-import { VList } from './vlist.js';
-import { h, clear, emit, on, store, toast, label, lines, niceName, flagName, isFlag, isSys, byNice } from './util.js';
-
-export const authorOf = (e) => e.flags.find((f) => !isFlag(f)) || '';
-
-export async function addOne(category, name, bytes, warn, prep = prepareBytes) {
-  const path = `/gifs/${category}/${name}`;
-  await app.src.writeFile(path, bytes);
-  try { await prep(path, bytes); } catch (e) {
-    warn?.(`${name}: added, but it could not be prepared (${e.message || e}); it will play as it is`);
-    try { await app.src.forget(path); } catch { /* nothing to forget */ }
-  }
-  emit('gifs', category);
-  return path;
-}
-
-export async function savePlaylist(path, text) {
-  if (path.startsWith('/sets/')) await app.src.saveSet(path.slice(6).replace(/\.txt$/, ''), text);
-  else await app.src.writeFile(path, text);
-  app.texts.set(path, text);
-  if (path === app.activePath) await app.refreshStatus().catch(() => {});
-}
-
-export async function appendTo(path, paths) {
-  const name = playlistLabel(path);
-  try {
-    const text = await app.text(path, true);
-    const have = new Set(lines(text || ''));
-    const add = paths.filter((p) => !have.has(p));
-    if (!add.length) { toast(`already in “${name}”`); return; }
-    await savePlaylist(path, (text && !text.endsWith('\n') ? text + '\n' : text || '') + add.join('\n') + '\n');
-    toast(`${add.length} added to “${name}”`, 'ok');
-  } catch (e) { toast(`adding to “${name}”: ${e.message}`, 'bad'); }
-}
-
-export async function offerPlaylist(paths) {
-  const n = paths.length;
-  if (confirm(`Add ${n} new GIF${n > 1 ? 's' : ''} to the playlist “${playlistLabel(app.activePath)}”?`)) await appendTo(app.activePath, paths);
-}
-
-// Thumbnails: first frames, two fetches at a time, rows gone skipped, 200 kept.
-const TH = new Map(), thBusy = new Set();
-let thQ = [];
-export const thumbsOn = () => store.get('thumbs', !app.device);
-function paint(cv) {
-  const b = TH.get(cv._p);
-  TH.delete(cv._p);
-  TH.set(cv._p, b);
-  if (b) {
-    const s = Math.min(128 / b.width, 32 / b.height), w = b.width * s, y = b.height * s;
-    cv.getContext('2d').drawImage(b, (128 - w) / 2, (32 - y) / 2, w, y);
-  }
-  cv.dataset.done = b ? 1 : 0;
-}
-// On a device only a prepared copy is a thumbnail, never the GIF itself.
-function thumbCopy(p) {
-  const c = app.wasm.cachePathFor(p);
-  return c ? app.src.readBytes(c) : Promise.reject();
-}
-function thumb(cv, p) {
-  cv._p = p;
-  if (TH.has(p)) paint(cv); else { thQ.push(cv); pump(); }
-}
-function pump() {
-  while (thBusy.size < 2 && thQ.length) {
-    const cv = thQ.shift(), p = cv._p;
-    if (!cv.isConnected || cv.parentNode.hidden || thBusy.has(p)) continue;
-    if (TH.has(p)) { paint(cv); continue; }
-    thBusy.add(p);
-    (app.device ? thumbCopy(p) : app.previewBytes(p)).then((b) => createImageBitmap(new Blob([b]))).catch(() => null).then((b) => {
-      TH.set(p, b);
-      if (TH.size > 200) { const [k, v] = TH.entries().next().value; TH.delete(k); v?.close(); }
-      thBusy.delete(p);
-      for (const c of document.querySelectorAll('canvas.th')) if (c._p === p && !c.dataset.done) paint(c);
-      thQ = thQ.filter((c) => c.isConnected && !c.dataset.done);
-      pump();
-    });
-  }
-}
+import { Tree, chipRow, forget as forgetDir } from './tree.js';
+import { forget as forgetThumb, check as checkThumb } from './thumbs.js';
+import { authorOf, addOne, appendTo, offerPlaylist } from './gifs.js';
+import { h, clear, emit, store, toast, label, niceName, flagName, isFlag } from './util.js';
 
 export async function mount(el) {
-  let cat = store.get('lib.cat', 'Consoles');
-  let cats = [];
-  let items = [], shown = [], current = null, thumbs = thumbsOn();
-  // A search is of every GIF, with its own facets (fCats, fPlats).
-  const platforms = new Set(), fCats = new Set(), fPlats = new Set();
-  let byCat = new Map(), every, was;
-  const forget = () => { byCat = new Map(); every = null; };
+  let current = null, selecting = false;
+  const plats = new Set();
 
   const search = h('input', { type: 'search', id: 'lib-search', placeholder: 'Search GIFs', enterKeyHint: 'search', oninput: () => apply() });
   const count = h('span.muted', { id: 'lib-count' });
-  const tabs = h('div.tabs', { id: 'lib-cats', role: 'tablist' });
-  // On a phone the categories are a select (the tabs would clip).
-  const csel = h('select', { id: 'lib-csel', 'aria-label': 'Category', onchange: () => { cat = csel.value; renderTabs(); load(); } });
+  const fold = h('button.sm', { id: 'lib-fold', title: 'Close every folder', 'aria-label': 'Close every folder', onclick: () => tree.closeAll() }, '⊟');
   // Checkboxes only in Select mode (the button, or a long press on a row).
-  let selecting = false;
   const selBtn = h('button.sm', { id: 'lib-select', onclick: () => selMode(!selecting) }, 'Select');
   const chips = h('div.chips.scroll', { id: 'lib-chips' });
   const addInput = h('input', { type: 'file', multiple: true, accept: '.gif,image/gif', hidden: true, id: 'lib-add-files', onchange: () => { addGifs([...addInput.files]); addInput.value = ''; } });
@@ -110,7 +26,7 @@ export async function mount(el) {
   // art on the one platform chip picked, else GifCities).
   const webQ = h('b');
   const webHint = h('div.lib-web', { id: 'lib-web', hidden: true }, 'Nothing here matches “', webQ, '”. ',
-    h('button.txt', { id: 'lib-web-go', onclick: () => { const ps = fPlats.size ? fPlats : platforms; app.artFind = { q: search.value.trim(), platform: ps.size === 1 ? [...ps][0] : '' }; app.go('create'); } }, 'Search the web in Create Art →'));
+    h('button.txt', { id: 'lib-web-go', onclick: () => { app.artFind = { q: search.value.trim(), platform: plats.size === 1 ? [...plats][0] : '' }; app.go('create'); } }, 'Search the web in Create Art →'));
   const addBar = h('i');
   const addMsg = h('span', { id: 'lib-add-progress' });
   const addErr = h('div.log.bad', { id: 'lib-add-errors' });
@@ -125,24 +41,30 @@ export async function mount(el) {
     h('button', { id: 'lib-sel-done', onclick: () => selMode(false) }, 'Done'));
 
   const ov = new Overrides();
-  ov.onChange = () => list.refresh();
+  ov.onChange = () => tree.refresh();
 
-  const list = new VList({
-    rowHeight: 44,
-    render(row, it) {
-      const box = selecting && h('input', { type: 'checkbox', checked: app.selection.has(it.path), 'aria-label': 'select', onclick: (e) => { e.stopPropagation(); toggle(it.path, box.checked); } });
-      const o = ov.get(it.path), cv = thumbs && it.path[0] != '@' && h('canvas.th', { width: 128, height: 32 });
-      clear(row, box, cv, h('span.t', label(it.e)), glyphs(o), it.e.platform && h('span.tag', it.e.platform), moreButton(ov, it.path));
-      if (cv) thumb(cv, it.path);
-      row.classList.toggle('cur', it.path === current?.path);
-      row.classList.toggle('hid', !!o?.never);
-      row.dataset.path = it.path;
-    },
-    onClick: (it) => (selecting ? toggle(it.path, !app.selection.has(it.path)) : preview(it)),
-    onMenu: (it, _i, x, y) => menu(ov, it.path, x, y),
+  // Live and Effects: their items (and the text's form, an effect's options, in liveBox).
+  const liveBox = h('div', { id: 'lib-live', hidden: true });
+  const liveOn = () => { liveBox.hidden = search.value.trim() ? true : !(current?.path[0] == '@' || tree.open.has('@') || tree.open.has('@fx')); };
+  const tree = new Tree({
+    picked: app.selection,
+    ticking: () => selecting,
+    open: store.get('lib.open', null) ?? ['Consoles'],
+    onOpen: (o) => { store.set('lib.open', o); liveOn(); },
+    live: async (cat) => (await import('./live.js'))[cat == '@' ? 'items' : 'effects'](liveBox, preview, () => tree.refresh()),
+    onPick: (it) => preview(it),
+    onMenu: (it, x, y) => menu(ov, it.path, x, y),
     onHold: (it) => { selMode(true); toggle(it.path, true); },
+    onTick: () => sync(),
+    onError: (m) => toast(m, 'bad'),
+    extra(it, row) {
+      const o = ov.get(it.path);
+      row.classList.toggle('hid', !!o?.never);
+      return [glyphs(o), it.e.platform && h('span.tag', it.e.platform), moreButton(ov, it.path)];
+    },
+    onUpdate: counted,
   });
-  list.el.id = 'lib-list';
+  tree.el.id = 'lib-list';
 
   const canvas = h('canvas.panel', { id: 'lib-panel' });
   const cap = h('div.cap', { id: 'lib-cap' }, 'Pick a GIF to see it here');
@@ -153,7 +75,6 @@ export async function mount(el) {
   const editArt = h('button', { id: 'lib-d-art', onclick: () => { app.artFrom = { path: current.path, e: current.e }; app.go('create'); } }, '✎ Edit in Create Art');
   const moreBtn = h('button.more', { id: 'lib-d-more', 'aria-label': 'More', 'aria-haspopup': 'menu', onclick: (e) => detailMenu(e.currentTarget) }, '…');
   const smoothBox = app.device && h('div', { id: 'lib-smooth', hidden: true });
-  const liveBox = h('div', { id: 'lib-live', hidden: true });
   const dPath = h('span.mono');
   const dFile = h('div.file.muted', { id: 'lib-d-file' }, 'File ', dPath);
   const gifOnly = [meta, editArt, moreBtn, dFile];
@@ -167,22 +88,22 @@ export async function mount(el) {
       h('button.sm.close', { id: 'lib-d-close', 'aria-label': 'Close', onclick: () => side.classList.remove('open') }, '✕'),
       canvas, cap, body, liveBox));
 
-  // On a phone the tabs and chips scroll sideways: fade an edge while more is off that side.
-  const r2 = h('div.lib-r2', { id: 'lib-r2' }, tabs, h('i.vsep'), chips);
+  // On a phone the chips scroll sideways: fade an edge while more is off that side.
+  const r2 = h('div.lib-r2', { id: 'lib-r2' }, chips);
   const edge = () => {
     r2.classList.toggle('more', r2.scrollLeft + r2.clientWidth < r2.scrollWidth - 2);
     r2.classList.toggle('less', r2.scrollLeft > 2);
   };
   r2.addEventListener('scroll', edge, { passive: true });
   const ro = new ResizeObserver(edge);
-  for (const x of [r2, tabs, chips]) ro.observe(x);
+  for (const x of [r2, chips]) ro.observe(x);
 
   const grid = h('div.libgrid',
     h('div',
       h('div.card.libhead',
-        h('div.lib-q', search), csel, count, selBtn, addBtn, addInput,
+        h('div.lib-q', search), count, fold, selBtn, addBtn, addInput,
         r2, addCard),
-      webHint, list.el, selbar),
+      webHint, tree.el, selbar),
     side);
   el.append(grid);
 
@@ -190,8 +111,10 @@ export async function mount(el) {
 
   async function preview(it) {
     current = it;
+    tree.cur = it.path;
     it.pick?.();
-    list.refresh();
+    liveOn();
+    tree.refresh();
     side.classList.add('open');
     body.hidden = false;
     const e = it.e, gif = it.path[0] != '@';
@@ -211,6 +134,7 @@ export async function mount(el) {
         if (it.pick) pv.syncTo(0, performance.now());
         cap.textContent = '';
         cap.dataset.shown = it.name;
+        if (gif) checkThumb(it.path, bytes);
         if (smoothBox && gif) import('./smooth.js').then((m) => m.detail(smoothBox, it, bytes, pv, cap)).catch(() => {});
       }
     } catch (err) { cap.textContent = 'Preview: ' + err.message; }
@@ -244,7 +168,7 @@ export async function mount(el) {
     if (onOff) app.selection.add(path); else app.selection.delete(path);
     sync();
   }
-  function selectAll() { for (const it of shown) app.selection.add(it.path); sync(); }
+  function selectAll() { for (const it of tree.res) app.selection.add(it.path); sync(); }
   function selMode(v) {
     selecting = v;
     if (!v) app.selection.clear();
@@ -256,7 +180,7 @@ export async function mount(el) {
     selCount.textContent = app.selection.size;
     selbar.hidden = !selecting;
     toSetBtn.disabled = !app.selection.size;
-    list.refresh();
+    tree.refresh();
   }
   function toSet() {
     const have = new Set(app.draft.paths), n = app.selection.size;
@@ -267,115 +191,40 @@ export async function mount(el) {
     app.go('sets/edit');
   }
 
-  const real = () => cats.filter(([v]) => v[0] != '@').map(([v]) => v);
-  async function categories() {
-    let dirs = [];
-    try { dirs = (await listOr('/gifs')).filter((d) => d.dir).map((d) => d.name).sort(byNice); } catch (e) { toast('listing /gifs: ' + e.message, 'bad'); }
-    const tab = (d) => [d, niceName(d)];
-    cats = [...dirs.filter((d) => !isSys(d)).map(tab), ['@', 'Live'], ['@fx', 'Effects'], ...dirs.filter(isSys).map(tab)];
-    if (!cats.some(([v]) => v === cat)) cat = dirs.includes('Consoles') ? 'Consoles' : cats[0][0];
-    renderTabs();
-    await load();
+  // The search, the platforms: the tree filters; counted() shows the result.
+  // Clearing the box clears the platforms picked with it.
+  let was = '';
+  function apply() {
+    const q = search.value.trim();
+    if (was && !q) plats.clear();
+    was = q;
+    tree.filter(search.value, plats);
+    liveOn();
   }
-  function renderTabs() {
-    clear(tabs, cats.map(([v, t]) => h('button.tab' + (v === cat ? '.on' : '') + (isSys(v) ? '.sys' : ''), {
-      role: 'tab', 'data-cat': v, 'aria-selected': String(v === cat),
-      onclick: () => { if (v !== cat) { cat = v; renderTabs(); load(); } },
-    }, t)));
-    clear(csel, cats.map(([v, t]) => h('option', { value: v }, t)));
-    csel.value = cat;
-    scrollTab();
-  }
-  // The open tab in view (in the next frame: after a hidden view shows).
-  const scrollTab = () => requestAnimationFrame(() => { const on = tabs.querySelector('.on'); if (on) for (const s of [tabs, r2]) s.scrollLeft = on.offsetLeft - s.offsetLeft - 24; });
-
-  async function load() {
-    store.set('lib.cat', cat);
-    platforms.clear();
-    if (!(liveBox.hidden = cat[0] != '@')) {
-      items = (await import('./live.js'))[cat == '@' ? 'items' : 'effects'](liveBox, preview, () => list.refresh());
-      return apply();
-    }
-    count.textContent = 'Loading…';
-    // The tab is listed afresh every time; a search sees the change.
-    const want = cat, old = byCat.get(cat);
-    byCat.delete(cat);
-    const got = await listCat(cat), paths = (l) => String(l?.map((x) => x.path));
-    if (paths(await old) != paths(got)) every = null;
-    if (!got) toast(`couldn’t read ${niceName(want)}: try again`, 'bad');
-    if (want == cat) { items = got || []; apply(); }
-  }
-
-  const cmp = (a, b) => a.norm.localeCompare(b.norm) || (a.e.variant ?? 0) - (b.e.variant ?? 0);
-  function listCat(c) {
-    const m = byCat, dir = `/gifs/${c}`;
-    if (!m.has(c)) m.set(c, listOr(dir).then((fs) => fs.filter((f) => !f.dir && /\.gif$/i.test(f.name)).map(({ name }) => {
-      const path = `${dir}/${name}`, e = app.wasm.parsePath(path);
-      return { path, e, name, lname: name.toLowerCase(), norm: app.wasm.normalizeTitle(e.title) };
-    }).sort(cmp), () => { m.delete(c); return null; }));
-    return m.get(c);
-  }
-  // Every GIF; with a category that couldn't be read, not kept (the next keystroke tries again).
-  async function gather() {
-    const all = [];
-    let bad = 0;
-    for (const c of real()) { const l = await listCat(c); if (l) all.push(...l); else bad++; }
-    if (bad) every = null;
-    return Object.assign(all.sort(cmp), { bad });
-  }
-
-  function chipRow(el, counts, on, key, name = (v) => v) {
-    for (const v of on) if (!counts.has(v)) counts.set(v, 0);
-    const top = [...counts].sort((a, b) => on.has(b[0]) - on.has(a[0]) || b[1] - a[1]).slice(0, 24);
-    clear(el, top.map(([v, n]) => h('button.chip' + (on.has(v) ? '.on' : ''), {
-      [key]: v, 'aria-pressed': String(on.has(v)), onclick: () => { if (!on.delete(v)) on.add(v); apply(); },
-    }, name(v), h('small', n.toLocaleString()))));
-    return top.length;
-  }
-
-  // One pass: the rows, and each facet's counts under the other's choice.
-  async function apply() {
-    const text = search.value.trim(), all = !!text;
-    if (all) count.textContent = 'Searching…';
-    const pool = all ? await (every ||= gather()) : items;
-    if (text != search.value.trim()) return; // a newer apply() has run
-    if (was && !all) { fCats.clear(); fPlats.clear(); renderTabs(); }
-    if (all && !was) tabs.scrollLeft = r2.scrollLeft = 0;
-    grid.classList.toggle('lq', was = all);
-    tabs.role = all ? '' : 'tablist';
-    liveBox.hidden = all || cat[0] != '@';
-    const q = app.wasm.normalizeTitle(text), qn = text.toLowerCase(), ps = all ? fPlats : platforms;
-    const cc = new Map(), pc = new Map(), inc = (m, k) => m.set(k, (m.get(k) || 0) + 1);
-    let hits = 0;
-    shown = [];
-    for (const it of pool) {
-      if (q && !it.norm.includes(q) && !it.lname.includes(qn)) continue;
-      hits++;
-      const p = it.e.platform, okC = !fCats.size || fCats.has(it.e.category), okP = !ps.size || ps.has(p);
-      if (okP) inc(cc, it.e.category);
-      if (okC && p) inc(pc, p);
-      if (okC && okP) shown.push(it);
-    }
-    if (all) chipRow(tabs, cc, fCats, 'data-fcat', niceName);
-    grid.classList.toggle('noplat', chipRow(chips, pc, ps, 'data-platform') < 2);
-    count.textContent = `${shown.length.toLocaleString()} of ${pool.length.toLocaleString()}${pool.bad ? ' · some categories couldn’t be read: type again to retry' : ''}`;
-    list.set(shown);
+  function counted(st) {
+    const text = search.value.trim();
+    count.textContent = st.busy ? (st.text ? 'Searching…' : 'Loading…') : `${st.shown.toLocaleString()} of ${st.pool.toLocaleString()}${st.bad ? ' · some folders couldn’t be read: type again to retry' : ''}`;
+    grid.classList.toggle('noplat', chipRow(chips, st.plats, plats, 'data-platform', apply) < 2);
+    grid.classList.toggle('lq', !!text);
     webQ.textContent = text;
-    webHint.hidden = hits || !all;
-    list.el.hidden = !webHint.hidden; // no empty box under the hint
+    webHint.hidden = !text || st.busy || st.matched > 0;
+    tree.el.hidden = !webHint.hidden; // no empty box under the hint
   }
 
   async function reveal(path) {
-    const c = path.slice(6, path.lastIndexOf('/'));
     search.value = '';
-    if (cats.some(([v]) => v === c)) cat = c;
-    await categories();
-    if (c !== cat && cats.some(([v]) => v === c)) { cat = c; renderTabs(); await load(); }
-    const it = items.find((x) => x.path === path);
-    if (it) { list.el.scrollTop = shown.indexOf(it) * list.rh; preview(it); }
+    apply();
+    await tree.load();
+    const it = await tree.show(path);
+    if (it) preview(it);
   }
 
-  const opts = () => ({ category: cat[0] == '@' ? '' : cat, categories: real(), platforms: [...new Set(items.map((x) => x.e.platform).filter(Boolean))] });
+  const opts = () => {
+    // The folder open (one), else the picked GIF's, else the first open.
+    const open = [...tree.open].filter((x) => x[0] != '@'), cur = current?.path.startsWith('/gifs/') && current.path.split('/')[2];
+    const c = (open.length === 1 ? open[0] : cur) || open[0] || '';
+    return { category: c, categories: tree.real(), platforms: [...new Set(tree.rows.filter((r) => r.path).map((r) => r.e.platform).filter(Boolean))] };
+  };
   async function addGifs(picked) {
     const gifs = picked.filter((f) => /\.gif$/i.test(f.name));
     if (!gifs.length) { toast('choose .gif files', 'bad'); return; }
@@ -403,18 +252,20 @@ export async function mount(el) {
 
   async function edit() {
     const to = await (await import('./details.js')).editDialog(current.path, opts());
-    if (to) { forget(); await ov.load(ov.path); await reveal(to); }
+    if (to) { forgetThumb(current.path); forgetThumb(to); forgetDir(current.path.split('/')[2]); await ov.load(ov.path); await reveal(to); }
   }
   async function remove() {
     if (!(await (await import('./details.js')).removeGif(current.path, label(current.e)))) return;
+    forgetThumb(current.path);
+    forgetDir(current.path.split('/')[2]);
     current = null;
-    forget();
+    tree.cur = '';
     body.hidden = true;
     side.classList.remove('open');
     pv.clear();
     cap.textContent = 'Pick a GIF to see it here';
     await ov.load(ov.path);
-    await categories();
+    await tree.load();
   }
 
   async function playlists() {
@@ -424,25 +275,21 @@ export async function mount(el) {
     await ov.load(want); // each time: Now's ☆ or the Playlists editor may have changed it
   }
 
-  let dirty = false;
-  on('gifs', (c) => { byCat.delete(c); every = null; dirty = true; });
-  // A restart or a card out and in: list everything again.
-  let up = 0, sd = app.status?.sd?.mounted;
-  on('status', (s) => {
-    if (s.uptime_secs < up || s.sd?.mounted !== sd) { forget(); dirty = true; }
-    up = s.uptime_secs;
-    sd = s.sd?.mounted;
-  });
-  await categories();
+  await tree.load();
   await playlists();
   sync();
   return {
     show() {
-      thumbs = thumbsOn();
-      scrollTab();
       sync();
       playlists();
-      if (dirty) { dirty = false; const was = current; categories().then(() => { const it = was && current === was && items.find((x) => x.path === was.path); if (it) preview(it); }); }
+      if (tree.dirty) tree.load().then(() => { const it = current && tree.rows.find((x) => x.path === current.path); if (it) preview(it); });
+      else tree.refresh(); // the thumbnails switch may have changed
+    },
+    // #library/<Category>: that folder open at the top, the others closed.
+    async sub(sub) {
+      if (!sub) return;
+      if (search.value) { search.value = ''; apply(); }
+      await tree.only(decodeURIComponent(sub));
     },
   };
 }

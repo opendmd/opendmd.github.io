@@ -16,14 +16,15 @@ import { PanelPreview } from './preview.js';
 import { popup, closeMenu } from './overrides.js';
 import { h, clear, on, note, store, debounce, saver, brightSlider } from './util.js';
 
-const thumbs = () => h('label', { style: 'margin-top:12px' }, h('input', { type: 'checkbox', id: 'st-thumbs', checked: store.get('thumbs', !app.device), onchange: (e) => store.set('thumbs', e.target.checked) }), 'Thumbnails in the Library');
+const thumbs = () => h('label', { style: 'margin-top:12px' }, h('input', { type: 'checkbox', id: 'st-thumbs', checked: store.get('thumbs', true), onchange: (e) => store.set('thumbs', e.target.checked) }), 'Thumbnails in the Library and playlists');
 const TABS = [['play', 'Playback'], ['look', 'Look'], ['time', 'Schedule'], ['device', 'Device']];
-// The examples (formulas.json), fetched once a session; pkg-psi's "lets the GIF show through".
-let exQ = null, psiOver = null;
+// The examples (formulas.json), fetched once a session.
+let exQ = null;
 const examples = () => (exQ ??= fetch('formulas.json').then((r) => r.json()).catch(() => { exQ = null; return []; }));
 
 export async function mount(el) {
-  if (!app.device) {
+  // (The demo's player answers too: js/demo.js.)
+  if (!app.src.config) {
     el.append(h('h1.ptitle', 'Settings'), h('div.card', h('p.muted', 'Device settings, WiFi and reboot live on the player. This page is in local mode: open it from the player (http://opendmd.local/) to use them'), thumbs()));
     return {};
   }
@@ -75,31 +76,56 @@ export async function mount(el) {
   f.brightness.addEventListener('input', () => { held = 1; later(); });
   for (const k of ['shuffle', 'set']) f[k].onchange = () => save([k], play);
   for (const k of ['look', 'glow']) f[k].onchange = () => save([k], looks);
-  // A formula over every GIF: one saved in Formulas (this browser), or an
-  // example, that lets the GIF show through (asked of pkg-psi — an instance
-  // of its own, `?look`, so the Formulas view's is not disturbed — or, if it
-  // will not load, guessed from its words), or none; the one set elsewhere
-  // stays listed, with the panel's word if it can't draw it any more.
+  // A Formula over every GIF (js/looks.js, imported with the tab): any
+  // one saved in Formulas (this browser) or an example, with a blend and an
+  // amount; one that can't be drawn over GIFs is listed, not offered. The
+  // one set elsewhere (another browser, an edit since) stays listed, taken
+  // apart from its path, with the panel's word if it can't draw it any more.
+  // Applied as it changes (the amount once it settles).
   const lf = h('select', { id: 'st-look-formula' });
   const lfErr = h('p.cap.bad', { id: 'st-look-formula-err', hidden: true });
-  let lfs = [];
-  const guess = (src) => /\b(ur|ug|ub|ul|layer)\b/.test(src);
-  async function lookFormulas() {
-    const [ex, { fpath }, over] = await Promise.all([examples(), import('./psishow.js'),
-      (psiOver ??= import('../pkg-psi/opendmd_psi_web.js?look').then(async (m) => { await m.default(); return (src) => m.compile(src) && !!(m.info()[5] & 32); }).catch(() => guess))]);
-    const mine = store.get('psi.mine', []), cf = app.config || {};
-    lfs = [...(Array.isArray(mine) ? mine : []), ...(Array.isArray(ex) ? ex : [])]
-      .filter((x) => typeof x?.src == 'string' && over(x.src)).map((x) => ({ name: x.name || 'Formula', path: fpath(x) }));
-    if (cf.look_formula && !lfs.some((x) => x.path === cf.look_formula)) lfs.unshift({ name: cf.look_formula_name || 'A formula', path: cf.look_formula });
-    clear(lf, h('option', { value: '' }, 'None'), lfs.map((x, k) => h('option', { value: k }, x.name)));
-    lf.value = String(lfs.findIndex((x) => x.path === cf.look_formula));
-    if (lf.value === '-1') lf.value = '';
+  let lfs = [], L = null, M = null, lc = null;
+  const lcBox = h('div', { id: 'st-look-mix', hidden: true, style: 'margin:12px 0' });
+  // (`force`: after a refusal, even while the controls have the focus.)
+  async function lookFormulas(force) {
+    let ex;
+    try { [ex, L] = await Promise.all([examples(), import('./looks.js')]); M = await L.psi(); } catch (e) { lfErr.hidden = false; lfErr.textContent = 'Formulas could not be loaded: ' + (e.message || e); return; }
+    lc ??= L.controls('st-look', (b, k, done) => { const x = L.as(M, lfs[lf.value], b, k); lc.say(x); if (done && !x.why) saveLook(b, k); });
+    lcBox.replaceChildren(lc.el, lc.why);
+    const mine = store.get('psi.mine', []), cf = app.config || {}, grp = (label, list) => list.length && h('optgroup', { label }, list.map((x) => h('option', { value: x.k, disabled: !!x.off }, x.name + (!x.off ? '' : /too heavy/.test(x.off) ? ' (too heavy)' : /too long/.test(x.off) ? ' (too long)' : ' (can’t be a look)'))));
+    lfs = [...(Array.isArray(mine) ? mine : []).map((x) => ({ ...x, mine: 1 })), ...(Array.isArray(ex) ? ex : []).map((x) => ({ ...x }))].filter((x) => typeof x?.src == 'string' && x.name);
+    let cur = -1;
+    if (cf.look_formula) {
+      const [name, b, k] = L.named(cf), same = (x, y = L.as(M, x, b, k)) => !y.why && L.fpath({ ...x, src: y.src }) === cf.look_formula;
+      cur = lfs.findIndex((x) => Array.from(x.name).slice(0, 60).join('') === name && same(x));
+      if (cur < 0) { lfs.unshift(L.saved(cf)); cur = 0; }
+    }
+    lfs.forEach((x, k) => { x.k = k; x.off = k !== cur && L.as(M, x, ...L.choice(M, x)).why; });
+    clear(lf, h('option', { value: '' }, 'None'), lfs.filter((x) => x.saved).map((x) => h('option', { value: x.k }, x.name)),
+      grp('Your Formulas', lfs.filter((x) => x.mine)), grp('Examples', lfs.filter((x) => !x.mine && !x.saved)));
+    lf.value = cur < 0 ? '' : String(cur);
+    // A config event mid-drag must not snap the slider back.
+    if (force || !lcBox.contains(document.activeElement)) showMix(...L.named(cf).slice(1));
   }
-  lf.onchange = () => looks(async () => {
+  function showMix(b, k) {
     const x = lfs[lf.value];
-    await app.src.putConfig({ look_formula: x?.path || '', look_formula_name: x?.name || '' });
-    await app.refreshConfig();
+    lcBox.hidden = !x;
+    if (x) { lc.set(b, k, L.overOnly(M, x)); lc.say(L.as(M, x, b, k)); }
+  }
+  const saveLook = (b, k) => looks(async () => {
+    const x = lfs[lf.value];
+    try {
+      if (!x) { await app.src.putConfig({ look_formula: '', look_formula_name: '', look_blend: 'over', look_amount: 100 }); await app.refreshConfig(); return; }
+      await L.use(x, b, k);
+    } catch (e) {
+      // Refused (400/413): the controls go back to what the panel has.
+      await app.refreshConfig().catch(() => {});
+      await lookFormulas(true);
+      throw e;
+    }
   });
+  // A new pick starts at its own choice (as it is over the GIF, or Screen 40%).
+  lf.onchange = () => { const x = lfs[lf.value], [b, k] = x ? L.choice(M, x) : ['over', 100]; showMix(b, k); if (!x || !L.as(M, x, b, k).why) saveLook(b, k); };
   on('config', lookFormulas);
   const lookErr = (st) => { const e = st?.formula_look?.error; lfErr.hidden = !e; lfErr.textContent = e ? `The panel can’t draw this formula any more: ${e}` : ''; };
   on('status', lookErr);
@@ -193,8 +219,8 @@ export async function mount(el) {
       return tab('look',
         h('div.card', lookH, h('p.cap', 'How the panel draws every GIF'),
           h('div.form.f2', h('label.stack', 'Colour', f.look), h('label.stack', 'Phosphor glow', f.glow)),
-          (lookFormulas(), h('label.stack', { style: 'margin-top:12px' }, 'Formula over every GIF', lf)), lfErr,
-          h('p.cap', 'A formula drawn over everything the panel plays, before the colour and glow: scanlines, a colour grade, a clock in the corner. Make or pick one in Formulas.'),
+          (lookFormulas(), h('label.stack', { style: 'margin-top:12px' }, 'Formula over every GIF', lf)), lcBox, lfErr,
+          h('p.cap', 'Any Formula, drawn over everything the panel plays before the colour and glow: scanlines, a colour grade, a clock in the corner, or plasma screened over the GIFs. Blend and Amount say how it goes over them. Make or pick one in Formulas.'),
           h('label', { style: 'margin-top:12px' }, mirror, 'Mirror the panel on Now'), h('p.cap', 'Now shows what the panel is playing; off saves the player a download for each GIF (this browser only)')),
         h('div.card', { id: 'st-trans-card' }, transH, h('p.cap', 'How the panel moves from one GIF to the next'),
           h('div.form.f2', h('label.stack', 'Style', f.transition), h('label.stack', 'Speed', f.transition_ms)),

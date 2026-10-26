@@ -6,7 +6,8 @@
 // A formula that reads what is under it (`ur ug ub ul`, layers that let it
 // show through) is drawn over a GIF: one picked from the Library or a file
 // (decoded by pkg-art), else a sample picture; on a device it can be shown
-// over the panel's GIF or kept as the panel's look.
+// over the panel's GIF. Any formula can be kept as the panel's look, with a
+// blend and an amount (js/looks.js).
 
 import { app } from './state.js';
 import { PanelPreview } from './preview.js';
@@ -123,18 +124,43 @@ function overRow(id) {
   return el;
 }
 
-// On a device: kept as the panel's look (Settings › Look), over every GIF.
-async function useLook(f) {
-  try {
-    await app.src.putConfig({ look_formula: (await import('./psishow.js')).fpath(f), look_formula_name: Array.from(f.name || 'Formula').slice(0, 60).join('') });
-    await app.refreshConfig();
-    toast(`“${f.name || 'Formula'}” is the panel’s look now: drawn over every GIF (Settings › Look turns it off)`, 'ok');
-  } catch (e) { toast(e.status == 400 ? `The panel can’t use it: ${e.message.replace(/^400: (look_formula: )?/, '')}` : 'Use as the look: ' + e.message, 'bad'); }
+// On a device (or the demo's player): kept as the panel's look (Settings ›
+// Look), over every GIF, with a blend and an amount (js/looks.js); while
+// the sheet is open the preview `v` shows the look over its picture, then
+// `orig` again.
+async function useLook(f, btn, v, orig = f) {
+  let L, M;
+  try { L = await import('./looks.js'); M = await L.psi(); } catch (e) { toast('Use as the look: ' + (e.message || e), 'bad'); return; }
+  const back = () => { if (info(orig.src).length) play(v, orig, info(orig.src)); };
+  let mix = L.choice(M, f);
+  const go = h('button.pri', { id: 'psi-look-go' }, 'Use as the look');
+  const c = L.controls('psi-look', (b, k) => { mix = [b, k]; show(); });
+  function show() {
+    const x = L.as(M, f, ...mix);
+    c.say(x);
+    go.disabled = !!x.why;
+    if (x.src) play(v, { ...f, src: x.src }, info(x.src));
+  }
+  c.set(...mix, L.overOnly(M, f));
+  go.onclick = async () => {
+    closeMenu();
+    try {
+      await L.use(f, ...mix);
+      toast(`“${f.name || 'Formula'}” is the panel’s look now: drawn over every GIF (Settings › Look changes it)`, 'ok');
+    } catch (e) { toast(e.status == 400 ? `The panel can’t use it: ${e.message.replace(/^400: (look_formula: )?/, '')}` : 'Use as the look: ' + e.message, 'bad'); }
+  };
+  const r = btn.getBoundingClientRect(), el = h('div.menu.wide', { id: 'psi-look-sheet', role: 'dialog', 'aria-label': 'Use as the look' },
+    h('div.mh', 'Over every GIF the panel plays'), c.el, c.why, h('p.cap', 'Blend: how it goes over the GIF. Amount: how much of it shows.'), go);
+  el.onclose = back;
+  popup(el, r.left, r.bottom + 4);
+  show();
 }
 
 const NOTE = () => (app.device ? 'Show on panel plays it there until the playlist moves on (one that draws over a GIF, over the panel’s GIF); save it as a GIF to keep it.' : 'Formulas play here in the browser. Save one as a GIF to play it on an OpenDMD panel.');
 
 let PS = null;
+// Use as the look: a player's, or the demo's (js/demo.js).
+const LOOK = () => app.device || !!app.demo;
 const shows = [], showBtn = (id, f) => app.device && shows[shows.push([h('button', { id, onclick: () => PS?.show(f()) }, 'Show on panel'), f]) - 1][0];
 
 // A preview: the LED canvas, the formula it plays and its own clock.
@@ -274,7 +300,7 @@ function build(root) {
   const shareBtn = h('button', { id: 'psi-share-btn' }, 'Copy share link'), del = h('button.danger', { id: 'psi-del' }, 'Delete…');
   let cur = null;
   const show = showBtn('psi-show', () => cur);
-  const look = app.device && h('button', { id: 'psi-look', onclick: () => useLook(cur) }, 'Use as the look');
+  const look = LOOK() && h('button', { id: 'psi-look', onclick: (e) => useLook(cur, e.currentTarget, pv) }, 'Use as the look');
   const under = overRow('psi-under');
   const side = h('div.side', { id: 'psi-side' }, h('div.card', { id: 'psi-detail' },
     h('button.sm.close', { 'aria-label': 'Close', onclick: () => side.classList.remove('open') }, '✕'),
@@ -295,7 +321,7 @@ function build(root) {
     sliders(sl, f, i[5] || 0, () => { pv.dirty = true; PS?.follow(f); });
     if (show) show.disabled = !i.length;
     under.hidden = !(i[5] & 32);
-    if (look) look.hidden = under.hidden;
+    if (look) look.hidden = !i.length;
     PS?.mark();
     main.textContent = mineToo ? 'Edit' : 'Remix';
     main.onclick = (e) => go(mineToo ? { ...f } : { name: f.name + ' remix', src: f.src, a: f.a, b: f.b, c: f.c }, e.currentTarget);
@@ -343,11 +369,13 @@ function build(root) {
 // --- The editor (`#formulas/edit`)
 const VARS = [['x, y', 'where the pixel is: 0 to 1 across, and up from the bottom'], ['px, py', 'the pixel’s column 0–127 and row 0–31 from the bottom'],
   ['t', 'seconds into the loop'], ['hour, minute, second', 'the time of day'], ['a, b, c', 'sliders, 0 to 1 (name one with -- a: speed)'],
-  ['w, h', '128 and 32'], ['i', 'the pixel’s number, 0–4095'], ['ur, ug, ub', 'the colour under the formula: the GIF it is drawn over, 0 to 1'], ['ul', 'how bright that is']];
+  ['w, h', '128 and 32'], ['i', 'the pixel’s number, 0–4095'], ['cx, cy', 'from the middle: −2 to 2 across, −0.5 to 0.5 up'],
+  ['r, angle', 'distance and angle (turns) from the middle'], ['ty', 'row 0–31 from the top'], ['ur, ug, ub', 'the colour under the formula: the GIF it is drawn over, 0 to 1'], ['ul', 'how bright that is']];
 const FUNCS = [['sin(v) cos(v)', 'a wave: one turn per 1, between −1 and 1'], ['tri(v) saw(v) sqr(v)', 'triangle, sawtooth and square waves'],
   ['abs floor frac sqrt', 'size, whole part, fraction, square root'], ['min max clamp(v, lo, hi)', 'limits'], ['mix(a, b, k)', 'from a to b as k goes 0 to 1'],
   ['step(edge, v)', '1 past the edge, else 0'], ['smoothstep(e0, e1, v)', 'a soft step'], ['len(dx, dy)', 'distance'], ['atan2(dy, dx)', 'angle, in turns'],
   ['noise(x, y, z)', 'smooth random hills, 0 to 1'], ['hash(a, b)', 'random 0 to 1'], ['select(c, a, b)', 'a when c is true (not 0), else b; or c ? a : b'],
+  ['pick(k, a, b, …)', 'a at k = 0, b at 1, …; else 0'],
   ['digit(n, col, row)', 'the panel’s font: 1 where digit n has a pixel; col 0–4, row 0–6 from the top; add , small or , bold (chunky digits) for another font'],
   ["glyph('A', col, row)", 'the same for a character'], ['bit(n, i)', 'bit i of a whole number: 1 or 0'],
   ['< <= > >= == !=', 'compare: 1 or 0; and, or, not'], ['%', 'remainder: v % 1 is the fraction'], [';', 'a new line, on the same line'],
@@ -357,7 +385,8 @@ const FUNCS = [['sin(v) cos(v)', 'a wave: one turn per 1, between −1 and 1'], 
   ['p(x, y, k)', 'part p as a colour, drawn at another place; k: how much it covers']];
 const COLS = [['hsv(hue, sat, val)', 'colour: hue in turns, 0 to 1 each'], ['rgb(r, g, b)', 'red, green, blue: 0 to 1'],
   ['pal(fire, v)', 'a palette: fire, ice, ocean, chrono, amber, rainbow, gray'], ['gray(v)', 'white, 0 to 1'],
-  ['rgb(r, g, b, k)', 'a last value: how much it covers, 0 to 1 (what is under shows through)']];
+  ['#ff8800', 'a colour: alone, or #f80 * v, mix(#000, #f80, v)'],
+  ['rgb(r, g, b, k)', 'a last value: how much it covers, 0 to 1 (what is under shows through); rgb(#f80, k)']];
 
 function editor() {
   const name = h('input', { type: 'text', id: 'psi-name', placeholder: 'Untitled formula', maxLength: 60, 'aria-label': 'Name', oninput: () => { B.draft.name = name.value; stash(); } });
@@ -378,7 +407,7 @@ function editor() {
     'Heavy for the panel: noise, len, sqrt, atan2 and dividing by a changing value cost the most');
   const sl = h('div.psi-sls', { id: 'psi-ed-sl' });
   const under = overRow('psi-ed-under');
-  const look = app.device && h('button', { id: 'psi-ed-look', hidden: true, onclick: () => useLook({ ...live }) }, 'Use as the look');
+  const look = LOOK() && h('button', { id: 'psi-ed-look', hidden: true, onclick: (e) => useLook({ ...live }, e.currentTarget, pv, live) }, 'Use as the look');
   const touch = matchMedia('(pointer:coarse)').matches;
   // One card: the preview (stuck to the top on a phone), the sliders, the
   // error over the code, the code, the actions.
@@ -446,7 +475,7 @@ function editor() {
       cap.title = TIP(i);
       heavy.hidden = i[6] <= 8000;
       under.hidden = !(i[5] & 32);
-      if (look) look.hidden = under.hidden;
+      if (look) look.hidden = false;
       el.dataset.steps = i[0];
       delete el.dataset.err;
       good = f.src;

@@ -42,8 +42,8 @@ fn blocks() -> Vec<(String, String, usize)> {
 fn frames(slug: &str, src: &str) -> Vec<(u32, u64)> {
     let p = compile(src).unwrap_or_else(|e| panic!("example {slug}: {}", e.render(src)));
     assert!(
-        p.esp32_us() <= 8000,
-        "example {slug}: ~{} µs a frame on the panel (keep examples ≤ 8 ms)",
+        p.esp32_us() <= 10_000,
+        "example {slug}: ~{} µs a frame on the panel (keep examples ≤ 10 ms: heavier than 8 plays at 25 frames a second)",
         p.esp32_us()
     );
     let mut under = vec![0u8; W * H * 3];
@@ -131,7 +131,7 @@ fn the_reference_matches_the_language() {
 fn the_reference_names_every_built_in() {
     let values = [
         "x", "y", "px", "py", "i", "t", "hour", "minute", "second", "a", "b", "c", "w", "h", "ur",
-        "ug", "ub", "ul",
+        "ug", "ub", "ul", "cx", "cy", "r", "angle", "ty",
     ];
     let funcs = [
         ("sin", 1),
@@ -155,6 +155,7 @@ fn the_reference_names_every_built_in() {
         ("noise", 3),
         ("hash", 2),
         ("select", 3),
+        ("pick", 3),
     ];
     for v in values {
         assert!(
@@ -222,6 +223,12 @@ fn the_cost_table_is_the_estimates() {
         ),
         ("| `mix` | 130 |", 130, "gray(x)", "gray(mix(x, px, x))"),
         (
+            "| `pick` (values the same for every pixel) | 100 |",
+            100,
+            "gray(px)",
+            "gray(pick(px, 0.25, 0.5))",
+        ),
+        (
             "| `smoothstep` | 214 ",
             214,
             "gray(x)",
@@ -232,29 +239,29 @@ fn the_cost_table_is_the_estimates() {
         ("| `noise` | 855 |", 855, "gray(x)", "gray(noise(x, px, x))"),
         ("| colour `rgb` | 120 |", 120, "gray(x)", "rgb(x, x, x)"),
         ("| colour `hsv` | 195 |", 195, "gray(x)", "hsv(x, x, x)"),
-        ("| `ur` `ug` `ub` | 35 |", 35, "gray(x)", "gray(ur)"),
-        ("| `ul` | 125 |", 125, "gray(x)", "gray(ul)"),
+        ("| `ur` `ug` `ub` | 70 |", 70, "gray(x)", "gray(ur)"),
+        ("| `ul` | 140 |", 140, "gray(x)", "gray(ul)"),
         (
-            "| each extra layer | 150 (multiply 210, screen 290; +75 with coverage) |",
-            150,
+            "| each extra layer | its colour + 190 ",
+            310,
             "gray(x)",
             "layer { gray(x) }\nlayer add { gray(px) }",
         ),
         (
-            "multiply 210",
-            210,
+            "multiply 245",
+            365,
             "gray(x)",
             "layer { gray(x) }\nlayer multiply { gray(px) }",
         ),
         (
-            "screen 290",
-            290,
+            "screen 300",
+            420,
             "gray(x)",
             "layer { gray(x) }\nlayer screen { gray(px) }",
         ),
         (
-            "+75 with coverage",
-            225,
+            "with coverage add 575",
+            695,
             "gray(x)",
             "layer { gray(x) }\nlayer add { gray(px, x) }",
         ),
@@ -265,9 +272,10 @@ fn the_cost_table_is_the_estimates() {
             "the reference's cost table has no {row:?}"
         );
         let got = us(more) - us(base);
-        let want = ns * 4096 / 1000;
+        // (× 1.15: what the effect and look paths add to the VM's frame.)
+        let want = ns * 4096 * 115 / 100_000;
         assert!(
-            (got - want).abs() <= 1,
+            (got - want).abs() <= 2,
             "{row}: one more step adds {got} µs, the table says {ns} ns a pixel ({want} µs)"
         );
     }

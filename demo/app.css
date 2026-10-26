@@ -64,7 +64,7 @@ p.cap{margin:0 0 12px}
 .chips{display:flex;flex-wrap:wrap;gap:8px}
 .chip{border:1px solid var(--line);background:none;border-radius:99px;padding:4px 12px;font-size:13px;cursor:pointer;color:var(--fg)}
 .chip.on,.chip.on:hover{background:var(--acc);border-color:var(--acc);color:#111}
-.chip small{font:inherit;color:var(--mut);margin-left:4px}.chip.on small{color:inherit}
+.chip small{font:inherit;color:var(--mut);margin-left:4px}.chip.on small{color:inherit}.chip:disabled{opacity:.45;cursor:not-allowed}
 .sys{color:var(--mut)}.tab.sys,.chip.sys{font-style:italic}
 .tag{display:inline-block;border-radius:4px;padding:0 8px;font-size:13px;background:#2b3138;color:#b8c2cc;margin-left:8px;white-space:nowrap}
 .tag.act{background:var(--acc);color:#111}
@@ -99,19 +99,17 @@ details>summary{cursor:pointer;color:var(--mut);padding:4px 0}
 .libgrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,38%);gap:16px;align-items:start}
 .libgrid>.side{position:sticky;top:60px}
 .chips.scroll{flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px;scrollbar-width:thin}.chips.scroll>*{flex:none}
-.libhead{display:grid;grid-template:"q n b a" "r r r r"/minmax(0,1fr) auto auto auto;gap:12px;align-items:center}#lib-select{grid-area:b;justify-self:end}#lib-csel{grid-area:s;display:none}
+.libhead{display:grid;grid-template:"q n f b a" "r r r r r"/minmax(0,1fr) auto auto auto auto;gap:12px;align-items:center}#lib-select{grid-area:b;justify-self:end}#lib-fold{grid-area:f}
 .lib-q{grid-area:q;display:flex;align-items:center;background:var(--bg3);border:1px solid var(--line);border-radius:99px}
 #lib-search{flex:1;font-size:16px;min-height:42px;padding:8px 16px;border:0;background:none;outline:0}.lib-q:focus-within{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc)}
 #lib-count{grid-area:n}#lib-add-btn{grid-area:a}#lib-add{grid-column:1/-1}
 .lib-r2{grid-area:r;display:flex;align-items:center;gap:12px;min-width:0}
-.lib-r2>*{flex:1 1 0;min-width:0}.lib-r2>.tabs{max-width:max-content}
-.vsep{flex:none;width:1px;align-self:stretch;margin:4px 0;background:var(--line)}
-.noplat .vsep,.noplat #lib-chips{display:none}
+.lib-r2>*{flex:1 1 0;min-width:0}
+.noplat #lib-r2{display:none}
 .lib-web{margin:12px 4px;color:var(--mut)}.lib-web b{color:var(--fg)}.lib-web .txt{color:var(--acc)}
 @media (max-width:760px){
-  .libhead{grid-template:"q q a" "s n b" "r r r"/minmax(0,1fr) auto auto;gap:8px 12px}
-  #lib-count{font-size:13px}#lib-csel{display:block}.libgrid:not(.lq) #lib-cats,.libgrid:not(.lq) .vsep,.lq #lib-csel{display:none}
-  .lq .libhead{grid-template:"q q a" "n n b" "r r r"/minmax(0,1fr) auto auto}
+  .libhead{grid-template:"q q q a" "n n f b" "r r r r"/minmax(0,1fr) auto auto auto;gap:8px 12px}
+  #lib-count{font-size:13px}
   .vlist{height:calc(100dvh - 312px)}
   #lib-selbar>span{flex:1 1 50%}#lib-sel-done{order:1}#lib-all,#lib-to-set{order:2}
   #lib-r2{overflow-x:auto;scrollbar-width:none}#lib-r2>*{flex:none;overflow:visible;max-width:none}
@@ -122,7 +120,6 @@ details>summary{cursor:pointer;color:var(--mut);padding:4px 0}
 .tab{background:none;border:0;border-bottom:2px solid transparent;border-radius:0;color:var(--mut);padding:4px 12px;white-space:nowrap;flex:none}
 .tab:hover:not(:disabled){color:var(--fg);background:none}
 .tab.on{color:var(--fg);border-bottom-color:var(--acc);font-weight:600}
-.lq #lib-cats{gap:8px}#lib-cats>*{flex:none;white-space:nowrap}
 .lib-progress .bar{height:4px}
 .dhead{display:flex;gap:8px;align-items:flex-start;margin-top:12px}
 #lib-d-title{margin:0 0 4px}#lib-d-meta{margin:0}
@@ -149,7 +146,6 @@ input.sw:checked{background:var(--acc)}input.sw:checked::after{left:16px}
 button.more{min-height:28px;padding:0 8px;flex:none;border-color:transparent}
 .vrow .tag,.vrow .more{margin-left:auto}.vrow .tag{background:none;color:var(--mut);padding:0}.vrow .tag+.more{margin-left:0}
 @media (hover:hover){.vrow .more{opacity:0}.vrow:hover .more,.vrow:focus-within .more{opacity:1}}
-canvas.th{width:64px;height:16px;flex:none;background:#000;border-radius:2px}
 button.txt{border-color:transparent;color:var(--mut)}
 .menu{position:fixed;z-index:20;background:var(--bg2);border:1px solid var(--line);border-radius:var(--r);box-shadow:0 8px 28px #000a;padding:8px;min-width:250px;display:flex;flex-direction:column;gap:4px}
 .menu.sheet{left:0;right:0;bottom:0;border-radius:12px 12px 0 0;padding:12px 12px calc(16px + env(safe-area-inset-bottom))}

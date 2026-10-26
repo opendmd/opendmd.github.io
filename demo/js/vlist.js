@@ -1,6 +1,9 @@
 // A virtualised list: fixed row height, a pool of rows re-rendered on scroll.
+// A row is `.vrow` (an item) or `.vdir` (a folder, js/tree.js); render sets it.
 
 import { h } from './util.js';
+
+const ROW = '.vrow,.vdir';
 
 export class VList {
   // onMenu(item, index, x, y): right-click, or a long press on a touch
@@ -22,14 +25,14 @@ export class VList {
       (!menu && onHold || onMenu)(this.items[row._i], row._i, x, y);
     };
     this.el.addEventListener('click', (e) => {
-      const row = e.target.closest('.vrow');
+      const row = e.target.closest(ROW);
       if (Date.now() - pressed < 700) return; // the tap that ended a long press
       if (row && onClick) onClick(this.items[row._i], row._i, e);
     });
-    this.el.addEventListener('keydown', (e) => { if (e.key == 'Enter' && e.target.classList.contains('vrow')) e.target.click(); });
+    this.el.addEventListener('keydown', (e) => { if (e.key == 'Enter' && e.target.matches(ROW)) e.target.click(); });
     if (onMenu) {
       this.el.addEventListener('contextmenu', (e) => {
-        const row = e.target.closest('.vrow');
+        const row = e.target.closest(ROW);
         if (!row) return;
         e.preventDefault();
         fire(row, e.clientX, e.clientY, !touch);
@@ -38,7 +41,7 @@ export class VList {
       let timer = 0;
       const cancel = () => clearTimeout(timer);
       this.el.addEventListener('pointerdown', (e) => {
-        const row = e.target.closest('.vrow');
+        const row = e.target.closest(ROW);
         touch = e.pointerType === 'touch';
         if (!touch || !row || e.target.closest('button,input')) return;
         t0 = [e.clientX, e.clientY];

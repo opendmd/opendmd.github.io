@@ -92,11 +92,13 @@ export function glyphs(o) {
   return g.length ? h('span.ov', g.map(([t, title, c]) => h('i.' + c, { title }, t))) : null;
 }
 
-// The element that had the focus when a menu opened gets it back on close.
+// The element that had the focus when a menu opened gets it back on close;
+// `el.onclose` runs then.
 let open = null, opener = null;
 export function closeMenu() {
   if (!open) return;
   open.remove();
+  open.onclose?.();
   open = null;
   if (opener?.isConnected) opener.focus({ preventScroll: true });
   opener = null;

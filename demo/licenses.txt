@@ -108,11 +108,9 @@ Silkscreen (the setup page's heading font, a subset): OFL-1.1 [16]
 
 Rust standard library: Apache-2.0 [1]
   https://github.com/rust-lang/rust
-  std, core, alloc and the crates they are built from (addr2line 0.25.1,
-  adler2 2.0.1, gimli 0.32.3, hashbrown 0.17.1, miniz_oxide 0.8.9, object
-  0.37.3, rustc-demangle 0.1.27): MIT OR Apache-2.0 (compiler-builtins'
-  compiler-rt parts: Apache-2.0 WITH LLVM-exception), used here under
-  Apache-2.0.
+  std, core, alloc and the crates they are built from (hashbrown 0.17.1,
+  rustc-demangle 0.1.27): MIT OR Apache-2.0 (compiler-builtins' compiler-rt
+  parts: Apache-2.0 WITH LLVM-exception), used here under Apache-2.0.
 
 Rust crates
 -----------

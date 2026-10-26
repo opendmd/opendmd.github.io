@@ -32,12 +32,13 @@ export const about = (i) => i.length ? [i[5] & 8 && `Loops every ${i[4] / 1000} 
 export const TIP = (i) => `${i[0]} steps, about ${(i[6] / 1000).toFixed(1)} ms a frame on the panel (light: under 5 ms; medium: under 8)`;
 
 // The code as highlighted HTML (numbers `.n` — a unary minus included —,
-// comments `.c`, the error `bad` = [start, end] `.e`; everything else
-// escaped text) and where its numbers are.
+// comments `.c`, colours `.k` with `--k` their colour, for a swatch; the
+// error `bad` = [start, end] `.e`; everything else escaped text) and where
+// its numbers are.
 export function marks(s, bad) {
   const toks = [], cls = new Array(s.length).fill('');
-  for (const m of s.matchAll(/(--|\/\/).*|'[ -~]'|[A-Za-z_]\w*|\d+\.?\d*|\.\d+/g)) {
-    const k = m[1] ? 'c' : /[\d.']/.test(m[0][0]) ? 'n' : '';
+  for (const m of s.matchAll(/(--|\/\/).*|'[ -~]'|#[\da-f]{3}([\da-f]{3})?\b|[a-z_]\w*|\d+\.?\d*|\.\d+/gi)) {
+    const k = m[1] ? 'c' : m[0][0] == '#' ? `k" style="--k:${m[0]}` : /[\d.']/.test(m[0][0]) ? 'n' : '';
     let a = m.index;
     // A character in quotes ('A') is a number, but not one to drag.
     if (k === 'n' && m[0][0] !== "'") {
@@ -47,7 +48,7 @@ export function marks(s, bad) {
     }
     if (k) cls.fill(k, a, m.index + m[0].length);
   }
-  if (bad) for (let i = bad[0]; i < Math.max(bad[1], bad[0] + 1) && i < s.length; i++) cls[i] += ' e';
+  if (bad) for (let i = bad[0]; i < Math.max(bad[1], bad[0] + 1) && i < s.length; i++) cls[i] = 'e ' + cls[i];
   const esc = (t) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;');
   let html = '', i = 0;
   while (i < s.length) {
@@ -56,7 +57,7 @@ export function marks(s, bad) {
     html += cls[i] ? `<span class="${cls[i]}">${esc(s.slice(i, j))}</span>` : esc(s.slice(i, j));
     i = j;
   }
-  if (bad && bad[0] >= s.length) html += '<span class=" e"> </span>';
+  if (bad && bad[0] >= s.length) html += '<span class="e"> </span>';
   return { html, toks };
 }
 

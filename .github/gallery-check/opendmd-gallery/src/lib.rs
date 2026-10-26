@@ -46,8 +46,11 @@ pub const MAX_AUTHOR: usize = 40;
 pub const MAX_SLUG: usize = 48;
 /// The licences a contribution may carry (SPDX ids). CC0 is the default.
 pub const LICENCES: [&str; 2] = ["CC0-1.0", "CC-BY-4.0"];
-/// The most a formula may cost on the panel, estimated µs a frame.
-pub const MAX_US: u32 = 8000;
+/// The most a formula may cost on the panel, estimated µs a frame. 8,000
+/// until the estimate was calibrated on the device (2026-10-26, any-look),
+/// which reads the same formulas ~10-25 % higher: the heaviest examples
+/// (Matrix, Plasma letters) are 8.9-9.7 ms now, as they always ran.
+pub const MAX_US: u32 = 10_000;
 /// The clock a preview is drawn at (formulas that follow it show 10:09:30).
 pub const CLOCK: (u8, u8, u8) = (10, 9, 30);
 /// The panel's frame time: `t` is a whole number of these.

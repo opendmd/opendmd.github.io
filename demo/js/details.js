@@ -29,7 +29,7 @@
 import { app, setValue } from './state.js';
 import { art } from './artmod.js';
 import { fileFor } from './overrides.js';
-import { authorOf, savePlaylist } from './library.js';
+import { authorOf, savePlaylist } from './gifs.js';
 import { h, clear, toast, base, dir, enc, label, niceName, byNice } from './util.js';
 
 const WHY = {

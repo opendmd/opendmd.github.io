@@ -30,6 +30,7 @@
 .psi-hl{position:absolute;inset:0;margin:0;white-space:pre;overflow:hidden;color:var(--fg);pointer-events:none;border:1px solid transparent}
 .psi-hl .n{color:var(--acc);text-decoration:underline dotted #f0a03080;text-underline-offset:3px}
 .psi-hl .c{color:var(--mut)}
+.psi-hl .k{text-decoration:underline .3em var(--k)}
 .psi-hl .e{text-decoration:underline wavy var(--bad);background:#e5555530}
 #psi-src{display:block;width:100%;resize:none;border:1px solid transparent;margin:0;background:transparent;color:transparent;caret-color:var(--fg);white-space:pre;overflow-x:auto;overflow-y:hidden;outline:0}
 #psi-src::selection{background:#f0a03055}

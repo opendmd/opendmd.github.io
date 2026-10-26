@@ -97,6 +97,8 @@ if (found) {
   } }));
   $('#top').append(own);
   $('#top strong').replaceChildren(h('a', { href: '../', style: 'color:inherit;text-decoration:none' }, 'OpenDMD'));
+  // Its player's settings and status (js/demo.js).
+  await (await import('./js/demo.js')).simulate(app.demo);
   setSource(app.demo);
 } else {
   $('#where').textContent = 'Local mode';

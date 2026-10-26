@@ -92,7 +92,11 @@ pub(crate) mod code {
     pub const SQR: u8 = 41;
     pub const SQRT: u8 = 42;
     pub const RECIP: u8 = 43;
-    pub const LAST_UN: u8 = 43;
+    // `pick(k, …)` per pixel: `d = k`'s choice: `b` is the first of `c`
+    // constant slots holding the slots of the choices (all per frame or per
+    // row); 0 where floor(k) is outside 0..c ([`super::pick`]). One operand.
+    pub const PICK: u8 = 44;
+    pub const LAST_UN: u8 = 44;
     // ternary
     pub const SELECT: u8 = 64;
     pub const CLAMP: u8 = 65;
@@ -188,9 +192,9 @@ pub(crate) mod code {
             "add", "sub", "mul", "div", "mod", "mask", "lt", "le", "gt", "ge", "eq", "ne", "and",
             "or", "min", "max", "step", "atan2", "hash", "len", "bit",
         ];
-        const U: [&str; 12] = [
+        const U: [&str; 13] = [
             "neg", "not", "abs", "floor", "frac", "sin", "cos", "tri", "saw", "sqr", "sqrt",
-            "recip",
+            "recip", "pick",
         ];
         const T: [&str; 10] = [
             "select",
@@ -350,7 +354,13 @@ impl Program {
         let mut m = if self.over() { 32 } else { 0 };
         for op in &self.ops[..self.len()] {
             let (v, n) = code::operands(op);
-            for &v in &v[..n] {
+            // A pick's choices are read through its table of slots.
+            let table = if op.code == code::PICK {
+                &self.init[op.b as usize..][..op.c as usize]
+            } else {
+                &[]
+            };
+            for v in v[..n].iter().copied().chain(table.iter().map(|&s| s as u8)) {
                 m |= match v {
                     S_A..=S_C => 1 << (v - S_A),
                     S_T => 8,
@@ -367,12 +377,14 @@ impl Program {
         self.inputs() & 7
     }
 
-    /// An estimate of a frame's render time on the ESP32 in µs, from the
-    /// per-step costs `psi-probe` measured (docs/research/psi-spike.md,
-    /// ns a pixel at 128 lanes over the `gray(x)` baseline of 160): the
+    /// An estimate of a frame's time on the ESP32 in µs, as an effect or a
+    /// look draws it, from the per-step costs `psi-probe` measured on the
+    /// device (ns a pixel at 128 lanes; recalibrated 2026-10-26 for layers,
+    /// blends and coverage, tests/estimate.rs: within ~12 % of the VM's
+    /// frame for layers and looks, then +15 % for the real paths): the
     /// per-pixel steps are nearly all of it; a per-row step is counted at
-    /// 32 runs of ~0.3 µs. Good to ~±25 % on the measured sketches; the
-    /// web app's editor shows it as light / medium / heavy.
+    /// 32 runs of ~0.3 µs. The web app's editor shows it as light / medium /
+    /// heavy.
     pub fn esp32_us(&self) -> u32 {
         use code::*;
         let px: u32 = self.ops[self.row_end as usize..self.len()]
@@ -391,41 +403,62 @@ impl Program {
                 TRI | SAW | SQR => 60,
                 SQRT => 539,
                 SELECT | CLAMP => 60,
+                PICK => 100,
                 MIX => 130,
                 SMOOTH => 214,
                 NOISE => 855,
-                DIGIT..=DIGIT_B => 100,
-                U_R | U_G | U_B => 35,
-                U_L => 125,
+                DIGIT..=DIGIT_B => 240,
+                U_R | U_G | U_B => 70,
+                U_L => 140,
                 c if is_colour(c) => {
-                    // The bottom layer's write, as measured; a layer
-                    // blended on top: its colour into a row, then the blend
-                    // (host costs in adds, × 50 ns: docs/research/psi-layers.md).
-                    let (k, blend) = colour_parts(c);
-                    let base = match k {
-                        OUT_HSV => 195,
-                        OUT_RGB => 120,
+                    // Measured on the device (psi-probe, 2026-10-26): a
+                    // colour's write — a lane's `chan` per pixel, ~5 for one
+                    // value filled along the row — plus its kind, and for a
+                    // layer the blend loop: one per blend when it covers all,
+                    // a shared loop with the coverage (and the blend chosen
+                    // per channel) when it covers less.
+                    let (kind, blend) = colour_parts(c);
+                    let (v, n) = operands(op);
+                    let vals = arity(c);
+                    let lane = v[..vals.min(n)].iter().any(|&o| o & LANE != 0);
+                    let write = if lane { 120 } else { 5 };
+                    // (Of one value: worked out once, filled along the row.)
+                    let base = match kind {
+                        OUT_HSV if lane => 195,
+                        OUT_RGB if lane => 120,
                         _ => 0,
                     };
-                    let (v, n) = operands(op);
                     // Covered unless the coverage is a constant slot of 1 or
                     // more (a lane or an input never is one).
                     let k = v[n.saturating_sub(1)];
                     let konst = k & LANE == 0 && k >= S_FIRST_FREE && self.is_const_slot(k);
-                    let covered = n > 0 && !(konst && self.init[k as usize] >= ONE);
-                    base + match blend {
-                        None => 0,
-                        Some(crate::fixed::BLEND_MULTIPLY) => 210,
-                        Some(crate::fixed::BLEND_SCREEN) => 290,
-                        Some(_) => 150,
-                    } + if blend.is_some() && covered { 75 } else { 0 }
+                    let covered = n > vals && !(konst && self.init[k as usize] >= ONE);
+                    let mix = match (blend, covered) {
+                        (None, _) => 0,
+                        (Some(crate::fixed::BLEND_ADD), false) => 190,
+                        (Some(crate::fixed::BLEND_MULTIPLY), false) => 245,
+                        (Some(crate::fixed::BLEND_SCREEN), false) => 300,
+                        (Some(crate::fixed::BLEND_MAX | crate::fixed::BLEND_MIN), false) => 180,
+                        (Some(_), false) => 20,
+                        (Some(crate::fixed::BLEND_ADD), true) => 575,
+                        (Some(crate::fixed::BLEND_MULTIPLY), true) => 630,
+                        (Some(crate::fixed::BLEND_SCREEN), true) => 600,
+                        (Some(crate::fixed::BLEND_MAX | crate::fixed::BLEND_MIN), true) => 450,
+                        (Some(_), true) => 390,
+                    };
+                    write + base + mix
                 }
                 _ => 0,
             })
             .sum();
         let row = (self.row_end - self.frame_end) as u32;
-        let backdrop = if self.uses & BACKDROP != 0 { 50 } else { 0 };
-        ((160 + backdrop + px) * (W * H) as u32) / 1000 + row * 10
+        // The loop itself (a pixel's colour is counted above: `gray(x)` is
+        // 45 + 120, as measured); then what the real paths add to the VM's
+        // own frame — the effect's copy into the canvas, the look's rows
+        // over the picture, a flash cache shared with the decoder: +13-14 %
+        // on the device (plasma as an effect 8,217 against 7,254 µs; Plasma
+        // screened at 40 % as a look 8,552 against 7,474).
+        (((45 + px) * (W * H) as u32) / 1000 + row * 10) * 115 / 100
     }
 
     /// Reset a program in place to the empty one (all fields zero but the
@@ -476,6 +509,15 @@ impl Program {
                 .map(|&v| opnd(v))
                 .collect::<alloc::vec::Vec<_>>()
                 .join(", ");
+            // A pick's table: the slots it picks from.
+            let args = if op.code == code::PICK {
+                let t: alloc::vec::Vec<_> = (0..op.c as usize)
+                    .map(|j| opnd(self.init[(op.b as usize + j) & (MAX_SCALARS - 1)] as u8))
+                    .collect();
+                alloc::format!("{args}; {}", t.join(", "))
+            } else {
+                args
+            };
             let d = if code::is_colour(op.code) {
                 "out".into()
             } else {
@@ -501,6 +543,19 @@ impl Program {
             .iter()
             .any(|op| !code::is_colour(op.code) && op.d == v)
     }
+}
+
+/// `pick`'s choice for `k` from the `n` slots whose numbers are in the
+/// slots from `base` (0 where floor(k) is outside 0..n). Indices are masked
+/// into the slots, whatever the program.
+#[inline(always)]
+pub(crate) fn pick(sc: &[i32; MAX_SCALARS], base: u8, n: u8, k: i32) -> i32 {
+    let i = k >> 16;
+    if i < 0 || i >= n as i32 {
+        return 0;
+    }
+    let m = MAX_SCALARS - 1;
+    sc[sc[(base as usize + i as usize) & m] as usize & m]
 }
 
 /// The scalar evaluation of one arithmetic op: the per-frame and per-row

@@ -150,6 +150,18 @@ words (a single character in quotes, <code>'A'</code>, is a number too: its code
 <td><code>w</code>, <code>h</code></td>
 <td>128 and 32</td>
 </tr>
+<tr>
+<td><code>cx</code>, <code>cy</code></td>
+<td>where the pixel is from the middle, in panel heights: <code>cx</code> from −2 at the left edge to 2 at the right, <code>cy</code> from −0.5 at the bottom to 0.5 at the top</td>
+</tr>
+<tr>
+<td><code>r</code>, <code>angle</code></td>
+<td>how far the pixel is from the middle (round, though the panel is 4 times wider than tall: <code>r &lt; 0.4</code> is a disc), and its angle round the middle, in turns</td>
+</tr>
+<tr>
+<td><code>ty</code></td>
+<td>the pixel's row counted from the top, 0–31</td>
+</tr>
 </tbody>
 </table>
 <p><strong>Functions.</strong> Waves and angles are in <em>turns</em>, not degrees or radians:
@@ -222,6 +234,10 @@ words (a single character in quotes, <code>'A'</code>, is a number too: its code
 <td><code>bit(n, i)</code></td>
 <td>bit <code>i</code> of the whole number <code>n</code>, 1 or 0, for patterns of your own</td>
 </tr>
+<tr>
+<td><code>pick(k, a, b, …)</code></td>
+<td><code>a</code> when <code>k</code> is 0 (up to 1), <code>b</code> when it is 1, and so on; 0 below 0 or past the last</td>
+</tr>
 </tbody>
 </table>
 <p><strong>Digits and letters.</strong> <code>digit</code> and <code>glyph</code> read the panel's own font, the
@@ -230,9 +246,11 @@ one the clock and the title cards use: a character is 5 columns by 7 rows
 columns 0 to 3 and rows 0 to 5, the rest is the gap to the next one).
 Anything outside that, or a character the font hasn't, is 0, so a
 character drawn big is just its column and row worked out from the pixel:
-<code>digit(7, floor(px/4), floor((31 - py)/4))</code> draws a 7 four times the size
-in the top-left corner (rows count down from the top here, though <code>py</code>
-counts up). Add <code>small</code> for the smaller font, 4 by 6 (digits 3 by 5):
+<code>digit(7, floor(px/4), floor(ty/4))</code> draws a 7 four times the size in the
+top-left corner (rows count down from the top here, as <code>ty</code> does; <code>py</code>
+counts up). <code>pick</code> chooses which character goes where:
+<code>glyph(pick(floor(px/5), 'H', 'I'), px % 5, ty)</code> writes HI in the top
+left, and nothing after it. Add <code>small</code> for the smaller font, 4 by 6 (digits 3 by 5):
 <code>digit(n, col, row, small)</code>, or <code>bold</code> for chunky 3 by 5 digits (digits
 only): <code>digit(n, col, row, bold)</code>. <strong>Big clock</strong> is made this way, in
 <code>bold</code>.</p>
@@ -263,9 +281,21 @@ false), and <code>and</code>, <code>or</code>, <code>not</code>. There is no pow
 <td><code>gray(v)</code></td>
 <td>black to white</td>
 </tr>
+<tr>
+<td><code>#ff8800</code></td>
+<td>a colour by its red, green and blue, two hex digits each (<code>#f80</code> for short)</td>
+</tr>
 </tbody>
 </table>
 <p>A last line that is just a number is <code>gray</code> of it.</p>
+<p><strong>Colours by name.</strong> <code>#ff8800</code> is a colour, the way web pages write them.
+It can be the whole last line, and you can do sums with colours there:
+<code>#ff8800 * k</code> is that orange at brightness <code>k</code>, <code>mix(#102040, #ff8800, y)</code>
+goes from dark blue at the bottom to orange at the top, and
+<code>pick(k, #ff0000, #00ff00)</code> picks one. <code>rgb(#ff8800, k)</code> covers only <code>k</code>
+of the pixel. A colour can't be given a name of its own (<code>c = #ff8800</code> is
+an error): write it in the last line, where it is used. In the editor a
+colour is underlined in its own colour.</p>
 <p><strong>The loop and the frame.</strong> <code>loop N</code> on a line of its own sets how long
 the loop is, in seconds (8 if you leave it out). For a seamless loop,
 everything that moves should come back to where it started: use <code>t/N</code>,
@@ -296,12 +326,12 @@ than all, what is below shows through.</p>
 <pre><code>loop 16
 part bars {
   loop 4
-  bar = max(0, 1 - abs(y - 0.5 - 0.35*sin(t/4))*5)
-  rgb(bar, bar*0.6, bar*0.2)
+  bar = max(0, 1 - abs(cy - 0.35*sin(t/4))*5)
+  bar * #ff9933
 }
 part rings {
   loop 4
-  d = len((x - 0.5)*4, y - 0.5)
+  d = r
   pal(rainbow, frac(d*1.5 - t/2))
 }
 k = smoothstep(0.25, 0.75, sin(t/16)*0.5 + 0.5)
@@ -309,9 +339,9 @@ layer { bars }
 layer { rings(x, y, k) }
 </code></pre>
 <p>You don't have to type a part out: in the editor, write
-<code>use Rings as r</code> on a line of its own, with the name of one of your
+<code>use Rings as ring</code> on a line of its own, with the name of one of your
 formulas or an example, and when you move to another line the editor puts
-that formula in as <code>part r { … }</code>, ready to change. Everything you save or
+that formula in as <code>part ring { … }</code>, ready to change. Everything you save or
 share then has the whole of it, so it works anywhere: if a <code>use</code> line names
 a formula there isn't (or the formula you're editing), the editor says so
 and won't save or share until it's fixed.</p>
@@ -361,8 +391,7 @@ is under it at the pixel:</p>
 </table>
 <p>The bottom layer, and any colour that covers less than all of a pixel,
 let it show through. For example, a sepia tone:</p>
-<pre><code>l = ul
-rgb(l*1.1 + 0.08, l*0.92 + 0.04, l*0.65)
+<pre><code>rgb(ul*1.1 + 0.08, ul*0.92 + 0.04, ul*0.65)
 </code></pre>
 <p>or scanlines, which keep the GIF and darken every other row:</p>
 <pre><code>layer multiply { gray(py % 2 ? 1 : 0.55) }
@@ -380,13 +409,30 @@ under it: <code>ur</code>, <code>ug</code>, <code>ub</code> and <code>ul</code> 
   Press it again to take it off.</li>
 <li><strong>Use as the look</strong> keeps it over every GIF the panel plays, before the
   colour and the phosphor glow. Settings › Look shows which formula it is
-  (<strong>Formula over every GIF</strong>) and turns it off (<strong>None</strong>).</li>
+  (<strong>Formula over every GIF</strong>), changes it and turns it off (<strong>None</strong>).</li>
 </ul>
-<p>A formula that would hide the GIF entirely (it reads none of <code>ur</code>, <code>ug</code>,
-<code>ub</code>, <code>ul</code> and nothing shows through it), or that is too heavy to draw over
-GIFs (more than about 8 ms a frame on the panel), is refused with a
-sentence saying so; Settings only lists formulas that let the GIF show
-through. When the player is
+<p><strong>Any formula can be the look</strong>, not only the ones that draw over a GIF:
+Use as the look and Settings › Look both have a <strong>Blend</strong> and an
+<strong>Amount</strong>. The blend says how the formula goes onto the GIF — <strong>Over</strong>
+(it covers it), <strong>Screen</strong> (it lightens: the GIF's bright parts stay and
+the formula shows in its dark ones), <strong>Add</strong>, <strong>Multiply</strong> (it darkens and
+tints), <strong>Lighten</strong> or <strong>Darken</strong> (the brighter or darker of the two) — and
+the amount how much of it shows, 0 to 100 %. A formula that draws over a
+GIF already starts at Over, 100 %: exactly as before. One that covers the
+whole panel, like Plasma, starts at Screen, 40 % (or Over, 30 % when that
+is lighter for the panel), and the preview shows the choice as you move it.
+A formula with layers of its own goes Over only (its layers keep their own
+blends).</p>
+<p>Settings lists all your formulas and all the examples. Over at 100 % of a
+formula that covers the whole panel would hide the GIF, so it is refused
+with a sentence saying so (choose a lower amount or another blend), and a
+formula too heavy to draw over every GIF (more than about 12 ms a frame on
+the panel, the blend included) is listed as too heavy. Under the controls,
+Settings says how fast the look moves: about 50 times a second, or 25 for
+a heavy one (over 8 ms); the GIFs play at their own speed either way. Shared looks stand
+alone: the player is sent the formula with the blend written around it, so
+a look keeps working even after the formula is edited or deleted here.
+When the player is
 short of memory (several downloads at once, say) it shows the GIFs without
 the formula for a while.</p>
 <h2 id="keeping-them-fast">Keeping them fast<a class="headerlink" href="#keeping-them-fast" title="Permanent link">#</a></h2>
@@ -397,11 +443,15 @@ milliseconds); all the examples are light or medium.</p>
 <ul>
 <li>Cheap: <code>+ - *</code>, the waves (<code>sin</code>, <code>cos</code>, <code>tri</code>, <code>saw</code>, <code>sqr</code>), <code>abs</code>,
   <code>frac</code>, <code>min</code>, <code>max</code>, <code>clamp</code>, <code>step</code>, comparisons, <code>pal</code>, <code>digit</code>,
-  <code>glyph</code> and <code>bit</code>.</li>
+  <code>glyph</code>, <code>bit</code>, and <code>pick</code> of numbers, letters or values from
+  <code>frame { }</code> (one step, however many it picks from).</li>
 <li>Dividing by a fixed number (<code>x/8</code>) is free: it becomes a multiply.</li>
 <li>Dear: <code>noise</code>, <code>len</code>, <code>sqrt</code>, <code>atan2</code>, <code>smoothstep</code>, <code>hash</code>, and dividing
-  by something that changes from pixel to pixel. One of them is fine;
-  several add up.</li>
+  by something that changes from pixel to pixel (<code>r</code> is a <code>len</code>, <code>angle</code>
+  an <code>atan2</code>). One of them is fine; several add up.</li>
+<li>A sum with colours is worked out once for red, once for green, once
+  for blue: <code>#ff8800 * k</code> costs one multiply (a channel of <code>ff</code> is
+  free, of <code>00</code> nothing).</li>
 <li>Anything that doesn't depend on the pixel (<code>hour/12</code>, <code>sin(t/8)</code>) is
   worked out once a frame, whatever line it's on.</li>
 <li>Each layer costs about as much as a <code>smoothstep</code>; <code>screen</code> and colours
@@ -440,7 +490,7 @@ with the file ready and makes the pull request for you (you need a free
 GitHub account). A check says if anything needs fixing, a maintainer looks
 at it, and once it's merged it appears in the gallery within a few
 minutes. The gallery takes formulas that are light enough for the panel
-(at most 8 ms a frame: "light" or "medium" in the editor) and at most 4 KB.
+(at most 10 ms a frame as the editor estimates it) and at most 4 KB.
 The details are in the gallery's
 <a href="https://github.com/opendmd/opendmd.github.io/tree/main/gallery">README</a>.</p>
 <h2 id="saving-as-a-gif">Saving as a GIF<a class="headerlink" href="#saving-as-a-gif" title="Permanent link">#</a></h2>

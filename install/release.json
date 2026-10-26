@@ -1,14 +1,14 @@
 {
-  "version": "1.0.0-beta.10",
-  "firmware": "firmware/opendmd-1.0.0-beta.10-4mb.odfw",
+  "version": "1.0.0-beta.11",
+  "firmware": "firmware/opendmd-1.0.0-beta.11-4mb.odfw",
   "variants": {
     "4mb": {
-      "firmware": "firmware/opendmd-1.0.0-beta.10-4mb.odfw"
+      "firmware": "firmware/opendmd-1.0.0-beta.11-4mb.odfw"
     },
     "8mb": {
-      "firmware": "firmware/opendmd-1.0.0-beta.10-8mb.odfw"
+      "firmware": "firmware/opendmd-1.0.0-beta.11-8mb.odfw"
     }
   },
-  "www": "firmware/opendmd-1.0.0-beta.10-www.pack",
-  "www_version": "v1.0.0-beta.10"
+  "www": "firmware/opendmd-1.0.0-beta.11-www.pack",
+  "www_version": "v1.0.0-beta.11"
 }

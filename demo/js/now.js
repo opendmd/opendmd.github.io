@@ -34,6 +34,32 @@ function favButton() {
   return b;
 }
 
+// Edit, as the Library's: a GIF (its original) or an effect's loop in
+// Create Art, a Formula in its editor (the saved or example one, else the
+// panel's one-line text); [where, go], or null for what the panel draws.
+function editFor(p) {
+  const q = p?.startsWith('@fx:psi') && new URLSearchParams(p.slice(8));
+  if (q) return q.get('src') && ['Formulas', async () => {
+    const { fpath } = await import('./psishow.js');
+    const f = [...[store.get('psi.mine', [])].flat(), ...await fetch('formulas.json').then((r) => r.json(), () => [])].find((x) => typeof x?.src == 'string' && fpath({ src: x.src }) == p.split('&')[0]);
+    const l = new URLSearchParams({ formula: f?.src ?? q.get('src'), name: f?.name || 'Formula' });
+    for (const k of 'abc') if (q.has(k)) l.set(k, q.get(k));
+    location.hash = l;
+  }];
+  const fx = p?.startsWith('@fx:'), e = p && app.wasm.parsePath(p);
+  return (fx || p?.[0] == '/') && ['Create Art', () => { app.artFrom = fx ? { fx: p, title: label(e) } : { path: p, e }; app.go('create'); }];
+}
+function editLine() {
+  const b = h('button.sm', { id: 'now-edit', hidden: true }), why = h('span.muted', { id: 'now-live' }), el = h('div', { style: 'margin-top:8px' }, b, why);
+  el.set = (p, t) => {
+    const x = editFor(p);
+    b.hidden = !x;
+    if (x) [b.textContent, b.onclick] = ['✎ Edit in ' + x[0], x[1]];
+    why.textContent = !x && p ? t + ': drawn by the panel itself, not a GIF' : '';
+  };
+  return el;
+}
+
 // Recently played, newest first, `at` on screen; a tap plays one again.
 function recentCard(prev, pick, fb) {
   const list = h('div.list', { id: 'now-recent' });
@@ -43,7 +69,9 @@ function recentCard(prev, pick, fb) {
     prev.disabled = at + 1 >= paths.length;
     clear(list, paths.map((p, k) => {
       const e = app.wasm.parsePath(p);
+      const x = editFor(p);
       return h('div' + (k === at ? '.cur' : ''), { onclick: () => pick(p), 'data-path': p }, h('span.grow', label(e)), h('span.muted', tags(e)),
+        x && h('button.more', { title: 'Edit in ' + x[0], 'aria-label': 'Edit in ' + x[0], onclick: (ev) => { ev.stopPropagation(); x[1](); } }, '✎'),
         fb.ov.path && p[0] != '@' && moreButton(fb.ov, p));
     }));
   };
@@ -72,6 +100,7 @@ function mountDevice(el) {
   const againBtn = h('button', { id: 'now-again', onclick: () => pick(app.status?.now_playing?.path) }, 'Replay');
   const fb = favButton();
   const rc = recentCard(prevBtn, pick, fb);
+  const ed = editLine();
   const bright = brightSlider('now-bright', app.config?.brightness ?? 96);
   bright.ceil(app.config?.max_brightness);
   const conn = h('span.dot', { id: 'now-conn' });
@@ -85,7 +114,7 @@ function mountDevice(el) {
   el.append(
     banner,
     h('div.card', canvas, cap, sdLine,
-      h('div.nowt', h('div', title, ' ', fb, ' ', unfilter), h('div.muted', tagsEl, ' ', followEl), h('div.muted', ord, ' ', conn), meta),
+      h('div.nowt', h('div', title, ' ', fb, ' ', unfilter), h('div.muted', tagsEl, ' ', followEl), h('div.muted', ord, ' ', conn), meta, ed),
       h('div.transport', h('button.pri', { id: 'now-skip', onclick: skip }, 'Skip'), pauseBtn, prevBtn, againBtn),
       h('label', { style: 'margin-top:12px' }, 'Brightness', bright.el)),
     rc,
@@ -189,6 +218,7 @@ function mountDevice(el) {
     pauseBtn.textContent = s.paused ? 'Resume' : 'Pause';
     againBtn.disabled = !np.path;
     fb.set(np.path, s.manifest && app.activePath);
+    ed.set(np.path, title.textContent);
     const b = bannerFor(s, () => setTimeout(poll, 300));
     banner.hidden = !b;
     banner.dataset.mode = s.mode || 'normal';
@@ -254,6 +284,7 @@ function mountLocal(el) {
   const prevBtn = h('button', { id: 'now-prev', disabled: true, onclick: () => cur + 1 < hist.length && show(hist[++cur]) }, 'Previous');
   const fb = favButton();
   const rc = recentCard(prevBtn, (p) => show(p, 1), fb);
+  const ed = editLine();
   let list = [];
   let i = -1;
   // Recently played, by the device's rules (opendmd-core history.rs).
@@ -262,7 +293,7 @@ function mountLocal(el) {
 
   el.append(
     h('div.card', canvas,
-      h('div.row.capl', h('span.grow', title, ' ', fb, ' ', line), h('span.cap', 'One file in memory at a time, with the firmware’s 3–30 s dwell')),
+      h('div.row.capl', h('span.grow', title, ' ', fb, ' ', line), h('span.cap', 'One file in memory at a time, with the firmware’s 3–30 s dwell')), ed,
       h('div.row', { style: 'margin-top:12px' },
         h('label', 'Playlist', listSel), h('label', 'Platforms', plats), h('label', shuffle, 'Shuffle'), h('label', 'Seed', seed),
         h('button.pri', { id: 'sim-play', onclick: play }, 'Play'), prevBtn, pauseBtn, nextBtn)),
@@ -312,11 +343,13 @@ function mountLocal(el) {
     }
     fb.set(path, listSel.value);
     rc.set(hist, cur);
-    title.textContent = label(app.wasm.parsePath(path));
+    ed.set(path, title.textContent = label(app.wasm.parsePath(path)));
     await preview.show(path, (p) => app.previewBytes(p));
   }
 
-  if (app.demo) { listSel.value = '/filelist.txt'; play(); }
+  // The demo's player (js/demo.js) sets the playlist, the platforms and
+  // shuffle from its settings, and starts it.
+  if (app.demo) app.demo.drive({ listSel, plats, shuffle, play, preview });
   return { show() {}, hide() {} };
 }
 

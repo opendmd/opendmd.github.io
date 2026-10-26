@@ -30,7 +30,7 @@ fails unless every change:
   name and author that don't pass for OpenDMD or a maintainer (lookalike
   letters included);
 - compiles with OpenDMD's Psi compiler (the same crate the display runs) and
-  costs at most 8 ms a frame on the display (`Program::esp32_us`).
+  costs at most 10 ms a frame on the display (`Program::esp32_us`).
 
 It draws eight frames of each formula that passes into a PNG, kept as the
 run's `formula-previews` artifact (14 days) for the reviewer, and writes a

@@ -407,6 +407,17 @@ const PIECES: &[&str] = &[
     "'",
     "small",
     "normal",
+    "#f80",
+    "#ff8800",
+    "#",
+    "#12",
+    "pick(",
+    "cx",
+    "cy",
+    "r",
+    "angle",
+    "ty",
+    "r =",
 ];
 
 fn check(src: &str) {
@@ -542,6 +553,80 @@ fn random_formulas_render_or_refuse() {
         }
     }
     assert!(ok > 500, "only {ok} of 600 compiled");
+}
+
+/// The same for pick, the values about the middle and colours: random
+/// well-formed uses render the same at both lane widths, alone and over
+/// a picture, or are refused only for their size.
+#[test]
+fn random_picks_and_colours_render_or_refuse() {
+    let mut r = Rng(0x0dd_c010_75ee_d5ed);
+    let mut under = vec![0u8; W * H * 3];
+    picture(&mut under);
+    let leaf = |r: &mut Rng| {
+        [
+            "cx",
+            "cy",
+            "r",
+            "angle",
+            "ty",
+            "px/16",
+            "y*3",
+            "second % 5",
+            "v",
+        ][r.below(9)]
+        .to_string()
+    };
+    let hex = |r: &mut Rng| format!("#{:06x}", r.next() & 0xff_ffff);
+    let mut ok = 0;
+    for k in 0..400 {
+        let n = 1 + r.below(5);
+        let opts: Vec<String> = (0..n)
+            .map(|_| {
+                if r.below(3) == 0 {
+                    leaf(&mut r)
+                } else {
+                    expr(&mut r, 2)
+                }
+            })
+            .collect();
+        let pick = format!("pick({}, {})", leaf(&mut r), opts.join(", "));
+        let colour = match k % 4 {
+            0 => hex(&mut r),
+            1 => format!("mix({}, {}, {pick})", hex(&mut r), hex(&mut r)),
+            2 => format!(
+                "rgb(mix(rgb({pick}, {}, ur), {}, {}), {})",
+                leaf(&mut r),
+                hex(&mut r),
+                leaf(&mut r),
+                expr(&mut r, 2)
+            ),
+            _ => format!(
+                "layer multiply {{ mix(#fff, mix({}, rgb(v, {pick}, 0.5), cy*2 + 1), r) }}",
+                hex(&mut r)
+            ),
+        };
+        let src = format!("loop 4\nv = {}\nw2 = {pick}\n{colour}", expr(&mut r, 3));
+        match compile(&src) {
+            Ok(p) => {
+                ok += 1;
+                assert!(frame::<128>(&p, 777) == frame::<64>(&p, 777), "{src}");
+                assert!(
+                    frame_over::<128>(&p, 777, Some(&under))
+                        == frame_over::<64>(&p, 777, Some(&under)),
+                    "{src}"
+                );
+            }
+            Err(e) => assert!(
+                e.msg.contains("too long")
+                    || e.msg.contains("too many")
+                    || e.msg.contains("nested"),
+                "{src}\n{}",
+                e.render(&src)
+            ),
+        }
+    }
+    assert!(ok > 350, "only {ok} of 400 compiled");
 }
 
 #[test]

@@ -315,7 +315,7 @@ const ERRORS: &[(&str, &str, usize, usize)] = &[
     ),
     ("v = \ngray(x)", "a value is missing after `=`", 1, 3),
     ("gray(x) )", "expected the end of the line, found `)`", 1, 9),
-    ("gray(x # 2)", "I don't understand `#`", 1, 8),
+    ("gray(x @ 2)", "I don't understand `@`", 1, 8),
     ("gray(\"x\")", "there are no strings", 1, 6),
     ("pal(3, x)", "the first value of `pal` is a palette", 1, 5),
     (
@@ -367,7 +367,7 @@ const ERRORS: &[(&str, &str, usize, usize)] = &[
         "gray(((((((((((((((((((((((((((x)))))))))))))))))))))))))))",
         "nested too deeply",
         1,
-        30,
+        24,
     ),
 ];
 
@@ -494,7 +494,12 @@ fn worst_case_formulas() {
         assert!(
             matches!(
                 name,
-                "parts" | "nested" | "nested digit" | "parts in layers"
+                "parts"
+                    | "nested"
+                    | "nested digit"
+                    | "nested mix"
+                    | "nested pick"
+                    | "parts in layers"
             ) || (1900..=2048).contains(&n),
             "{name}: {n} B"
         );
@@ -956,11 +961,11 @@ fn parts_stay_within_the_limits() {
     assert!(e.msg.contains("parts go too deep"), "{}", e.msg);
     // Not as deep, but read again and again: bounded too.
     let mut s = String::from("part p0 { v = x\ngray(v) }\n");
-    for k in 1..5 {
+    for k in 1..4 {
         let j = k - 1;
-        s = alloc::format!("part p{k} {{\n{s}v = p{j}(x*0.5, y).v + p{j}(y, x).v + p{j}(x + 0.1, y).v + p{j}(x, y*2).v + p{j}(1 - x, y).v\ngray(v)\n}}\n");
+        s = alloc::format!("part p{k} {{\n{s}v = p{j}(x*0.5, y).v + p{j}(y, x).v + p{j}(x + 0.1, y).v + p{j}(x, y*2).v + p{j}(1 - x, y).v + p{j}(y, 1 - x).v + p{j}(x*2, y).v + p{j}(y*2, x).v\ngray(v)\n}}\n");
     }
-    s += "p4";
+    s += "p3";
     let e = compile(&s).unwrap_err();
     assert!(e.msg.contains("too many places"), "{}", e.msg);
 }
@@ -1107,4 +1112,256 @@ fn suggestions_measure_edits_and_swaps() {
     assert_eq!(d("kitten", "sitting"), 3);
     assert_eq!(d("ca", "abc"), 3);
     assert_eq!(d(&"a".repeat(24), &"b".repeat(24)), 24);
+}
+
+// --- Centred values, pick and colours (2026-10-26) --------------------------------
+
+/// `cx cy ty r angle` are the formulas they stand for, node for node (the
+/// same program), wherever the pixel is drawn; a name set with one of them
+/// is that name.
+#[test]
+fn centred_values_are_what_they_stand_for() {
+    let same = |a: &str, b: &str| {
+        let (p, q) = (compile(a), compile(b));
+        assert_eq!(p, q, "{a} vs {b}");
+    };
+    same("gray(cx)", "gray((x - 0.5)*4)");
+    same("gray(cy)", "gray(y - 0.5)");
+    same("gray(ty/31)", "gray((31 - py)/31)");
+    same("gray(r)", "gray(len((x - 0.5)*4, y - 0.5))");
+    same("gray(angle)", "gray(atan2(y - 0.5, (x - 0.5)*4))");
+    // Several: the same steps (maybe in another order), the same bytes.
+    let (a, b) = (
+        "part p { hsv(angle, 1, r + ty/31) }\np(1 - x, y*0.5)",
+        "part p { hsv(atan2(y - 0.5, (x - 0.5)*4), 1, len((x - 0.5)*4, y - 0.5) + (31 - py)/31) }\np(1 - x, y*0.5)",
+    );
+    assert_eq!(compile(a).unwrap().counts(), compile(b).unwrap().counts());
+    assert!(over(a, None, 0) == over(b, None, 0));
+    same(
+        "r = x\ncx = y\nty = 0.5\nangle = 1\ncy = 0\npick = 0.25\nrgb(r, cx, ty + angle + cy + pick)",
+        "rgb(x, y, 0.5 + 1 + 0 + 0.25)",
+    );
+    // A part called `pick` is still the part.
+    same(
+        "part pick { gray(x) }\npick(1 - x, y)",
+        "part q { gray(x) }\nq(1 - x, y)",
+    );
+}
+
+/// `pick(k, …)` against the chain of `?:` it replaces, byte for byte; one
+/// step a pixel when its choices are the same for every pixel.
+#[test]
+fn pick_is_the_chain_it_replaces() {
+    let cases = [
+        (
+            "k = floor(px/32)\nframe { hh = hour/24; m = minute/60 }\ngray(pick(k, 0.1, hh, m, 1))",
+            "k = floor(px/32)\nframe { hh = hour/24; m = minute/60 }\ngray(k < 0 ? 0 : k < 1 ? 0.1 : k < 2 ? hh : k < 3 ? m : k < 4 ? 1 : 0)",
+        ),
+        (
+            "gray(pick(x*6 - 1, 0.2, 0.4, 0.6, 0.8))",
+            "k = x*6 - 1\ngray(k < 0 ? 0 : k < 1 ? 0.2 : k < 2 ? 0.4 : k < 3 ? 0.6 : k < 4 ? 0.8 : 0)",
+        ),
+        (
+            "gray(pick(px/32, x, y, 1 - x))",
+            "k = px/32\ngray(k < 0 ? 0 : k < 1 ? x : k < 2 ? y : k < 3 ? 1 - x : 0)",
+        ),
+        (
+            "gray(pick(py/8 - 0.5, 0.25, y, 0.75) + x*0.1)",
+            "k = py/8 - 0.5\ngray((k < 0 ? 0 : k < 1 ? 0.25 : k < 2 ? y : k < 3 ? 0.75 : 0) + x*0.1)",
+        ),
+        (
+            "frame { s = second % 4 }\ngray(pick(s, 0.25, 0.5, 0.75, 1) * x)",
+            "frame { s = second % 4 }\ngray((s < 1 ? 0.25 : s < 2 ? 0.5 : s < 3 ? 0.75 : 1) * x)",
+        ),
+        (
+            "u = px - 39; v = 22 - py\nch = pick(floor(u/10), 'H', 'E', 'L', 'L', 'O')\ngray(glyph(ch, floor(u/2) % 5, floor(v/2)))",
+            "u = px - 39; v = 22 - py\ncell = floor(u/10)\nch = cell < 0 ? 0 : cell < 1 ? 'H' : cell < 2 ? 'E' : cell < 4 ? 'L' : cell < 5 ? 'O' : 0\ngray(glyph(ch, floor(u/2) % 5, floor(v/2)))",
+        ),
+    ];
+    for (a, b) in cases {
+        for ms in [0, 1500] {
+            assert!(over(a, None, ms) == over(b, None, ms), "{a}\nvs\n{b}");
+        }
+    }
+    // One pick step a pixel where the chain took ten.
+    let px = |s: &str| compile(s).unwrap().counts().2;
+    assert_eq!(px(cases[0].0) + 9, px(cases[0].1));
+    assert_eq!(px(cases[5].0) + 9, px(cases[5].1));
+    // In a colour expression (read three times) a pick is one step.
+    assert_eq!(
+        px("#f80 * pick(px/32, 0.5, 1)"),
+        4,
+        "{}",
+        compile("#f80 * pick(px/32, 0.5, 1)").unwrap().listing()
+    );
+    // Picks of the same choices share their table, and the listing shows it.
+    let q =
+        compile("u = px/32\nrgb(pick(u, 0.1, 0.2), pick(u + 1, 0.1, 0.2), pick(u + 2, 0.1, 0.2))")
+            .unwrap();
+    assert_eq!(
+        q.values(),
+        compile("u = px/32\nrgb(pick(u, 0.1, 0.2), 1, 2)")
+            .unwrap()
+            .values()
+    );
+    assert!(q.listing().contains("= pick(L"), "{}", q.listing());
+    assert!(q.listing().contains("; 0.1"), "{}", q.listing());
+    // A constant k is its choice; outside, 0.
+    let p = |s: &str| compile(s).unwrap();
+    assert_eq!(p("gray(pick(2.5, x, y, 0.5))"), p("gray(0.5)"));
+    assert_eq!(p("gray(pick(3, x, y, 0.5))"), p("gray(0)"));
+    assert_eq!(p("gray(pick(-0.5, x, y))"), p("gray(0)"));
+    // Sliders read through a pick still get their sliders.
+    assert_eq!(p("gray(pick(px/64, a, c))").sliders(), 0b101);
+}
+
+/// A colour expression is read once a channel: `#f80` is that channel's
+/// value (a byte `b` is `b/255` exactly: `rgb` gives the byte back),
+/// `rgb(r, g, b)` that value, the rest is arithmetic as usual.
+#[test]
+fn colours_are_their_channels() {
+    let px = over("rgb(#ff8001)", None, 0);
+    assert!(px.chunks(3).all(|c| c == [255, 128, 1]));
+    let p = |s: &str| compile(s).unwrap_or_else(|e| panic!("{s}: {}", e.render(s)));
+    assert_eq!(p("#f80"), p("rgb(#ff8800)"));
+    assert_eq!(p("#F80"), p("#ff8800"));
+    assert_eq!(p("#ff9933 * x"), p("rgb(1 * x, 0.6 * x, 0.2 * x)"));
+    for (a, b) in [
+        (
+            "mix(#336699, #fff, x)",
+            "rgb(mix(0.2, 1, x), mix(0.4, 1, x), mix(0.6, 1, x))",
+        ),
+        (
+            "mix(rgb(x, y, 0), mix(#000, #fff, y), 0.5)",
+            "rgb(mix(x, mix(0, 1, y), 0.5), mix(y, mix(0, 1, y), 0.5), mix(0, mix(0, 1, y), 0.5))",
+        ),
+        (
+            "pick(px/32, #f00, #0f0, #00f) * (y > 0.5 ? #fff : #888)",
+            "k = px/32\nm = y > 0.5 ? 1 : 0.533333\nrgb(pick(k, 1, 0, 0)*m, pick(k, 0, 1, 0)*m, pick(k, 0, 0, 1)*m)",
+        ),
+    ] {
+        assert!(over(a, None, 0) == over(b, None, 0), "{a} vs {b}");
+        assert_eq!(p(a).counts(), p(b).counts(), "{a} vs {b}");
+    }
+    // With coverage, over a picture: the same bytes as the decimals that
+    // round to the same bytes.
+    let u = pic();
+    assert_eq!(
+        over("layer { rgb(#ffbf4d, x) }", Some(&u), 0),
+        over("layer { rgb(1, 0.75, 0.3, x) }", Some(&u), 0)
+    );
+    // Anywhere a colour line goes: a layer, a part, a part drawn elsewhere.
+    for s in [
+        "layer { #102040 }\nlayer multiply { mix(#fff, #000, x) }",
+        "part p { mix(#000, #fff, x) }\np(1 - x, y)",
+        "-- #nope\nloop 4\nk = sin(t/4)\nrgb(mix(#f00, #00f, k*0.5 + 0.5), 0.5)",
+    ] {
+        p(s);
+    }
+    assert!(p("mix(rgb(ur, ug, ub), #b08040, a)").over());
+    // rgb(r, g, b) in a sum is a colour; rgb(colour) inside is that colour.
+    assert!(over("rgb(x, y, 0.5) * 0.5", None, 0) == over("rgb(x*0.5, y*0.5, 0.25)", None, 0));
+    assert!(over("mix(rgb(#f80), #000, x)", None, 0) == over("mix(#f80, #000, x)", None, 0));
+    // Old photo's form keeps its registers: each channel reads only its value.
+    assert_eq!(
+        p("mix(rgb(ur, ug, ub), rgb(ul*1.1 + 0.08, ul*0.92 + 0.04, ul*0.65), a)").regs(),
+        p("rgb(mix(ur, ul*1.1 + 0.08, a), mix(ug, ul*0.92 + 0.04, a), mix(ub, ul*0.65, a))").regs()
+    );
+}
+
+/// The new forms' mistakes, in plain words, where they are.
+#[test]
+fn colour_and_pick_errors() {
+    for (src, want, line, col) in [
+        ("gray(#ff88)", "a colour is # and 3 or 6 hex digits", 1, 6),
+        ("gray(#ggg)", "a colour is # and 3 or 6 hex digits", 1, 6),
+        ("gray(x # 2)", "a colour is # and 3 or 6 hex digits", 1, 8),
+        ("gray(#fff)", "a colour can't be a value", 1, 6),
+        ("hsv(#f00)", "a colour can't be a value", 1, 5),
+        (
+            "v = mix(#000, #fff, x)\ngray(v)",
+            "a colour can't be a value",
+            1,
+            9,
+        ),
+        ("mix(#000, #fff)", "`mix` takes 3 values, but got 2", 1, 1),
+        (
+            "rgb(1, #fff, 0)",
+            "inside `rgb(r, g, b)` the three are values",
+            1,
+            8,
+        ),
+        (
+            "mix(rgb(1, #fff, 0), #000, x)",
+            "inside `rgb(r, g, b)` the three are values",
+            1,
+            12,
+        ),
+        (
+            "mix(rgb(#f80, 0.5), #000, x)",
+            "how much a colour covers goes on the whole line",
+            1,
+            13,
+        ),
+        (
+            "mix(hsv(x, 1, 1), #000, x)",
+            "in a sum with colours only `#…` and `rgb(r, g, b)` are colours",
+            1,
+            5,
+        ),
+        ("pal(fire, x) * #fff", "`pal(…)` can't go into a sum", 1, 14),
+        ("gray(x) * #fff", "`gray(…)` can't go into a sum", 1, 9),
+        (
+            "x + 1 * rgb(1, 2)",
+            "`,` (`rgb(r, g, b)` takes three values)",
+            1,
+            17,
+        ),
+        (
+            "x + 1\ngray(#fff)",
+            "only the last line can be a bare value",
+            1,
+            1,
+        ),
+        (
+            "rgb(#f00, 1, 2)",
+            "`rgb` of a colour takes the colour and",
+            1,
+            12,
+        ),
+        ("rgb(#f00, x\ngray(x)", "this `(` is never closed", 1, 4),
+        ("#f80\ngray(x)", "the colour has to be the last line", 1, 1),
+        (
+            "layer { #f80 }\n#000",
+            "with layers, every colour goes inside one",
+            2,
+            1,
+        ),
+        (
+            "gray(pick(x))",
+            "`pick` takes a number, then the values to pick from",
+            1,
+            6,
+        ),
+        ("gray(pick(x, 1, tme))", "unknown name `tme`", 1, 17),
+        ("gray(pick)", "`pick` is a function", 1, 6),
+        ("gray(cx(1))", "`cx` is a value, not a function", 1, 6),
+        (
+            "gray(angel)",
+            "unknown name `angel` — did you mean `angle`?",
+            1,
+            6,
+        ),
+    ] {
+        match compile(src) {
+            Ok(_) => panic!("{src:?}: compiled"),
+            Err(e) => assert!(
+                e.msg.contains(want) && e.line_col(src) == (line, col),
+                "{src:?}: got {:?} at {:?}\n{}",
+                e.msg,
+                e.line_col(src),
+                e.render(src)
+            ),
+        }
+    }
 }
