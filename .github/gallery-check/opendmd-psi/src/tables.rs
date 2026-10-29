@@ -5,7 +5,7 @@
 //! eval), so on the device they are in DROM like `opendmd_core::fx`'s.
 
 /// What a frame reads besides the program: the Q14 sine (256 entries, a
-/// turn), the five 32-entry palettes, in `opendmd_core::fx::Palette`
+/// turn), the five 32-entry palettes, in `opendmd_core::fx::PALETTES`
 /// order (fire, ice, chrono, amber, rainbow), and the panel's fonts
 /// (`digit`, `glyph`): `opendmd_core::text`'s misc-fixed 4x6 (`small`) and
 /// 5x7 (`normal`), printable ASCII 32..=126, and the bold 3 × 5 digits
@@ -240,6 +240,7 @@ const fn atan01(t: f64) -> f64 {
 
 /// `atan(i / 256)` in turns, Q16 (0..8,192 = an eighth of a turn), 257
 /// entries so the last interpolates: 514 B.
+#[cfg_attr(target_os = "espidf", link_section = ".dram1.psi")]
 pub static ATAN: [u16; 257] = {
     let mut t = [0u16; 257];
     let mut i = 0;
@@ -253,6 +254,7 @@ pub static ATAN: [u16; 257] = {
 /// `√(i · 2^22)` for i in 64..=256 (index i − 64): the square root of a
 /// value normalised to 2^28..2^30 by its top byte, interpolated by
 /// `fixed::sqrt30` (≈ 15 significant bits). 386 B.
+#[cfg_attr(target_os = "espidf", link_section = ".dram1.psi")]
 pub static SQRT: [u16; 193] = {
     let mut t = [0u16; 193];
     let mut i = 0;

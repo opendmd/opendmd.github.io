@@ -1,4 +1,0 @@
-/gifs/Kenney/OTHER_Pixel_Platformer_Walk_01_kenney.gif
-/gifs/Kenney/OTHER_Pixel_Platformer_Pan_01_kenney.gif
-/gifs/Kenney/OTHER_Pixel_Platformer_Scroll_01_kenney.gif
-@clock?style=small&seconds=1

@@ -10,16 +10,19 @@
 //! Options: `--out FILE.png` (default: the formula's name with .png, or
 //! `formula.png` from stdin; `--out -` for none), `--frames N` (8, spread
 //! over one loop; a still formula gets 1), `--ms 0,250,…` (exact times
-//! instead), `--scale K` (4), `--a`/`--b`/`--c V` (the sliders, 0 to 1;
-//! default 0.5), `--clock HH:MM:SS` (10:09:30), `--over` (draw over the
+//! instead), `--scale K` (4), `--a`/`--b`/`--c V` (the sliders; default a
+//! `control` line's default, 0.5 for one read without), `--clock HH:MM:SS` (10:09:30), `--over` (draw over the
 //! sample picture even if the formula doesn't read it; it is used anyway
 //! whenever it does), `--hash` (each frame's FNV-1a, as the golden tests
-//! print them), `--listing` (the compiled steps). Exit status 1 when it
-//! doesn't compile.
+//! print them), `--listing` (the compiled steps), `--seed V` (a `loop
+//! forever` formula's `seed`, 0 to 1; default 0). A formula that never
+//! repeats (`loop forever`) gets its frames over its first minute. Exit
+//! status 1 when it doesn't compile.
 
 use opendmd_psi::golden::fnv;
 use opendmd_psi::{
-    compile, q16, render_rows, Inputs, Scratch, H, MAX_OPS, MAX_SCALARS, OWN, REGS, W,
+    compile, q16, render_rows_ink, render_rows_still, Ink, Inputs, Scratch, Still, H, MAX_OPS,
+    MAX_SCALARS, OWN, REGS, W,
 };
 use std::io::Read;
 
@@ -28,7 +31,8 @@ fn main() {
     let (mut path, mut out, mut frames, mut scale) =
         (None::<String>, None::<String>, 8usize, 4usize);
     let (mut ms_list, mut over, mut hash, mut listing) = (None::<Vec<u32>>, false, false, false);
-    let mut sl = [0.5f64; 3];
+    let mut sl: [Option<f64>; 3] = [None; 3];
+    let mut seed = 0f64;
     let mut clock = (10u8, 9u8, 30u8);
     let num = |v: Option<String>, what: &str| -> f64 {
         v.and_then(|s| s.parse().ok())
@@ -39,9 +43,10 @@ fn main() {
             "--out" => out = args.next(),
             "--frames" => frames = num(args.next(), "--frames").max(1.0) as usize,
             "--scale" => scale = num(args.next(), "--scale").clamp(1.0, 16.0) as usize,
-            "--a" => sl[0] = num(args.next(), "--a"),
-            "--b" => sl[1] = num(args.next(), "--b"),
-            "--c" => sl[2] = num(args.next(), "--c"),
+            "--a" => sl[0] = Some(num(args.next(), "--a")),
+            "--b" => sl[1] = Some(num(args.next(), "--b")),
+            "--c" => sl[2] = Some(num(args.next(), "--c")),
+            "--seed" => seed = num(args.next(), "--seed"),
             "--ms" => {
                 let v = args.next().unwrap_or_default();
                 ms_list = Some(
@@ -66,7 +71,7 @@ fn main() {
             "--hash" => hash = true,
             "--listing" => listing = true,
             "-h" | "--help" => {
-                println!("psi-check FILE.psi|- [--out FILE.png|-] [--frames N] [--ms 0,250,…] [--scale K] [--a V] [--b V] [--c V] [--clock HH:MM:SS] [--over] [--hash] [--listing]");
+                println!("psi-check FILE.psi|- [--out FILE.png|-] [--frames N] [--ms 0,250,…] [--scale K] [--a V] [--b V] [--c V] [--clock HH:MM:SS] [--over] [--hash] [--listing] [--seed V]");
                 return;
             }
             _ if path.is_none() => path = Some(a),
@@ -99,7 +104,9 @@ fn main() {
     // What it is.
     let (f, r, x) = prog.counts();
     let inputs = prog.inputs();
-    let us = prog.esp32_us();
+    let plain_us = prog.esp32_us();
+    // As the player draws it: with its still cache when it has values for one.
+    let us = prog.esp32_us_still();
     let rating = match us {
         0..=5000 => "light",
         5001..=8000 => "medium",
@@ -112,6 +119,7 @@ fn main() {
         (8, "t"),
         (16, "the clock"),
         (32, "the picture under it"),
+        (64, "seed"),
     ]
     .iter()
     .filter(|e| inputs & e.0 != 0)
@@ -119,15 +127,66 @@ fn main() {
     .collect();
     println!(
         "ok: {} of {MAX_OPS} steps (per frame {f}, per row {r}, per pixel {x}), {} layer{}, {} of {REGS} registers, {} of {MAX_SCALARS} values",
-        prog.len(),
+        prog.steps(),
         prog.layers(),
         if prog.layers() == 1 { "" } else { "s" },
         prog.regs(),
         prog.values()
     );
+    // What it declares (`name`, `control`, `look`).
+    let mut p2 = Box::<opendmd_psi::Program>::default();
+    if let Ok(d) = opendmd_psi::compile_declared(&src, &mut p2) {
+        let text = |r: (u32, u32)| &src[r.0 as usize..r.1 as usize];
+        let mut parts = Vec::new();
+        if let Some(n) = d.name {
+            parts.push(format!("name: {}", text(n)));
+        }
+        let ctl: Vec<String> = (0..3)
+            .filter_map(|k| {
+                let c = d.controls[k]?;
+                let label = c.label.map(|l| format!(" \"{}\"", text(l))).unwrap_or_default();
+                Some(match prog.meta().control(k)? {
+                    opendmd_psi::Control::Choice { .. } => format!(
+                        "{} ({}){label}",
+                        text(c.name),
+                        text(c.words?).split(',').map(str::trim).collect::<Vec<_>>().join("|")
+                    ),
+                    opendmd_psi::Control::Slider { lo, hi, default } => format!(
+                        "{} {}..{} = {}{label}",
+                        text(c.name),
+                        f64::from(lo) / 65536.0,
+                        f64::from(hi) / 65536.0,
+                        f64::from(default) / 65536.0
+                    ),
+                })
+            })
+            .collect();
+        if !ctl.is_empty() {
+            parts.push(format!("controls: {}", ctl.join(", ")));
+        }
+        if let Some((b, k)) = prog.meta().look() {
+            parts.push(format!("look: {b} {k}"));
+        }
+        if !parts.is_empty() {
+            println!("{}", parts.join(" · "));
+        }
+    }
+    if prog.draws() {
+        println!(
+            "draws: {} steps in draw {{ }}, {} lines and dots a frame",
+            prog.draw_steps(),
+            prog.primitives()
+        );
+    }
+    let grid = prog.frame_ms().unwrap_or(20);
+    let lp = if prog.forever() {
+        "never repeats (loop forever)".to_string()
+    } else {
+        format!("loop {} s", prog.loop_ms() as f64 / 1000.0)
+    };
     println!(
-        "loop {} s; reads {}",
-        prog.loop_ms() as f64 / 1000.0,
+        "{lp} at {} fps; reads {}",
+        1000 / grid,
         if reads.is_empty() {
             "nothing (a still picture)".into()
         } else {
@@ -138,6 +197,18 @@ fn main() {
         "panel: ~{:.1} ms a frame: {rating} (light ≤ 5 ms, medium ≤ 8 ms; GIF looks take ≤ 12 ms)",
         us as f64 / 1000.0
     );
+    if prog.still_lanes() > 0 {
+        println!(
+            "still cache: {} value{} worked out once ({} KB of the player's heap); ~{:.1} ms a frame without it",
+            prog.still_lanes(),
+            if prog.still_lanes() == 1 { "" } else { "s" },
+            Still::bytes_for(&prog) / 1024,
+            plain_us as f64 / 1000.0
+        );
+    }
+    if grid == 10 && us > 5000 {
+        println!("fps 100: over its 5 ms budget, so the panel plays it at 50 fps or fewer");
+    }
     if listing {
         print!("{}", prog.listing());
     }
@@ -149,8 +220,14 @@ fn main() {
         Some(v) => v.into_iter().map(|ms| (ms, clock)).collect(),
         None if moves => (0..frames)
             .map(|k| {
-                // Whole 20 ms frames, as the panel plays them.
-                let ms = (prog.loop_ms() as u64 * k as u64 / frames as u64) as u32 / 20 * 20;
+                // Whole frames of its grid, as the panel plays them (one
+                // that never repeats: over its first minute).
+                let lp = if prog.forever() {
+                    60_000
+                } else {
+                    prog.loop_ms()
+                };
+                let ms = (lp as u64 * k as u64 / frames as u64) as u32 / grid * grid;
                 (ms, clock)
             })
             .collect(),
@@ -165,27 +242,60 @@ fn main() {
     };
     let under = (over || prog.over()).then(sample);
     let mut scratch = Scratch::<128>::new();
+    let mut ink = Ink::boxed();
+    let mut still = Still::new();
+    still.take(&prog);
     let mut shots = Vec::new();
+    // A slider not given: its control's default, else ½.
+    let slider = |k: usize| match sl[k] {
+        Some(v) => q(v),
+        None if prog.meta().declared() & (1 << k) != 0 => prog.meta().default_value(k),
+        None => q(0.5),
+    };
     for &(ms, (hh, mm, ss)) in &times {
-        let inp = Inputs {
-            t: Inputs::at_ms(ms),
+        let mut inp = Inputs {
             hour: hh,
             minute: mm,
             second: ss,
-            a: q(sl[0]),
-            b: q(sl[1]),
-            c: q(sl[2]),
+            a: slider(0),
+            b: slider(1),
+            c: slider(2),
+            seed: q(seed),
+            ..Inputs::default()
         };
+        inp.set_ms(&prog, u64::from(ms));
         let mut frame = vec![0u8; W * H * 3];
-        render_rows(
+        render_rows_ink(
             &prog,
             &mut scratch,
+            Some(&mut ink),
             &inp,
             &OWN,
             under.as_deref(),
             u32::MAX,
             &mut frame,
         );
+        if still.is_held() {
+            // The still cache keeps its values on the first frame and draws
+            // from them after: the same bytes either way.
+            let mut cached = vec![0u8; W * H * 3];
+            for _ in 0..2 {
+                render_rows_still(
+                    &prog,
+                    &mut scratch,
+                    Some(&mut ink),
+                    Some(&mut still),
+                    &inp,
+                    &OWN,
+                    under.as_deref(),
+                    u32::MAX,
+                    &mut cached,
+                );
+                if cached != frame {
+                    die("the still cache drew different bytes (a bug in Psi)");
+                }
+            }
+        }
         shots.push(frame);
     }
     let label: Vec<String> = times

@@ -20,6 +20,19 @@ default = ["tables"]
 # the device carries one copy; the standalone tests, the bench and the wasm
 # parity test use these.
 tables = []
+# psi-probe's counters (`vm::stats`): frames narrowed or checked, and
+# where their memory was.
+stats = []
+# The editor's cheat-sheet rows in `builtins::cheat` (tests and tools; the
+# firmware never links them).
+docs = []
+# The language-service hook (`syntax`: the lexer's tokens and a `Sink` the
+# compiler tells what it saw). Off in the firmware: the calls are compiled out.
+syntax = []
+# The narrow JIT (`jit`): Psi's pixel stage as Xtensa code in executable
+# heap, the VM for the rest. Compiled only for the ESP32 (xtensa, espidf);
+# its encoders are tested on the host against the GNU assembler.
+jit = []
 
 [[test]]
 name = "golden"
@@ -32,6 +45,14 @@ required-features = ["tables"]
 [[test]]
 name = "look"
 required-features = ["tables"]
+
+[[test]]
+name = "builtins"
+required-features = ["docs"]
+
+[[test]]
+name = "syntax"
+required-features = ["syntax"]
 
 [[test]]
 name = "models"

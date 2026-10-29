@@ -1,6 +1,6 @@
-# The formula gallery's check, on every pull request to the public site
+# The formula gallery's check, on every pull request to the public gallery
 # repo (opendmd/opendmd.github.io). Installed by OpenDMD's
-# tools/site-publish.sh from site/public-repo/ in the main repository: edit
+# tools/gallery-repo-publish.sh from site/public-repo/ in the main repository: edit
 # it there; a change made here is replaced at the next publish. The threat
 # model is in .github/gallery-check/README.md.
 #

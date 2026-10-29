@@ -396,7 +396,7 @@ fn pr(o: &Opts) -> ExitCode {
                     md(&e.name),
                     md(&e.author),
                     md(&e.licence),
-                    md(&e.description),
+                    md(&e.about),
                     e.steps,
                     e.us as f64 / 1000.0
                 )),

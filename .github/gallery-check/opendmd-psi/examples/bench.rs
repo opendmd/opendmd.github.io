@@ -9,14 +9,15 @@
 //! A formula that reads what is under it is drawn over `golden::picture`.
 
 use opendmd_psi::{
-    compile, compile_into, golden, render_rows, sketches, worst, Inputs, Program, Scratch, H, OWN,
-    W,
+    compile, compile_into, golden, render_rows_ink, sketches, worst, Inputs, Program, Scratch, H,
+    OWN, W,
 };
 use std::hint::black_box;
 use std::time::Instant;
 
 fn bench<const N: usize>(p: &Program, frames: u32) -> (f64, f64) {
     let mut s = Scratch::<N>::new();
+    let mut ink = opendmd_psi::Ink::boxed();
     let mut out = vec![0u8; W * H * 3];
     let mut under = vec![0u8; W * H * 3];
     golden::picture(&mut under);
@@ -32,9 +33,10 @@ fn bench<const N: usize>(p: &Program, frames: u32) -> (f64, f64) {
             ..Default::default()
         };
         let t0 = Instant::now();
-        render_rows::<N>(
+        render_rows_ink::<N>(
             black_box(p),
             &mut s,
+            Some(&mut ink),
             &inputs,
             &OWN,
             under,
@@ -110,7 +112,16 @@ fn main() {
                 let mut under = vec![0u8; W * H * 3];
                 golden::picture(&mut under);
                 let u = p.over().then_some(under.as_slice());
-                render_rows::<128>(&p, &mut s, &inputs, &OWN, u, u32::MAX, &mut out);
+                render_rows_ink::<128>(
+                    &p,
+                    &mut s,
+                    Some(&mut opendmd_psi::Ink::boxed()),
+                    &inputs,
+                    &OWN,
+                    u,
+                    u32::MAX,
+                    &mut out,
+                );
                 let mut f = format!("P6\n{W} {H}\n255\n").into_bytes();
                 f.extend_from_slice(&out);
                 let base = std::path::Path::new(&name)

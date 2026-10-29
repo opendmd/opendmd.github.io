@@ -1,10 +1,10 @@
-# The public site repo's code owners. Installed by OpenDMD's
-# tools/site-publish.sh from site/public-repo/.github/: edit it there.
+# The public gallery repo's code owners. Installed by OpenDMD's
+# tools/gallery-repo-publish.sh from site/public-repo/.github/: edit it there.
 #
 # Everything, gallery/ included, needs a maintainer's review: the ruleset on
 # main requires Code Owners review, so no collaborator with write access
-# can approve a contribution (or a change to .github/) alone. The site
-# itself is only ever changed by the publish (its deploy key bypasses the
+# can approve a contribution (or a change to .github/) alone. The rest of
+# the repo is only ever changed by the publish (its deploy key bypasses the
 # ruleset), never by a pull request.
 #
 # BEFORE SWITCHING ON: make sure these are the maintainers' GitHub handles

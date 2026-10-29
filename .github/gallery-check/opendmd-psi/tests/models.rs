@@ -6,7 +6,7 @@
 //! change: `PSI_BLESS=1 cargo test --test models` rewrites the goldens.
 
 use opendmd_psi::golden::{fnv, inputs, picture};
-use opendmd_psi::{compile, render_rows, Scratch, H, OWN, W};
+use opendmd_psi::{compile, render_rows_ink, Scratch, H, OWN, W};
 
 const DOC: &str = include_str!("../../docs/psi-for-models.md");
 const GOLDEN: &str = "tests/models.golden";
@@ -41,20 +41,32 @@ fn blocks() -> Vec<(String, String, usize)> {
 /// when it draws over what is under it.
 fn frames(slug: &str, src: &str) -> Vec<(u32, u64)> {
     let p = compile(src).unwrap_or_else(|e| panic!("example {slug}: {}", e.render(src)));
+    // (As an effect plays it: with its still cache, when it has one.)
     assert!(
-        p.esp32_us() <= 10_000,
+        p.esp32_us_still() <= 10_000,
         "example {slug}: ~{} µs a frame on the panel (keep examples ≤ 10 ms: heavier than 8 plays at 25 frames a second)",
-        p.esp32_us()
+        p.esp32_us_still()
     );
     let mut under = vec![0u8; W * H * 3];
     picture(&mut under);
     let mut s = Scratch::<128>::new();
-    [0, p.loop_ms() * 37 / 100 / 20 * 20]
+    // (One that goes on without repeating: 37 % into its first minute.)
+    let lp = if p.forever() { 60_000 } else { p.loop_ms() };
+    [0, lp * 37 / 100 / 20 * 20]
         .into_iter()
         .map(|ms| {
             let mut out = vec![0u8; W * H * 3];
             let u = p.over().then_some(&under[..]);
-            render_rows(&p, &mut s, &inputs(ms), &OWN, u, u32::MAX, &mut out);
+            render_rows_ink(
+                &p,
+                &mut s,
+                Some(&mut opendmd_psi::Ink::boxed()),
+                &inputs(ms),
+                &OWN,
+                u,
+                u32::MAX,
+                &mut out,
+            );
             (ms, fnv(&out))
         })
         .collect()
@@ -90,7 +102,7 @@ fn the_reference_matches_the_language() {
         }
     }
     assert!(
-        (20..=30).contains(&examples.len()),
+        (20..=40).contains(&examples.len()),
         "{} worked examples",
         examples.len()
     );
@@ -133,6 +145,8 @@ fn the_reference_names_every_built_in() {
         "x", "y", "px", "py", "i", "t", "hour", "minute", "second", "a", "b", "c", "w", "h", "ur",
         "ug", "ub", "ul", "cx", "cy", "r", "angle", "ty",
     ];
+    assert!(DOC.contains("`seed`") && DOC.contains("`loop forever`"));
+    compile("loop forever\ngray(frac(t + seed))").unwrap();
     let funcs = [
         ("sin", 1),
         ("cos", 1),
@@ -185,11 +199,55 @@ fn the_reference_names_every_built_in() {
 /// row's nanoseconds, a pixel, are what one more such step adds to it.
 #[test]
 fn the_cost_table_is_the_estimates() {
-    let us = |src: &str| {
-        compile(src)
-            .unwrap_or_else(|e| panic!("{src}: {}", e.msg))
-            .esp32_us() as i64
+    // (Per step, as the table is: without the column run and the still
+    // cache, which the reference describes after it.)
+    // The checked steps' rows without the narrowed steps (`+` of values
+    // whose sum can't overflow is the cheaper row); those rows with them.
+    let plain = |src: &str, narrow: bool| {
+        let mut p = opendmd_psi::Program::default();
+        opendmd_psi::compile_with(src, &mut p, false, narrow)
+            .unwrap_or_else(|e| panic!("{src}: {}", e.msg));
+        p.esp32_us() as i64
     };
+    let us = |src: &str| plain(src, false);
+    let narrowed: &[(&str, i64, &str, &str)] = &[
+        (
+            "| + − that can't overflow | 28 |",
+            28,
+            "gray(x*px)",
+            "gray(x*px + x)",
+        ),
+        (
+            "| `*` that can't overflow | 41 ",
+            41,
+            "gray(x*px)",
+            "gray(x*px*px)",
+        ),
+        (
+            "(37 when the product is small)",
+            37,
+            "gray(x)",
+            "gray(x*0.3)",
+        ),
+        (
+            "| `*` by 1/2ⁿ (`/2`, `/8`, `*0.25`) | 33 |",
+            33,
+            "gray(x*px)",
+            "gray(x*px/8)",
+        ),
+    ];
+    for &(row, ns, base, more) in narrowed {
+        assert!(
+            DOC.contains(row),
+            "the reference's cost table has no {row:?}"
+        );
+        let got = plain(more, true) - plain(base, true);
+        let want = ns * 4096 * 115 / 100_000;
+        assert!(
+            (got - want).abs() <= 2,
+            "{row}: one more step adds {got} µs, the table says {ns} ns a pixel ({want} µs)"
+        );
+    }
     // (the row as the table prints it, ns, a formula, the same with one more step)
     let rows: &[(&str, i64, &str, &str)] = &[
         (
@@ -207,13 +265,14 @@ fn the_cost_table_is_the_estimates() {
             "gray(abs(x*px))",
         ),
         (
-            "| `/` by a varying value, `1/v` | 685 |",
-            685,
+            "| `/` by a varying value | 360 ",
+            360,
             "gray(x)",
             "gray(x / px)",
         ),
-        ("| `sqrt` | 539 |", 539, "gray(x)", "gray(sqrt(x))"),
-        ("| `len` | 642 |", 642, "gray(x)", "gray(len(x, px))"),
+        ("(`1/v` 230) |", 230, "gray(x)", "gray(1 / px)"),
+        ("| `sqrt` | 229 |", 229, "gray(x)", "gray(sqrt(x))"),
+        ("| `len` | 472 |", 472, "gray(x)", "gray(len(x, px))"),
         ("| `sin` `cos` | 110 |", 110, "gray(x)", "gray(sin(x))"),
         (
             "| `tri` `saw` `sqr` `select` `clamp` | 60 |",
@@ -235,9 +294,21 @@ fn the_cost_table_is_the_estimates() {
             "gray(smoothstep(0.2, 0.8, x))",
         ),
         ("| `hash` | 220 |", 220, "gray(x)", "gray(hash(px, x))"),
-        ("| `atan2` | 529 |", 529, "gray(x)", "gray(atan2(x, px))"),
+        ("| `atan2` | 384 |", 384, "gray(x)", "gray(atan2(x, px))"),
         ("| `noise` | 855 |", 855, "gray(x)", "gray(noise(x, px, x))"),
+        (
+            "| `noise` of a growing value (section 11) | 870 |",
+            870,
+            "loop forever\ngray(min(frac(x + t), x))",
+            "loop forever\ngray(min(frac(x + t), noise(x + t, px, x)))",
+        ),
         ("| colour `rgb` | 120 |", 120, "gray(x)", "rgb(x, x, x)"),
+        (
+            "| a sprite's pixel, `s[u, v]` | 120 |",
+            120,
+            "sprite s {\nkey . 0, X 1\n.X\n}\ngray(px*x)",
+            "sprite s {\nkey . 0, X 1\n.X\n}\ngray(px*s[x, px])",
+        ),
         ("| colour `hsv` | 195 |", 195, "gray(x)", "hsv(x, x, x)"),
         ("| `ur` `ug` `ub` | 70 |", 70, "gray(x)", "gray(ur)"),
         ("| `ul` | 140 |", 140, "gray(x)", "gray(ul)"),

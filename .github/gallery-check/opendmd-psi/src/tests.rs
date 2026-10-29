@@ -122,6 +122,117 @@ fn noise_and_hash_stay_in_range() {
 }
 
 #[test]
+fn flat_noise_is_noise_at_a_whole_z() {
+    let mut h: u32 = 12345;
+    let mut r = || {
+        h ^= h << 13;
+        h ^= h >> 17;
+        h ^= h << 5;
+        h as i32
+    };
+    for _ in 0..20000 {
+        let (x, y) = (r() >> 8, r() >> 8);
+        let z = (r() >> 16) << 16;
+        assert_eq!(
+            fixed::noise_flat(x, y, z),
+            fixed::noise(x, y, z),
+            "{x} {y} {z}"
+        );
+    }
+    // The VM takes it for a whole scalar z, the eight corners otherwise.
+    let flat = compile("gray(noise(x*8, y*4, 3) + noise(px, py, -1)*0.25)").unwrap();
+    let full = compile("frame { z = 3 + t*0 + floor(a*0.1) }\ngray(noise(x*8, y*4, z) + noise(px, py, -1 + z*0)*0.25)").unwrap();
+    let mut s = Scratch::<128>::new();
+    let (mut o1, mut o2) = (vec![0u8; W * H * 3], vec![0u8; W * H * 3]);
+    render(&flat, &mut s, &Inputs::default(), &OWN, &mut o1);
+    render(&full, &mut s, &Inputs::default(), &OWN, &mut o2);
+    assert_eq!(o1, o2);
+    assert!(flat.esp32_us() < full.esp32_us());
+}
+
+#[test]
+fn a_scaled_palette_is_exactly_its_channels_times_k() {
+    // Every entry of every palette at scales across the range, the edges
+    // included: the fast paths agree with chan(mul(byte(b), s)).
+    let mut scales: Vec<i32> = vec![
+        i32::MIN,
+        -ONE,
+        -1,
+        0,
+        1,
+        2,
+        255,
+        256,
+        ONE - 1,
+        ONE,
+        ONE + 1,
+        2 * ONE,
+        300 * ONE,
+        i32::MAX,
+    ];
+    scales.extend((0..=4096).map(|k| k * 17));
+    for p in &PALETTES {
+        for i in 0..32 {
+            let k = (i << 11) + 5;
+            let c = fixed::pal(p, k);
+            for &s in &scales {
+                let want: Vec<u8> = c
+                    .iter()
+                    .map(|&b| fixed::chan(fixed::mul(fixed::byte(b), s)))
+                    .collect();
+                assert_eq!(&fixed::pal_lit(p, k, s)[..], &want[..], "entry {i} at {s}");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_scaled_palette_is_its_channels_scaled() {
+    // `pal(P, v) * k` against the same colour written as rgb of its
+    // channels (the palette entries' bytes over 255, times k).
+    let p = compile("pal(fire, x) * y").unwrap();
+    assert_eq!(p.layers(), 1);
+    assert_eq!(p.inputs() & 7, 0);
+    let mut s = Scratch::<128>::new();
+    let mut out = vec![0u8; W * H * 3];
+    render(&p, &mut s, &Inputs::default(), &OWN, &mut out);
+    for (i, px) in out.chunks(3).enumerate() {
+        let (x, row) = (i % W, i / W);
+        let xv = fixed::div((x as i32) << 16, ((W - 1) as i32) << 16);
+        let yv = fixed::div(((H - 1 - row) as i32) << 16, ((H - 1) as i32) << 16);
+        let c = fixed::pal(&PALETTES[0], xv);
+        let want: Vec<u8> = c
+            .iter()
+            .map(|&b| fixed::chan(fixed::mul(fixed::byte(b), yv)))
+            .collect();
+        assert_eq!(px, &want[..], "pixel {i}");
+    }
+    // A scale over 2^n is the value and a shift in the step: the same bytes
+    // as the multiply (and one step fewer).
+    let p = compile("pal(chrono, x) * (floor(y*8 + px % 3 - 1)/8)").unwrap();
+    let q = compile("pal(chrono, x) * (floor(y*8 + px % 3 - 1)/8*(1 + a))").unwrap();
+    assert!(p.len() < q.len(), "{}", p.listing());
+    let (mut o1, mut o2) = (vec![0u8; W * H * 3], vec![0u8; W * H * 3]);
+    render(&p, &mut s, &Inputs::default(), &OWN, &mut o1);
+    render(&q, &mut s, &Inputs::default(), &OWN, &mut o2);
+    assert_eq!(o1, o2);
+    // Times a slider, chained, in a layer with coverage; gray is gray(v*k).
+    let p = compile("layer { hsv(x, 1, 1) }\nlayer screen { pal(ice, y, 0.5) * a * 2 }").unwrap();
+    assert_eq!(p.sliders(), 1);
+    assert!(compile("pal(gray, x) * 0.5")
+        .unwrap()
+        .listing()
+        .contains("gray"));
+    assert_eq!(
+        compile("pal(gray, x) * y").unwrap().esp32_us(),
+        compile("gray(x * y)").unwrap().esp32_us()
+    );
+    // Not into sums.
+    let e = compile("pal(fire, x) * y + 0.1").unwrap_err();
+    assert!(e.msg.contains("can only be scaled"), "{}", e.msg);
+}
+
+#[test]
 fn colours() {
     assert_eq!(fixed::hsv(0, ONE, ONE), [255, 0, 0]);
     assert_eq!(fixed::hsv(q(1.0 / 3.0), ONE, ONE), [0, 255, 0]);
@@ -150,10 +261,15 @@ fn constants_fold_and_values_share() {
     let p = compile("u = x - 0.5\nv = (x - 0.5) * 1 + 0\nrgb(u, v, 0)").unwrap();
     assert_eq!(p.len(), 2, "{}", p.listing());
     // Division by a constant is a multiply; % by a power of two a mask.
-    let p = compile("gray(x / 4 + x % 0.5)").unwrap();
+    // (Before narrowing: then the multiply by 1/4 is a shift.)
+    let mut p = Program::default();
+    crate::compile_with("gray(x / 4 + x % 0.5)", &mut p, true, false).unwrap();
     let codes: Vec<u8> = p.ops[..p.len()].iter().map(|o| o.code).collect();
     assert!(codes.contains(&code::MUL) && codes.contains(&code::MASK));
     assert!(!codes.contains(&code::DIV) && !codes.contains(&code::MOD));
+    let p = compile("gray(x / 4 + x % 0.5)").unwrap();
+    let codes: Vec<u8> = p.ops[..p.len()].iter().map(|o| o.code).collect();
+    assert!(codes.contains(&code::SHR) && codes.contains(&code::ADD_W));
 }
 
 #[test]
@@ -164,8 +280,17 @@ fn levels_run_as_rarely_as_they_can() {
     // Division by a per-row value: one reciprocal a row, a multiply a pixel.
     let p = compile("gray(x / (y + 1))").unwrap();
     assert_eq!(p.counts(), (0, 2, 2), "{}", p.listing());
+    // One over a pixel value: `recip` (the same bits as the division).
+    let p = compile("gray(1 / (px + 1))").unwrap();
+    assert!(p.listing().contains("recip"), "{}", p.listing());
+    assert!(!p.listing().contains("div"), "{}", p.listing());
     let plasma = compile(sketches::PLASMA).unwrap();
-    assert_eq!(plasma.counts(), (2, 5, 13));
+    // (its `len(x-0.5, y-0.5)*6` is worked out once: the still cache's
+    // marker is one step more)
+    // and its `sin(x*3 + t/8)` once a column: a column run, one more)
+    assert_eq!(plasma.counts(), (2, 5, 15));
+    assert_eq!(plasma.still_lanes(), 1);
+    assert_eq!(plasma.column_run().len(), 4, "{}", plasma.listing());
     let ring = compile(sketches::RING_CLOCK).unwrap();
     assert_eq!(ring.counts().0, 8);
 }
@@ -180,10 +305,67 @@ fn loop_header() {
     );
 }
 
+/// `fps N` (E801-E802): the frame time it asks for; `fps` stays a name a
+/// formula may set; a part's (a whole formula pasted in) is the host's.
+#[test]
+fn fps_line() {
+    assert_eq!(compile("gray(x)").unwrap().frame_ms(), None);
+    assert_eq!(compile("fps 100\ngray(x)").unwrap().frame_ms(), Some(10));
+    assert_eq!(
+        compile("loop 4; fps 50\ngray(x)").unwrap().frame_ms(),
+        Some(20)
+    );
+    assert_eq!(compile("fps 25\ngray(x)").unwrap().frame_ms(), Some(40));
+    // The same picture: only the player's frame grid changes.
+    let (a, b) = (
+        compile("gray(x + t)").unwrap(),
+        compile("fps 100\ngray(x + t)").unwrap(),
+    );
+    assert_eq!(a.ops[..a.len()], b.ops[..b.len()]);
+    assert_eq!(compile("fps = 3\ngray(x*fps)").unwrap().frame_ms(), None);
+    let p = compile("part p {\n  fps 100\n  gray(x)\n}\np").unwrap();
+    assert_eq!(p.frame_ms(), None, "a part's fps is left to the formula's");
+    let p = compile("fps 25\npart p { fps 100; gray(x) }\np").unwrap();
+    assert_eq!(p.frame_ms(), Some(40));
+    for (src, want, line, col) in [
+        (
+            "fps 60\ngray(x)",
+            "`fps` is 25, 50 or 100 frames a second",
+            1,
+            5,
+        ),
+        ("fps 100.5\ngray(x)", "`fps` is 25, 50 or 100", 1, 5),
+        (
+            "fps\ngray(x)",
+            "`fps` takes 25, 50 or 100 frames a second, e.g. `fps 100`",
+            1,
+            1,
+        ),
+        ("fps 100\nfps 50\ngray(x)", "`fps` is already set", 2, 1),
+        (
+            "fps 100 fast\ngray(x)",
+            "expected the end of the line",
+            1,
+            9,
+        ),
+        (
+            "layer { fps 100\ngray(x) }",
+            "`fps` is the whole formula's",
+            1,
+            9,
+        ),
+    ] {
+        let e = compile(src).unwrap_err();
+        assert!(e.msg.contains(want), "{src:?}: {}", e.msg);
+        assert_eq!(e.line_col(src), (line, col), "{src:?}: {}", e.msg);
+    }
+}
+
 #[test]
 fn registers_are_reused() {
     let p = compile(sketches::RING_CLOCK).unwrap();
-    assert!(p.regs() <= 4, "{}", p.listing());
+    // (One of them holds `cx`, kept down the columns.)
+    assert!(p.regs() <= 5, "{}", p.listing());
     // A step never writes a register it reads.
     for op in &p.ops[p.row_end as usize..p.pixel_end as usize] {
         let ar = code::arity(op.code);
@@ -419,7 +601,7 @@ fn program_is_plain_data() {
     let mut p = Program::default();
     assert!(compile_into("gray(nope)", &mut p).is_err());
     assert_eq!(p, Program::default());
-    assert!(core::mem::size_of::<Program>() <= 1824);
+    assert!(core::mem::size_of::<Program>() <= 2876);
 }
 
 /// Names that became functions later stay usable as values in saved
@@ -452,8 +634,10 @@ fn compact_compiles_the_same() {
 
 #[test]
 fn sizes() {
-    // What the docs say (Program, the scratch at 128 and 64 lanes).
-    assert_eq!(core::mem::size_of::<Program>(), 1808);
+    // What the docs say (Program, the scratch at 128 and 64 lanes, the
+    // draw stage's canvas).
+    assert_eq!(core::mem::size_of::<Program>(), 2876);
+    assert_eq!(core::mem::size_of::<crate::Ink>(), 4096);
     assert_eq!(core::mem::size_of::<Scratch<128>>(), 8192);
     assert_eq!(core::mem::size_of::<Scratch<64>>(), 4864);
 }
@@ -471,9 +655,13 @@ fn sliders_and_the_esp32_estimate() {
     assert_eq!(i("gray(minute / 60 + b)"), 16 | 2);
     // Within 25 % of what psi-probe measured on the ESP32 (effect frame p50, µs).
     for (src, measured) in [
-        (sketches::PLASMA, 7245),
+        // (7,245 before fast-div, less its `len`'s saving on the spare: 848
+        // → 683 ns a pixel at fastdiv-a/-b.)
+        (sketches::PLASMA, 6569),
         (sketches::FIRE, 4964),
-        (sketches::RING_CLOCK, 11817),
+        // (11,817 before fast-div, less its `atan2`'s and `len`'s savings:
+        // 147 and 165 ns a pixel.)
+        (sketches::RING_CLOCK, 10539),
     ] {
         let est = compile(src).unwrap().esp32_us();
         assert!(
@@ -500,7 +688,14 @@ fn worst_case_formulas() {
                     | "nested mix"
                     | "nested pick"
                     | "parts in layers"
-            ) || (1900..=2048).contains(&n),
+                    | "draw"
+                    | "nested sprite"
+                    | "nested forever"
+                    | "nested palette"
+                    | "declared"
+                    | "declared part"
+            ) && n <= 2048
+                || (1900..=2048).contains(&n),
             "{name}: {n} B"
         );
         match compile(&src) {
@@ -515,6 +710,13 @@ fn worst_case_formulas() {
         }
     }
     assert!(compile(&crate::worst::many_locals()).is_ok());
+    // Two loops and the draw block are three levels of the nesting cap.
+    let d = crate::worst::draw();
+    assert_eq!(
+        d.matches("sin(").count() + 3,
+        crate::worst::nested().matches("sin(").count(),
+        "{d}"
+    );
     // As deep as `sin(` nesting goes.
     let d = crate::worst::nested_digit();
     assert_eq!(
@@ -828,7 +1030,12 @@ fn layer_error_messages() {
 fn pasted(src: &str) -> [String; 2] {
     let lp = compile(src).unwrap().loop_ms();
     let inner: String = src.lines().map(|l| alloc::format!("  {l}\n")).collect();
-    let head = alloc::format!("loop {}\npart p {{\n{inner}}}\n", lp as f64 / 1000.0);
+    let lp = if lp == 0 {
+        "forever".into()
+    } else {
+        alloc::format!("{}", lp as f64 / 1000.0)
+    };
+    let head = alloc::format!("loop {lp}\npart p {{\n{inner}}}\n");
     [
         alloc::format!("{head}p"),
         alloc::format!("{head}layer {{ p }}"),
@@ -1187,10 +1394,11 @@ fn pick_is_the_chain_it_replaces() {
     let px = |s: &str| compile(s).unwrap().counts().2;
     assert_eq!(px(cases[0].0) + 9, px(cases[0].1));
     assert_eq!(px(cases[5].0) + 9, px(cases[5].1));
-    // In a colour expression (read three times) a pick is one step.
+    // In a colour expression (read three times) a pick is one step (and
+    // all of it once a column: the column run's marker is one more).
     assert_eq!(
         px("#f80 * pick(px/32, 0.5, 1)"),
-        4,
+        5,
         "{}",
         compile("#f80 * pick(px/32, 0.5, 1)").unwrap().listing()
     );
@@ -1365,3 +1573,1061 @@ fn colour_and_pick_errors() {
         }
     }
 }
+
+// --- the draw stage -----------------------------------------------------------
+
+/// The draw stage's errors (E701-E710 of docs/psi-drawing-design.md §2.3;
+/// the codes are not yet a field of `Error`): (source, words in the
+/// sentence, line, column, the code).
+const DRAW_ERRORS: &[(&str, &str, usize, usize, &str)] = &[
+    ("layer { draw { dot(1, 1) }\ngray(ink) }", "goes at the top of the formula", 1, 9, "E701"),
+    ("layer { table T = 1\ngray(1) }", "a table goes at the top", 1, 9, "E701"),
+    ("draw { dot(1, 1) }\ndraw { dot(2, 2) }\ngray(ink)", "there can be one `draw { }`", 2, 1, "E702"),
+    ("part p { draw { dot(1, 1) }\ngray(ink) }\ndraw { dot(2, 2) }\np", "there can be one `draw { }`", 3, 1, "E702"),
+    ("draw { for k 12 { dot(k, 1) } }\ngray(ink)", "`for` takes a name and a count", 1, 8, "E703"),
+    ("draw { for", "`for` takes a name and a count", 1, 8, "E703"),
+    ("draw { for k", "`for` takes a name and a count", 1, 8, "E703"),
+    ("draw { for k <", "`for` takes a name and a count", 1, 8, "E703"),
+    ("draw { for k < 0 { dot(k, 1) } }\ngray(ink)", "a whole number from 1 to 1024", 1, 8, "E703"),
+    ("draw { for k < 1025 { dot(k, 1) } }\ngray(ink)", "a whole number from 1 to 1024", 1, 8, "E703"),
+    ("draw { for k < 2.5 { dot(k, 1) } }\ngray(ink)", "a whole number from 1 to 1024", 1, 8, "E703"),
+    ("draw { for k < 1024 { dot(k, 1) }\nfor j < 1025 { dot(j, 2) } }\ngray(ink)", "a whole number", 2, 1, "E703"),
+    ("draw { for k < 1024 { dot(k, 1) }\nfor j < 1024 { dot(j, 2) }\nfor q < 1 { dot(q, 3) } }\ngray(ink)", "2049 loop turns in all; the limit is 2048", 3, 1, "E704"),
+    ("draw { for k < 32 { for j < 64 { dot(j, k) } } }\ngray(ink)", "2080 loop turns", 1, 21, "E704"),
+    ("draw { for a1 < 2 { for b1 < 2 { for c1 < 2 { dot(a1, b1, c1) } } } }\ngray(ink)", "two deep at most", 1, 34, "E705"),
+    ("line(0, 0, 9, 9)\ngray(1)", "`line(…)` draws: it goes on a line of its own inside `draw { }`", 1, 1, "E706"),
+    ("draw { v = dot(1, 2) }\ngray(ink)", "`dot(…)` draws", 1, 12, "E706"),
+    ("gray(ink)", "`ink` needs a `draw { }` block", 1, 6, "E706"),
+    ("table T = 1, x\ngray(T[0])", "a table holds numbers only", 1, 14, "E707"),
+    ("table T = 1, 2\ntable U = 3,\n4\ngray(T[0] + U[1] + V[0])", "`[ ]` reads a table", 4, 20, "E710"),
+    ("draw { dot(x, 1) }\ngray(ink)", "inside draw { } only values that are the same for every pixel", 1, 12, "E708"),
+    ("draw { v = py*2\ndot(v, 1) }\ngray(ink)", "but this uses `py`", 1, 12, "E708"),
+    ("draw { line(0, 0, 9, ink) }\ngray(ink)", "but this uses `ink`", 1, 22, "E708"),
+    ("draw { for k < 3 { k = 2\ndot(k, 1) } }\ngray(ink)", "`k` is a loop counter: it can't be set", 1, 20, "E709"),
+    ("draw { for k < 3 { for k < 2 { dot(k, 1) } } }\ngray(ink)", "`k` is already a loop counter here", 1, 24, "E709"),
+    ("v = 1\ngray(v[0])", "`[ ]` reads a table: `NAME[k]` — `v` is not a table", 2, 6, "E710"),
+    ("table T = 1, 2\ngray(T)", "`T` is a table: read one of its numbers with `T[k]`", 2, 6, "E710"),
+    ("table T = 1, 2\ngray(T[0)", "expected `]` here", 2, 9, "—"),
+    ("draw { frame { v = 1 } }\ngray(ink)", "inside draw { } go `name = value`", 1, 8, "—"),
+    ("draw { dot(1) }\ngray(ink)", "`dot` takes 2 values", 1, 8, "—"),
+    ("draw { line(1, 2, 3, 4, 5, 6, 7) }\ngray(ink)", "`line` takes 4 values", 1, 8, "—"),
+    ("for k < 3 { }\ngray(1)", "`for` goes inside `draw { }`", 1, 1, "—"),
+    ("draw { dot(1, 1)\ngray(ink)", "this `draw {` is never closed", 1, 1, "—"),
+    ("table T = 1\ntable T = 2\ngray(T[0])", "`T` is already set on line 1", 2, 7, "—"),
+];
+
+#[test]
+fn draw_error_messages() {
+    let mut bad = Vec::new();
+    for &(src, want, line, col, code) in DRAW_ERRORS {
+        match compile(src) {
+            Ok(_) => bad.push(format!("{code} {src:?}: compiled")),
+            Err(e) => {
+                let lc = e.line_col(src);
+                if !e.msg.contains(want) || lc != (line, col) {
+                    bad.push(format!(
+                        "{code} {src:?}: got {:?} at {lc:?}, want {want:?} at {:?}\n{}",
+                        e.msg,
+                        (line, col),
+                        e.render(src)
+                    ));
+                }
+            }
+        }
+    }
+    let big: alloc::vec::Vec<alloc::string::String> =
+        (0..257).map(|k| alloc::format!("{k}")).collect();
+    let e = compile(&alloc::format!("table T = {}\ngray(T[0])", big.join(", "))).unwrap_err();
+    if !e.msg.contains("up to 256 in all") {
+        bad.push(alloc::format!("E707 257 numbers: {}", e.msg));
+    }
+    assert!(bad.is_empty(), "\n{}", bad.join("\n"));
+}
+
+/// Words that became part of the draw stage stay names a formula may set:
+/// `line`, `dot` and `ink` (a set name is that name).
+#[test]
+fn drawing_words_stay_names() {
+    let a = compile("line = x\ndot = y\nink = 0.5\nrgb(line, dot, ink)").unwrap();
+    assert_eq!(a, compile("rgb(x, y, 0.5)").unwrap());
+    let b = compile("line = 3\ndraw { line(0, 0, line, 9) }\ngray(ink)").unwrap();
+    assert!(b.draws());
+}
+
+/// A value inside a loop that doesn't depend on its counter runs once a
+/// frame; one that depends on the outer counter only, once a turn of the
+/// outer loop; the canvas isn't drawn when nothing reads `ink`.
+#[test]
+fn draw_values_run_as_rarely_as_they_can() {
+    let p = compile(
+        "loop 4\ndraw {\n  for s < 3 {\n    q = sin(t/4)*10\n    u = s*q\n    for r < 4 { dot(u + r, r*2 + q, s/3) }\n  }\n}\ngray(ink)",
+    )
+    .unwrap();
+    let l = p.listing();
+    // sin(t/4)·10 per frame; s·q in the outer body; r+u, r·2+q, in the inner.
+    assert_eq!(p.counts().0, 3, "{l}");
+    let draw: alloc::vec::Vec<&str> = l.lines().filter(|s| s.contains("draw")).collect();
+    let pos = |w: &str| draw.iter().position(|s| s.contains(w)).unwrap_or(99);
+    assert!(
+        pos("= for(") < pos("= mul(")
+            && pos("= mul(") < draw.iter().rposition(|s| s.contains("= for(")).unwrap(),
+        "{l}"
+    );
+    assert_eq!(p.primitives(), 12, "{l}");
+    assert!(p.inputs() & 8 != 0);
+    // A draw block nothing shows is left out.
+    let q = compile("draw { dot(1, 1) }\ngray(x)").unwrap();
+    assert!(!q.draws());
+    assert_eq!(q, compile("gray(x)").unwrap());
+    // Two sibling loops may use the same counter's name and values' names.
+    let r = compile("draw {\n for k < 2 { v = k*3\n dot(v, 1) }\n for k < 3 { v = k\n dot(v, 2) }\n}\ngray(ink)").unwrap();
+    assert_eq!(r.primitives(), 5);
+}
+
+/// Tables: a constant index is folded; per frame, per row, per pixel and
+/// in a loop, entry floor(k), 0 outside; the same numbers stored once.
+#[test]
+fn tables_read_floor_k() {
+    let c = compile("table T = 1, 0.5, 0.25\ngray(T[1.9] + T[3] + T[-0.5])").unwrap();
+    assert_eq!(c.listing(), compile("gray(0.5)").unwrap().listing());
+    let p = compile("table T = 0.1, 0.2, 0.3, 0.4\ntable U = 0.2, 0.3\nrgb(T[px % 5], U[py % 3], T[second % 5])").unwrap();
+    // Two tables, the second inside the first: 4 numbers held.
+    assert_eq!(&p.tables[..5], &[q(0.1), q(0.2), q(0.3), q(0.4), 0]);
+    let mut out = [0u8; W * H * 3];
+    let inputs = Inputs {
+        second: 3,
+        ..Default::default()
+    };
+    render(&p, &mut Scratch::new(), &inputs, &OWN, &mut out);
+    for (k, px) in out.chunks(3).enumerate() {
+        let (col, row) = (k % W, k / W);
+        let py = H - 1 - row;
+        let t = [0.1, 0.2, 0.3, 0.4, 0.0][col % 5];
+        let u = [0.2, 0.3, 0.0][py % 3];
+        assert_eq!(
+            px,
+            [fixed::chan(q(t)), fixed::chan(q(u)), fixed::chan(q(0.4))],
+            "{col}, {row}"
+        );
+    }
+}
+
+/// The canvas: lines' ends lit, as many pixels as the longer side (+1),
+/// each step one pixel on; ink from v0 to v1; max where they cross; dots
+/// at the nearest pixel; `y` up from the bottom.
+#[test]
+fn lines_and_dots_land_where_they_should() {
+    let ink_of = |src: &str| {
+        let p = compile(src).unwrap_or_else(|e| panic!("{}", e.render(src)));
+        let mut ink = Ink::boxed();
+        let mut out = [0u8; W * H * 3];
+        render_rows_ink::<128>(
+            &p,
+            &mut Scratch::new(),
+            Some(&mut ink),
+            &Inputs::default(),
+            &OWN,
+            None,
+            u32::MAX,
+            &mut out,
+        );
+        // gray(ink) draws the byte back.
+        for (k, px) in out.chunks(3).enumerate() {
+            assert_eq!(px[0], ink.0[k]);
+        }
+        ink
+    };
+    let at = |ink: &Ink, x: i32, y: i32| ink.at(x as usize, H - 1 - y as usize);
+    let mut r = 0x1234_5678u32;
+    for _ in 0..300 {
+        let mut n = |m: u32| {
+            r ^= r << 13;
+            r ^= r >> 17;
+            r ^= r << 5;
+            (r % m) as i32
+        };
+        let (x0, y0, x1, y1) = (n(128), n(32), n(128), n(32));
+        let ink = ink_of(&alloc::format!(
+            "draw {{ line({x0}, {y0}, {x1}, {y1}, 1, 0.2) }}\ngray(ink)"
+        ));
+        assert_eq!(at(&ink, x0, y0), 255);
+        assert_eq!(at(&ink, x1, y1), 51, "{x0},{y0} {x1},{y1}");
+        let lit = ink.0.iter().filter(|&&b| b > 0).count() as i32;
+        assert_eq!(
+            lit,
+            (x1 - x0).abs().max((y1 - y0).abs()) + 1,
+            "{x0},{y0} {x1},{y1}"
+        );
+        // Every lit pixel touches another (8-connected), but for a dot.
+        if lit > 1 {
+            for y in 0..H as i32 {
+                for x in 0..W as i32 {
+                    if at(&ink, x, y) > 0 {
+                        let near = (-1..=1)
+                            .flat_map(|dy| (-1..=1).map(move |dx| (dx, dy)))
+                            .any(|(dx, dy)| {
+                                (dx, dy) != (0, 0)
+                                    && (0..W as i32).contains(&(x + dx))
+                                    && (0..H as i32).contains(&(y + dy))
+                                    && at(&ink, x + dx, y + dy) > 0
+                            });
+                        assert!(near, "{x0},{y0} {x1},{y1}: {x},{y} alone");
+                    }
+                }
+            }
+        }
+    }
+    let ink = ink_of("draw { line(0, 0, 127, 31, 0.3); line(0, 31, 127, 0, 0.8); dot(5.5, 2.49); dot(-0.5, 0, 0.5) }\ngray(ink)");
+    assert_eq!(at(&ink, 1, 0), fixed::chan(q(0.3)));
+    assert_eq!(at(&ink, 0, 31), fixed::chan(q(0.8)));
+    // y up: (6, 2) is row 29 from the top.
+    assert_eq!(ink.at(6, 29), 255);
+    // -0.5 rounds up to 0, onto (0, 0), lighter than the line there.
+    assert_eq!(at(&ink, 0, 0), fixed::chan(q(0.5)));
+}
+
+/// Over the caps the VM stops the same way everywhere, and a program that
+/// draws without a canvas draws nothing.
+#[test]
+fn draw_caps_and_no_canvas() {
+    // Each line passes the panel's corner by (812 steps, none shown).
+    let src = "draw { for k < 1024 { line(-512, 300, 300, -512); dot(k % 128, 0) }\nfor j < 1024 { dot(j % 128, 31) } }\ngray(ink)";
+    let p = compile(src).unwrap();
+    assert_eq!(p.primitives(), 3072);
+    let mut ink = Ink::boxed();
+    let mut out = [0u8; W * H * 3];
+    render_rows_ink::<128>(
+        &p,
+        &mut Scratch::new(),
+        Some(&mut ink),
+        &Inputs::default(),
+        &OWN,
+        None,
+        u32::MAX,
+        &mut out,
+    );
+    // 21 lines use the frame's 16,384 steps: the dots of turns 0..19
+    // along the bottom, none after, none at the top.
+    let bottom = (0..W).filter(|&x| ink.at(x, H - 1) > 0).count();
+    assert_eq!(bottom, 20);
+    assert!((0..W).all(|x| ink.at(x, 0) == 0));
+    let mut out2 = [1u8; W * H * 3];
+    render(&p, &mut Scratch::new(), &Inputs::default(), &OWN, &mut out2);
+    assert!(out2.iter().all(|&b| b == 0));
+}
+
+/// The estimate counts a loop's body as often as it runs (a turn at a
+/// time), or a loop run as lanes once a lane of 128 turns (its lines and
+/// dots each turn).
+#[test]
+fn draw_estimate_scales_with_turns() {
+    let e = |n: u32| {
+        let p = compile(&alloc::format!(
+            "draw {{ for k < {n} {{ dot(hash(k, 1)*128, hash(k, 2)*32) }} }}\ngray(ink)"
+        ))
+        .unwrap();
+        (p.draw_us(), p.lane_loops())
+    };
+    let (a, b) = (e(3), e(30));
+    assert!(
+        a.1 == 0 && b.1 == 0 && a.0 > 10 && b.0 > 9 * (a.0 - 10),
+        "{a:?} {b:?}"
+    );
+    let (a, b) = (e(128), e(1024));
+    assert!(
+        a.1 == 1 && b.1 == 1 && a.0 > 10 && b.0 > 7 * (a.0 - 10),
+        "{a:?} {b:?}"
+    );
+    // As lanes, a big loop is cheaper than a turn at a time.
+    let p =
+        compile("draw { for k < 1024 { dot(hash(k, 1)*128, hash(k, 2)*32) } }\ngray(ink)").unwrap();
+    assert!(
+        p.esp32_us() < p.esp32_us_turns(),
+        "{} {}",
+        p.esp32_us(),
+        p.esp32_us_turns()
+    );
+    // A constant line's length is known: 100 px costs more than 12.
+    let l = |x1: u32| {
+        compile(&alloc::format!("draw {{ line(0, 0, {x1}, 0) }}\ngray(ink)"))
+            .unwrap()
+            .draw_us()
+    };
+    assert!(l(100) > l(11));
+}
+
+/// The draw stage runs on a full render only: a render of some rows reads
+/// the canvas the last full one left (a look redrawing the rows its GIF
+/// changed doesn't draw its lines again).
+#[test]
+fn only_a_full_render_draws() {
+    let p = compile("draw { for k < 8 { line(k*16, 0, k*16 + 8, 31) } }\ngray(ink)").unwrap();
+    let mut ink = Ink::boxed();
+    let mut s = Scratch::<128>::new();
+    let mut full = [0u8; W * H * 3];
+    let i = Inputs::default();
+    render_rows_ink::<128>(
+        &p,
+        &mut s,
+        Some(&mut ink),
+        &i,
+        &OWN,
+        None,
+        u32::MAX,
+        &mut full,
+    );
+    let drawn = ink.0;
+    assert!(drawn.iter().any(|&b| b > 0));
+    // Rows 3 and 7 alone: the same bytes, the canvas untouched.
+    let mut part = [0u8; W * H * 3];
+    render_rows_ink::<128>(
+        &p,
+        &mut s,
+        Some(&mut ink),
+        &i,
+        &OWN,
+        None,
+        (1 << 3) | (1 << 7),
+        &mut part,
+    );
+    assert_eq!(ink.0, drawn);
+    for r in [3, 7] {
+        assert_eq!(
+            part[r * W * 3..(r + 1) * W * 3],
+            full[r * W * 3..(r + 1) * W * 3]
+        );
+    }
+    // Proof it isn't drawn again: a canvas changed by hand is what shows.
+    ink.0.fill(200);
+    render_rows_ink::<128>(&p, &mut s, Some(&mut ink), &i, &OWN, None, 1, &mut part);
+    assert!(part[..W * 3].iter().all(|&b| b == 200));
+    render_rows_ink::<128>(
+        &p,
+        &mut s,
+        Some(&mut ink),
+        &i,
+        &OWN,
+        None,
+        u32::MAX,
+        &mut part,
+    );
+    assert_eq!(ink.0, drawn);
+}
+
+#[test]
+fn mul_and_the_narrowed_steps_are_exact() {
+    // `mul` is sat(a·b >> 16) (floor), and each narrowed step is its
+    // checked step wherever its range condition holds: random values and
+    // the edges.
+    let mut x = 0x9e37_79b9_7f4a_7c15u64;
+    let mut next = || {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        x
+    };
+    let edges = [
+        0,
+        1,
+        -1,
+        ONE,
+        -ONE,
+        i32::MAX,
+        i32::MIN,
+        i32::MAX - 1,
+        i32::MIN + 1,
+        1 << 23,
+        -(1 << 23),
+        181 << 16,
+        -(181 << 16),
+        46_340,
+        -46_341,
+    ];
+    for k in 0..400_000 {
+        let (a, b) = if k < edges.len() * edges.len() {
+            (edges[k % edges.len()], edges[k / edges.len()])
+        } else {
+            let r = next();
+            let sh = (r >> 59) as u32; // spread the magnitudes
+            ((r as i32) >> sh, ((r >> 32) as i32) >> (sh / 2))
+        };
+        let p = a as i64 * b as i64;
+        assert_eq!(fixed::mul(a, b), fixed::sat(p >> 16), "{a} {b}");
+        if (p >> 16) == ((p >> 16) as i32) as i64 {
+            assert_eq!(fixed::mul_w(a, b), fixed::mul(a, b), "{a} {b}");
+        }
+        if p == (p as i32) as i64 {
+            assert_eq!(fixed::mul_n(a, b), fixed::mul(a, b), "{a} {b}");
+        }
+        if (a as i64 + b as i64) == (a.wrapping_add(b)) as i64 {
+            assert_eq!(fixed::add_w(a, b), fixed::add(a, b));
+        }
+        if (a as i64 - b as i64) == (a.wrapping_sub(b)) as i64 {
+            assert_eq!(fixed::sub_w(a, b), fixed::sub(a, b));
+        }
+        for n in [0, 1, 3, 4, 11, 16] {
+            assert_eq!(fixed::mul(a, ONE >> n), a >> n, "{a} >> {n}");
+        }
+    }
+}
+
+#[test]
+fn the_sine_table_is_within_one() {
+    // `range` takes sin and cos to be within ±1: the table's entries within
+    // ±16,384 (interpolated between two, then × 4).
+    assert!(crate::tables::SIN
+        .iter()
+        .all(|&v| (v as i32).abs() <= 16_384));
+}
+
+// --- loop forever: wide values ------------------------------------------------
+
+/// Each wide operation is its Q16.16 operation wherever the values fit one
+/// (and past that carries on, exactly, instead of saturating).
+#[test]
+fn wide_maths_is_the_q16_maths_where_it_fits() {
+    let mut r: u64 = 0x5eed_0ff0_e7e7;
+    let mut next = || {
+        r ^= r >> 12;
+        r ^= r << 25;
+        r ^= r >> 27;
+        r.wrapping_mul(0x2545_f491_4f6c_dd1d)
+    };
+    let mut checked = 0;
+    for k in 0..200_000 {
+        // Values across the range, small ones and edges more often.
+        let pick = |v: u64| -> i32 {
+            match v % 5 {
+                0 => (v >> 8) as i32,
+                1 => ((v >> 8) as i32) >> 12,
+                2 => ((v >> 8) as i32) >> 20,
+                3 => [0, ONE, -ONE, i32::MAX, i32::MIN, 1, -1, ONE / 2][(v >> 8) as usize % 8],
+                _ => ((v >> 8) as i32) >> 4,
+            }
+        };
+        let (a, b) = (pick(next()), pick(next()));
+        let w = a as i64;
+        let m = fixed::mul(a, b);
+        if m != i32::MAX && m != i32::MIN {
+            assert_eq!(fixed::w_mul(w, b), m as i64, "mul {a} {b}");
+            checked += 1;
+        }
+        let d = fixed::div(a, b);
+        if d != i32::MAX && d != i32::MIN && b != 0 {
+            assert_eq!(fixed::w_div(w, b), d as i64, "div {a} {b}");
+        }
+        assert_eq!(fixed::w_mod(w, b), fixed::modulo(a, b), "mod {a} {b}");
+        assert_eq!(fixed::w_frac(w), fixed::frac(a));
+        assert_eq!(fixed::w_floor(w), fixed::floor(a) as i64);
+        assert_eq!(fixed::w_reduce(w), a, "a value that fits hashes as itself");
+        for c in [code::LT, code::LE, code::GT, code::GE, code::EQ, code::NE] {
+            let want = crate::program::eval(c, a, b, 0, None);
+            assert_eq!(fixed::w_cmp(c, w, b), want);
+        }
+        assert_eq!(fixed::w_minmax(code::MIN, w, b), fixed::min(a, b));
+        assert_eq!(fixed::w_minmax(code::MAX, w, b), fixed::max(a, b));
+        // noise of a wide value split into its whole part (the offset) and
+        // fraction + a small part: the noise of the sum.
+        if k % 8 == 0 {
+            let s = pick(next()) >> 8;
+            let y = pick(next()) >> 6;
+            if let Some(sum) = a.checked_add(s) {
+                let off = [fixed::w_lat(w, 0), 0, 0];
+                let small = fixed::frac(a) + s;
+                assert_eq!(
+                    fixed::noise_off(small, y, 0, off),
+                    fixed::noise(sum, y, 0),
+                    "noise of {a} + {s}"
+                );
+            }
+        }
+    }
+    assert!(checked > 50_000);
+    // Past the Q16.16 range: exact, not saturated.
+    let big = 3_000_000i64 << 16; // 3,000,000
+    assert_eq!(fixed::w_mul(big, 10 << 16), 30_000_000i64 << 16);
+    assert_eq!(fixed::w_div(big, 3 << 16), 1_000_000i64 << 16);
+    assert_eq!(
+        fixed::w_frac(fixed::w_mul(big + ONE as i64 / 4, 10 << 16)),
+        ONE / 2
+    );
+    assert_eq!(
+        fixed::w_mod(big + 5 * ONE as i64, 7 << 16),
+        (3_000_005 % 7) << 16
+    );
+    assert_eq!(
+        fixed::w_mod(-big, 7 << 16),
+        ((-3_000_000i64).rem_euclid(7) as i32) << 16
+    );
+    assert_eq!(fixed::w_minmax(code::MIN, big, ONE), ONE);
+    assert_eq!(fixed::w_minmax(code::MAX, big, ONE), i32::MAX);
+    assert_eq!(fixed::w_cmp(code::GT, big, i32::MAX), ONE);
+    // Hashes past 65,536 s don't come round again.
+    assert_ne!(
+        fixed::w_reduce(big),
+        fixed::w_reduce(big + (65_536i64 << 16))
+    );
+    assert_ne!(fixed::w_reduce(big), (big as u32) as i32);
+    // w_mul's whole part wraps at 2^47 (millions of years of `t`), its
+    // fraction exact whatever the size.
+    let huge = 1i64 << 60;
+    assert_eq!(fixed::w_frac(fixed::w_mul(huge + 3, 3 << 16)), 9);
+}
+
+/// `loop forever`: no loop, `t` wide (frame steps only), `seed` in its
+/// slot; the pixel steps those values reach are the usual ones.
+#[test]
+fn loop_forever_programs() {
+    let p = compile("loop forever\ngray(frac(t*0.15))").unwrap();
+    assert!(p.forever());
+    assert_eq!(p.loop_ms(), 0);
+    assert_eq!(p.inputs() & 8, 8, "it reads t");
+    let l = p.listing();
+    assert!(l.contains("w_muls(w0"), "{l}");
+    assert!(l.contains("w_frac("), "{l}");
+    // A still one (it never reads t).
+    let s = compile("loop forever\ngray(x)").unwrap();
+    assert!(s.forever());
+    assert_eq!(s.inputs() & 8, 0);
+    // seed: its slot, and the inputs' bit 6.
+    let p = compile("loop forever\ngray(frac(seed*100 + t))").unwrap();
+    assert_eq!(p.inputs() & 64, 64);
+    assert!(p.listing().contains("mul(seed, 100)"), "{}", p.listing());
+    // A formula that sets its own `seed` keeps it, looped or not.
+    let a = compile("seed = 0.5\ngray(seed*x)").unwrap();
+    assert_eq!(a, compile("gray(0.5*x)").unwrap());
+    // `forever` is still a name a formula may set.
+    compile("forever = 2\ngray(x*forever)").unwrap();
+    // noise of t once a frame: one step.
+    let p = compile("loop forever\ngray(noise(t*0.5, 5, 0) + x)").unwrap();
+    assert!(
+        p.listing().contains("w_noisex(w1, 5, 0)"),
+        "{}",
+        p.listing()
+    );
+    // noise of t: a wide noise per pixel and its offsets once a frame.
+    let p = compile("loop forever\ngray(noise(x*8 + t, y*4, t*0.3))").unwrap();
+    let l = p.listing();
+    assert!(
+        l.contains("noise_o0(") && l.contains("noise0.x = w_lat") && l.contains("noise0.z = w_lat"),
+        "{l}"
+    );
+    assert!(!l.contains("noise0.y"), "{l}");
+    // A part with its own loop inside one that never repeats: t % its loop.
+    let p = compile("loop forever\npart p {\n  loop 4\n  gray(t/4)\n}\np").unwrap();
+    assert!(p.listing().contains("w_mod(w0, 4)"), "{}", p.listing());
+    // One that never repeats inside a looped formula: the host's t.
+    let p = compile("loop 4\npart p {\n  loop forever\n  gray(frac(t))\n}\np").unwrap();
+    assert!(
+        !p.forever() && !p.listing().contains("w_"),
+        "{}",
+        p.listing()
+    );
+}
+
+/// The wide steps' errors (E901-E906; `Error.code` is not a field yet).
+const FOREVER_ERRORS: &[(&str, &str, usize, usize, &str)] = &[
+    ("loop forever\ngray(t*x)", "grows without end", 2, 7, "E901"),
+    ("loop forever\ngray(sqrt(t))", "grows without end", 2, 6, "E901"),
+    ("loop forever\ngray(frac(t*t))", "grows without end", 2, 12, "E901"),
+    ("loop forever\ngray(floor(t + x))", "grows without end", 2, 6, "E901"),
+    ("loop forever\nv = t + px\ngray(v < 3)", "grows without end", 3, 8, "E901"),
+    ("loop forever\ntable T = 1, 2\ngray(T[t])", "grows without end", 3, 6, "E901"),
+    ("loop forever\ngray(pick(px/32, t, 1))", "grows without end", 2, 6, "E901"),
+    ("loop forever\ngray(x / t)", "grows without end", 2, 8, "E901"),
+    ("loop forever\ngray(frac((t + x)/3))", "add the pixel's part there", 2, 18, "E901"),
+    ("loop forever\ngray((t + x) > 5)", "add the pixel's part there", 2, 14, "E901"),
+    ("loop forever\nv = t + x\ngray(v)", "a colour can't take a value that grows", 3, 1, "E905"),
+    ("loop forever\nrgb(1, 1, 1, t + x)", "a colour can't take a value that grows", 2, 1, "E905"),
+    ("loop forever\npal(fire, x) * t", "a colour can't take a value that grows", 2, 1, "E905"),
+    ("loop forever\ngray(noise(t + x, 0, 0) + noise(t*2 + x, 0, 0) + noise(t*3 + x, 0, 0) + noise(t*4 + x, 0, 0) + noise(t*5 + x, 0, 0))", "four different ones at most", 2, 96, "E902"),
+    ("gray(seed)", "`seed` is for formulas that go on without repeating", 1, 6, "E903"),
+    ("loop forever\ndraw { dot(t, 3) }\ngray(ink)", "can't be drawn at", 2, 12, "E906"),
+    ("loop never\ngray(x)", "or `forever` for one that goes on without repeating", 1, 6, "—"),
+];
+
+#[test]
+fn forever_error_messages() {
+    let mut bad = Vec::new();
+    for &(src, want, line, col, code) in FOREVER_ERRORS {
+        match compile(src) {
+            Ok(_) => bad.push(format!("{code} {src:?}: compiled")),
+            Err(e) => {
+                let lc = e.line_col(src);
+                if !e.msg.contains(want) || lc != (line, col) {
+                    bad.push(format!(
+                        "{code} {src:?}: got {:?} at {lc:?}, want {want:?} at {:?}",
+                        e.msg,
+                        (line, col)
+                    ));
+                }
+            }
+        }
+    }
+    // Sixteen wide values: one more than the slots.
+    let many: String = (1..=16).map(|k| format!("w{k} = t*{k}.5\n")).collect();
+    let sum: String = (1..=16)
+        .map(|k| format!("frac(w{k})"))
+        .collect::<Vec<_>>()
+        .join(" + ");
+    let e = compile(&format!("loop forever\n{many}gray({sum})")).unwrap_err();
+    if !e.msg.contains("too many values that grow without end") {
+        bad.push(format!("E904: {}", e.msg));
+    }
+    assert!(bad.is_empty(), "\n{}", bad.join("\n"));
+}
+
+// --- sprites ------------------------------------------------------------------
+
+/// A frame of `src` at the golden inputs (no canvas, nothing under).
+fn spr_frame(src: &str) -> alloc::vec::Vec<u8> {
+    let p = compile(src).unwrap_or_else(|e| panic!("{}", e.render(src)));
+    let mut out = alloc::vec![0u8; W * H * 3];
+    render(&p, &mut Scratch::new(), &golden::inputs(0), &OWN, &mut out);
+    out
+}
+
+/// `NAME[u, v]` reads the key's number at column floor(u), row floor(v)
+/// from the top left, 0 outside; at 1, 2 and 4 bits a pixel, across word
+/// boundaries, once a frame, a row or a pixel.
+#[test]
+fn sprites_read_their_keys() {
+    // A random picture per key size and width: each pixel against the
+    // characters it was written with.
+    let mut r: u64 = 0x5b1e_c0de_1234_5678;
+    let mut next = |n: usize| {
+        r ^= r >> 12;
+        r ^= r << 25;
+        r ^= r >> 27;
+        (r.wrapping_mul(0x2545_f491_4f6c_dd1d) >> 33) as usize % n
+    };
+    let alphabet = b".abcdefghijklmnopqrstuvwxyz0123456789#*";
+    for &(keys, w, h) in &[
+        (1, 7, 3),
+        (2, 33, 5),
+        (3, 17, 2),
+        (4, 64, 4),
+        (5, 9, 9),
+        (16, 31, 32),
+        (16, 64, 3),
+        (9, 1, 1),
+    ] {
+        let chars = &alphabet[..keys];
+        let vals: alloc::vec::Vec<i32> = (0..keys)
+            .map(|k| (k as i32 * 9_973 + 77) % 65_536)
+            .collect();
+        let key: alloc::vec::Vec<alloc::string::String> = (0..keys)
+            .map(|k| alloc::format!("{} {}", chars[k] as char, vals[k] as f64 / 65_536.0))
+            .collect();
+        let rows: alloc::vec::Vec<alloc::vec::Vec<u8>> = (0..h)
+            .map(|_| (0..w).map(|_| chars[next(keys)]).collect())
+            .collect();
+        let src = alloc::format!(
+            "sprite pic {{\n  key {}\n{}}}\ngray(pic[px - 3, ty - 2])",
+            key.join(", "),
+            rows.iter()
+                .map(|r| alloc::format!("  {}\n", core::str::from_utf8(r).unwrap()))
+                .collect::<alloc::string::String>()
+        );
+        let f = spr_frame(&src);
+        // The same values as a table read, pixel by pixel.
+        for py in 0..H {
+            let ty = py as i32;
+            for px in 0..W {
+                let (u, v) = (px as i32 - 3, ty - 2);
+                let want = if u < 0 || v < 0 || u >= w || v >= h {
+                    0
+                } else {
+                    let c = rows[v as usize][u as usize];
+                    vals[chars.iter().position(|&k| k == c).unwrap()]
+                };
+                let got = f[(py * W + px) * 3];
+                assert_eq!(got, fixed::chan(want), "{keys} keys, {w} x {h}: ({u}, {v})");
+            }
+        }
+    }
+    // Once a frame (constant), once a row, floors of fractions, negatives.
+    let src = "sprite s {\n  key . 0, a 0.25, b 0.5, c 1\n  abc.\n  .cba\n}\nframe { k = s[2, 0] }\nrgb(s[1.9, 1.99] + k*0, s[px - 1, ty*0], s[px*0.5 - 0.5, 1])";
+    let f = spr_frame(src);
+    let at = |px: usize, ty: usize, c: usize| f[(ty * W + px) * 3 + c];
+    assert_eq!(at(0, 0, 0), 255, "s[1, 1] is c");
+    assert_eq!(
+        (
+            at(1, 5, 1),
+            at(2, 5, 1),
+            at(3, 5, 1),
+            at(4, 5, 1),
+            at(0, 5, 1)
+        ),
+        (fixed::chan(q(0.25)), fixed::chan(q(0.5)), 255, 0, 0)
+    );
+    // px*0.5 - 0.5 at px 0 is -0.5: floored, -1: outside.
+    assert_eq!((at(0, 9, 2), at(1, 9, 2), at(3, 9, 2)), (0, 0, 255));
+    let p = compile(src).unwrap();
+    let l = p.listing();
+    assert!(l.contains("frame") && l.contains("spr("), "{l}");
+    assert!(l.contains("sprite 4 x 2 at 0"), "{l}");
+    // Two sprites alike are stored once (and the same read of them is
+    // one step).
+    let a = compile("sprite s {\nkey . 0, X 1\n.X.\n}\nsprite u {\nkey . 0, X 1\n.X.\n}\ngray(s[px, ty] + u[px, ty])").unwrap();
+    assert!(a.listing().matches("spr(").count() == 1, "{}", a.listing());
+}
+
+/// The source sent to the panel (`compact`: comments out, lines joined by
+/// `; `) is the same sprite.
+#[test]
+fn a_sprite_compacts() {
+    let src = "-- a car\nsprite car {   -- its key first\n  key . 0, R 0.5, # 1   -- R red, # dark\n  ..RR..\n  .R##R.   -- the glass\n\n  RRRRRR\n}\ngray(car[px - 61, ty - 12])";
+    let c = compact(src);
+    assert_eq!(
+        c,
+        "sprite car {; key . 0, R 0.5, # 1; ..RR..; .R##R.; RRRRRR; }; gray(car[px - 61, ty - 12])"
+    );
+    assert_eq!(compile(src).unwrap(), compile(&c).unwrap());
+    // `sprite` and its words stay names a formula may set.
+    compile("sprite = 3\nkey = 2\ngray(sprite*key)").unwrap();
+}
+
+/// The sprite's errors (E911-E919; `Error.code` is not a field yet).
+const SPRITE_ERRORS: &[(&str, &str, usize, usize, &str)] = &[
+    (
+        "layer {\nsprite s {\nkey . 0\n.\n}\ngray(1)\n}",
+        "a sprite goes at the top",
+        2,
+        1,
+        "E911",
+    ),
+    (
+        "sprite s {\n}\ngray(s[0, 0])",
+        "a sprite starts with its key",
+        1,
+        1,
+        "E912",
+    ),
+    (
+        "sprite s {\n.X.\n}\ngray(s[0, 0])",
+        "a sprite starts with its key",
+        2,
+        1,
+        "E912",
+    ),
+    (
+        "sprite s {\nkey .0, X 1\n.X.\n}\ngray(s[0, 0])",
+        "a key is a character and its number",
+        2,
+        5,
+        "E913",
+    ),
+    (
+        "sprite s {\nkey . 0, X one\n.X.\n}\ngray(s[0, 0])",
+        "a key is a character and its number",
+        2,
+        10,
+        "E913",
+    ),
+    (
+        "sprite s {\nkey . 0, - 1\n.X.\n}\ngray(s[0, 0])",
+        "a key is a character and its number",
+        2,
+        10,
+        "E913",
+    ),
+    (
+        "sprite s {\nkey . 0, . 1\n...\n}\ngray(s[0, 0])",
+        "`.` is in the key twice",
+        2,
+        10,
+        "E913",
+    ),
+    (
+        "sprite s {\nkey . 0, X 1\n.Y.\n}\ngray(s[0, 0])",
+        "`Y` is not in the sprite's key",
+        3,
+        2,
+        "E914",
+    ),
+    (
+        "sprite s {\nkey . 0, X 1\n.★\n}\ngray(s[0, 0])",
+        "`★` is not in the sprite's key",
+        3,
+        2,
+        "E914",
+    ),
+    (
+        "sprite s {\nkey . 0, X 1\n.X.\n.X\n}\ngray(s[0, 0])",
+        "as wide as its first (3 characters)",
+        4,
+        1,
+        "E915",
+    ),
+    (
+        "sprite s {\nkey . 0, X 1\n.X.\n}\ngray(s[0])",
+        "a sprite is read at a column and a row",
+        5,
+        9,
+        "E918",
+    ),
+    (
+        "sprite s {\nkey . 0, X 1\n.X.\n}\ngray(s)",
+        "`s` is a sprite: read its pixels with `s[u, v]`",
+        5,
+        6,
+        "E918",
+    ),
+    (
+        "sprite s {\nkey . 0, X 1\n.X.\ngray(s[0, 0])",
+        "this `sprite {` is never closed",
+        1,
+        1,
+        "E919",
+    ),
+    (
+        "sprite s {\nkey . 0, X 1\n.X.\n}\nsprite s {\nkey . 0\n.\n}\ngray(1)",
+        "`s` is already set on line 1",
+        5,
+        8,
+        "—",
+    ),
+    (
+        "loop forever\nsprite s {\nkey . 0, X 1\n.X.\n}\ngray(s[t, 0])",
+        "grows without end",
+        6,
+        6,
+        "E901",
+    ),
+];
+
+#[test]
+fn sprite_error_messages() {
+    let mut bad = alloc::vec::Vec::new();
+    for &(src, want, line, col, code) in SPRITE_ERRORS {
+        match compile(src) {
+            Ok(_) => bad.push(alloc::format!("{code} {src:?}: compiled")),
+            Err(e) => {
+                let lc = e.line_col(src);
+                if !e.msg.contains(want) || lc != (line, col) {
+                    bad.push(alloc::format!(
+                        "{code} {src:?}: got {:?} at {lc:?}, want {want:?} at {:?}",
+                        e.msg,
+                        (line, col)
+                    ));
+                }
+            }
+        }
+    }
+    // 33 rows; 65 columns; more than the tables hold.
+    let tall: alloc::string::String = (0..33).map(|_| ".X\n").collect();
+    let e = compile(&alloc::format!(
+        "sprite s {{\nkey . 0, X 1\n{tall}}}\ngray(s[0, 0])"
+    ))
+    .unwrap_err();
+    if !e.msg.contains("1 to 32 rows") {
+        bad.push(alloc::format!("E916 33 rows: {}", e.msg));
+    }
+    let wide = ".".repeat(65);
+    let e = compile(&alloc::format!(
+        "sprite s {{\nkey . 0\n{wide}\n}}\ngray(s[0, 0])"
+    ))
+    .unwrap_err();
+    if !e.msg.contains("at most 64") {
+        bad.push(alloc::format!("E915 65 wide: {}", e.msg));
+    }
+    let big: alloc::string::String = (0..32)
+        .map(|k| {
+            alloc::format!(
+                "{}\n",
+                "abcdefghijklmnop"
+                    .repeat(4)
+                    .chars()
+                    .cycle()
+                    .skip(k)
+                    .take(64)
+                    .collect::<alloc::string::String>()
+            )
+        })
+        .collect();
+    let keys: alloc::vec::Vec<alloc::string::String> = "abcdefghijklmnop"
+        .chars()
+        .enumerate()
+        .map(|(k, c)| alloc::format!("{c} {k}"))
+        .collect();
+    let e = compile(&alloc::format!(
+        "table T = 1, 2\nsprite s {{\nkey {}\n{big}}}\ngray(s[0, 0] + T[0])",
+        keys.join(", ")
+    ))
+    .unwrap_err();
+    if !e
+        .msg
+        .contains("tables, sprites and palettes hold 256 numbers in all")
+    {
+        bad.push(alloc::format!("E917: {}", e.msg));
+    }
+    assert!(bad.is_empty(), "\n{}", bad.join("\n"));
+}
+
+// --- palettes of a formula's own -------------------------------------------------
+
+/// `palette NAME = #…, …`: `pal(NAME, i/(n − 1))` is colour i exactly, for
+/// every n from 1 to 32; scaled and covered like the built-ins.
+#[test]
+fn own_palettes_hit_their_colours() {
+    let mut r: u64 = 0x9a1e_77e5_0000_0001;
+    let mut next = || {
+        r ^= r >> 12;
+        r ^= r << 25;
+        r ^= r >> 27;
+        (r.wrapping_mul(0x2545_f491_4f6c_dd1d) >> 40) as u32 & 0xff_ffff
+    };
+    for n in 1..=32usize {
+        let cols: alloc::vec::Vec<u32> = (0..n).map(|_| next()).collect();
+        let list: alloc::vec::Vec<alloc::string::String> =
+            cols.iter().map(|c| alloc::format!("#{c:06x}")).collect();
+        // Column i shows colour i at k = i/(n - 1) (0 for n = 1).
+        let k = if n == 1 {
+            "0".into()
+        } else {
+            alloc::format!("min(px, {})/{}", n - 1, n - 1)
+        };
+        let src = alloc::format!("palette mine = {}\npal(mine, {k})", list.join(",\n  "));
+        let f = spr_frame(&src);
+        for (i, &c) in cols.iter().enumerate() {
+            let p = &f[i * 3..i * 3 + 3];
+            assert_eq!(
+                p,
+                [(c >> 16) as u8, (c >> 8) as u8, c as u8],
+                "{n} colours: colour {i}\n{src}"
+            );
+        }
+        // The ends: below 0 the first, past 1 the last.
+        let g = spr_frame(&alloc::format!(
+            "palette mine = {}\npal(mine, x*3 - 1)",
+            list.join(", ")
+        ));
+        assert_eq!(
+            &g[..3],
+            &[(cols[0] >> 16) as u8, (cols[0] >> 8) as u8, cols[0] as u8]
+        );
+        let l = cols[n - 1];
+        assert_eq!(
+            &g[127 * 3..128 * 3],
+            &[(l >> 16) as u8, (l >> 8) as u8, l as u8]
+        );
+    }
+    // Scaled (`pal(P, v) * k`) and covered, as `rgb` of its bytes would be.
+    let a = spr_frame("palette sea = #003366, #3399cc, #ffffff\npal(sea, 0.5) * y");
+    let b = spr_frame("rgb(0.2*y, 0.6*y, 0.8*y)");
+    assert_eq!(a, b);
+    let c = spr_frame("palette sea = #003366, #3399cc, #ffffff\nlayer { gray(0.25) }\nlayer add { pal(sea, 1, x) }");
+    let d = spr_frame("layer { gray(0.25) }\nlayer add { rgb(1, 1, 1, x) }");
+    assert_eq!(c, d);
+    // Three of a formula's own, one stored once, in parts too; a name a
+    // formula sets is still that name.
+    let p = compile("palette a1 = #f00, #0f0\npalette a2 = #00f, #fff\npart q {\n  palette a3 = #f00, #0f0\n  palette a4 = #123, #456\n  pal(a4, x)\n}\nlayer { pal(a1, x) }\nlayer add { pal(a2, y, 0.5) }\nlayer add { q(x, y, 0.5) }").unwrap();
+    assert_eq!(p.layers(), 3);
+    compile("palette = 3\ngray(palette*x)").unwrap();
+    assert_eq!(
+        spr_frame("palette p1 = #ff0000\npal(p1, x)")[..3],
+        [255, 0, 0]
+    );
+}
+
+/// The palettes' errors (E921-E924).
+const PALETTE_ERRORS: &[(&str, &str, usize, usize, &str)] = &[
+    (
+        "layer {\npalette p = #fff\npal(p, x)\n}",
+        "a palette goes at the top",
+        2,
+        1,
+        "E921",
+    ),
+    (
+        "palette p = #fff, 3\npal(p, x)",
+        "a palette is 1 to 32 colours",
+        1,
+        19,
+        "E922",
+    ),
+    (
+        "palette p = red\npal(p, x)",
+        "a palette is 1 to 32 colours",
+        1,
+        13,
+        "E922",
+    ),
+    (
+        "palette p1 = #f00\npalette p2 = #0f0\npalette p3 = #00f\npalette p4 = #fff\npal(p4, x)",
+        "3 palettes of its own at most",
+        4,
+        1,
+        "E923",
+    ),
+    (
+        "palette fire = #f00\npal(fire, x)",
+        "a palette's name",
+        1,
+        9,
+        "—",
+    ),
+    (
+        "palette p = #f00\npalette p = #0f0\npal(p, x)",
+        "`p` is already set on line 1",
+        2,
+        9,
+        "—",
+    ),
+    ("palette p = #f00\npal(q, x)", "and yours: p", 2, 5, "—"),
+];
+
+#[test]
+fn palette_error_messages() {
+    let mut bad = alloc::vec::Vec::new();
+    for &(src, want, line, col, code) in PALETTE_ERRORS {
+        match compile(src) {
+            Ok(_) => bad.push(alloc::format!("{code} {src:?}: compiled")),
+            Err(e) => {
+                let lc = e.line_col(src);
+                if !e.msg.contains(want) || lc != (line, col) {
+                    bad.push(alloc::format!(
+                        "{code} {src:?}: got {:?} at {lc:?}, want {want:?} at {:?}",
+                        e.msg,
+                        (line, col)
+                    ));
+                }
+            }
+        }
+    }
+    let many: alloc::vec::Vec<alloc::string::String> =
+        (0..33).map(|k| alloc::format!("#{k:02x}0000")).collect();
+    let e = compile(&alloc::format!(
+        "palette p = {}\npal(p, x)",
+        many.join(", ")
+    ))
+    .unwrap_err();
+    if !e.msg.contains("1 to 32 colours") {
+        bad.push(alloc::format!("E922 33: {}", e.msg));
+    }
+    // 200 table numbers and two palettes: past 256.
+    let nums: alloc::vec::Vec<alloc::string::String> =
+        (0..200).map(|k| alloc::format!("{k}")).collect();
+    let e = compile(&alloc::format!(
+        "table T = {}\npalette p = #f00\npalette q = #0f0\npal(q, T[x])",
+        nums.join(", ")
+    ))
+    .unwrap_err();
+    if !e
+        .msg
+        .contains("tables, sprites and palettes hold 256 numbers")
+    {
+        bad.push(alloc::format!("E924: {}", e.msg));
+    }
+    let e = compile(&alloc::format!(
+        "palette p = #f00\npalette q = #0f0\ntable T = {}\npal(q, T[x])",
+        nums.join(", ")
+    ))
+    .unwrap_err();
+    if !e.msg.contains("256") {
+        bad.push(alloc::format!("E924 (table after): {}", e.msg));
+    }
+    assert!(bad.is_empty(), "\n{}", bad.join("\n"));
+}
+

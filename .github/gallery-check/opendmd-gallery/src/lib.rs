@@ -1,29 +1,35 @@
 //! The formula gallery's checker.
 //!
 //! The public gallery is a folder of plain-text files in the public site
-//! repo (`gallery/<slug>.psi`), each a header of comment lines and then a
-//! formula in Psi (`opendmd-psi`):
+//! repo (`gallery/<slug>.psi`), each a header of two comment lines and then
+//! a formula in Psi (`opendmd-psi`) that says its own name and what it is:
 //!
 //! ```text
-//! -- name: Plasma
-//! -- description: The demoscene classic: three waves, every colour
 //! -- author: OpenDMD
 //! -- licence: CC0-1.0
-//! -- values: a=0.3
+//! name "Plasma"
+//! about "The demoscene classic: three waves, every colour"
+//! control speed 0..1 = 0.3 "Speed"
 //! loop 8
 //! wave = sin(x*2 + t/8) + sin(y*1.5 - t/4)
-//! hsv(wave/4 + t/8, 0.9, 1)
+//! hsv(wave/4 + t/8 + speed, 0.9, 1)
 //! ```
 //!
-//! The first four lines are required, in that order (`license` is accepted
-//! for `licence`); `values` (the sliders' starting positions) is optional.
+//! The two header lines are required, in that order (`license` is accepted
+//! for `licence`); OpenDMD's own examples (`opendmd-web/formulas/`, checked
+//! `trusted`) may add a third, `-- bundle`: the web app ships that one. The
+//! formula's `name "…"` and `about "…"` lines are required too; they, its
+//! `control` lines (where the sliders start: their defaults) and its `look`
+//! line are read from the compiler ([`compile_declared`]), so the gallery,
+//! the web app and the panel read them the same way. (Until formula-apps
+//! F3 the header carried `-- name:`, `-- description:` and `-- values:`.)
 //! The header lines are Psi comments, so the whole file is a formula too.
 //!
 //! [`check_path`] and [`check_file`] are everything a contribution must
 //! pass: the path (one flat `gallery/<slug>.psi`), the size, the text (UTF-8
 //! without control, invisible or direction-changing characters; no `<` or
 //! `>` in the header), the header's fields and limits, the licence, that it
-//! compiles, and its cost on the panel (`Program::esp32_us`). The checker
+//! compiles, and its cost on the panel (`Program::esp32_us_still`). The checker
 //! never runs anything but the Psi VM, which has no I/O: a formula is
 //! arithmetic over the pixel and the time.
 //!
@@ -32,7 +38,7 @@
 //! build (on the merged files, before anything is published), and the
 //! tests here. `main.rs` is the command line.
 
-use opendmd_psi::{compile, render_rows, Inputs, Program, Scratch, H, OWN, W};
+use opendmd_psi::{compile, compile_declared, render_rows_ink, Inputs, Program, Scratch, H, OWN, W};
 
 pub mod png;
 
@@ -60,13 +66,18 @@ pub const FRAME_MS: u32 = 20;
 #[derive(Debug, Clone, PartialEq)]
 pub struct Entry {
     pub slug: String,
+    /// The formula's `name "…"` and `about "…"` lines' text.
     pub name: String,
-    pub description: String,
+    pub about: String,
     pub author: String,
     pub licence: String,
-    /// The sliders' starting positions in hundredths (`values: a=0.3` is
-    /// `Some(30)`).
-    pub values: [Option<u8>; 3],
+    /// `-- bundle` (OpenDMD's examples only): the web app ships it.
+    pub bundle: bool,
+    /// Its `look` line: the blend and amount (`look` alone is over 100).
+    pub look: Option<(&'static str, u8)>,
+    /// Its controls' labels, slot a, b, c in order (a slot read without a
+    /// `control` line: its letter).
+    pub controls: Vec<String>,
     /// The formula without the header (what a share link carries).
     pub src: String,
     /// Steps, loop length (ms), the inputs it reads (bits 0-2 the sliders
@@ -259,41 +270,6 @@ fn field(problems: &mut Vec<String>, what: &str, v: &str, max: usize) {
     }
 }
 
-/// `a=0.3 c=1`: each slider at most once, 0 to 1 in at most two decimals.
-fn values(v: &str) -> Result<[Option<u8>; 3], String> {
-    let mut out = [None; 3];
-    let bad = || {
-        "values are like `a=0.3 b=1`: a, b or c, each 0 to 1 with at most two decimals".to_string()
-    };
-    for part in v.split(' ') {
-        let (k, num) = part.split_once('=').ok_or_else(bad)?;
-        let i = match k {
-            "a" => 0,
-            "b" => 1,
-            "c" => 2,
-            _ => return Err(bad()),
-        };
-        let (whole, frac) = num.split_once('.').unwrap_or((num, ""));
-        let digits = |s: &str| s.bytes().all(|b| b.is_ascii_digit());
-        if whole.is_empty()
-            || whole.len() > 1
-            || frac.len() > 2
-            || !digits(whole)
-            || !digits(frac)
-            || out[i].is_some()
-        {
-            return Err(bad());
-        }
-        let h = whole.parse::<u32>().map_err(|_| bad())? * 100
-            + format!("{frac:0<2}").parse::<u32>().map_err(|_| bad())?;
-        if h > 100 {
-            return Err(bad());
-        }
-        out[i] = Some(h as u8);
-    }
-    Ok(out)
-}
-
 /// A header line `-- <key>: <value>`, for any of `keys`.
 fn header<'a>(line: Option<&'a str>, keys: &[&str]) -> Option<&'a str> {
     let rest = line?.strip_prefix("-- ")?;
@@ -309,7 +285,8 @@ pub fn check_file(slug: &str, bytes: &[u8]) -> Result<Entry, Vec<String>> {
 }
 
 /// [`check_file`]; `trusted` (OpenDMD's own examples, at the site build)
-/// lets the name or author be one of the [`RESERVED`].
+/// lets the name or author be one of the [`RESERVED`], and the header carry
+/// `-- bundle`.
 pub fn check_file_as(slug: &str, bytes: &[u8], trusted: bool) -> Result<Entry, Vec<String>> {
     if bytes.len() > MAX_FILE {
         return Err(vec![format!(
@@ -327,11 +304,8 @@ pub fn check_file_as(slug: &str, bytes: &[u8], trusted: bool) -> Result<Entry, V
     let mut problems = Vec::new();
     let lines: Vec<&str> = text.split('\n').collect();
     let line = |i: usize| lines.get(i).copied();
-    let skip = if header(line(4), &["values"]).is_some() {
-        5
-    } else {
-        4
-    };
+    let bundle = line(2).is_some_and(|l| l.trim_end() == "-- bundle");
+    let skip = if bundle { 3 } else { 2 };
     // Characters: where and what (each kind once); a tab only in the formula.
     let mut seen: Vec<&str> = Vec::new();
     let crlf = text.contains("\r\n");
@@ -364,40 +338,26 @@ pub fn check_file_as(slug: &str, bytes: &[u8], trusted: bool) -> Result<Entry, V
     if let Err(e) = check_slug(slug) {
         problems.push(e);
     }
-    let (Some(name), Some(description), Some(author), Some(licence)) = (
-        header(line(0), &["name"]),
-        header(line(1), &["description"]),
-        header(line(2), &["author"]),
-        header(line(3), &["licence", "license"]),
+    let (Some(author), Some(licence)) = (
+        header(line(0), &["author"]),
+        header(line(1), &["licence", "license"]),
     ) else {
-        problems.push(
-            "the file must start with four lines: `-- name: …`, `-- description: …`, `-- author: …`, `-- licence: CC0-1.0`"
-                .into(),
-        );
+        problems.push(if header(line(0), &["name"]).is_some() {
+            "the header is two lines now, `-- author: …` and `-- licence: CC0-1.0`: the name and the description are the formula's own first lines, `name \"…\"` and `about \"…\"` (and `-- values:` is the `control` lines' defaults)".into()
+        } else {
+            "the file must start with two lines: `-- author: …`, `-- licence: CC0-1.0`, then the formula, starting `name \"…\"` and `about \"…\"`".into()
+        });
         return Err(problems);
     };
-    field(&mut problems, "name", name, MAX_NAME);
-    field(&mut problems, "description", description, MAX_DESCRIPTION);
-    field(&mut problems, "author", author, MAX_AUTHOR);
-    if !trusted {
-        for (what, v) in [("name", name), ("author", author)] {
-            if RESERVED.contains(&skeleton(v).as_str()) {
-                problems.push(format!("the {what} can't be OpenDMD's or a maintainer's"));
-            }
-        }
+    if bundle && !trusted {
+        problems.push("`-- bundle` is for the examples OpenDMD ships: leave it out".into());
     }
+    field(&mut problems, "author", author, MAX_AUTHOR);
     if !LICENCES.contains(&licence) {
         problems.push(format!(
             "the licence must be one of {}",
             LICENCES.join(", ")
         ));
-    }
-    let mut vals = [None; 3];
-    if let Some(v) = header(line(4), &["values"]) {
-        match values(v) {
-            Ok(v) => vals = v,
-            Err(e) => problems.push(e),
-        }
     }
     // The formula: everything after the header, byte for byte.
     let offset: usize = text.split_inclusive('\n').take(skip).map(str::len).sum();
@@ -409,8 +369,9 @@ pub fn check_file_as(slug: &str, bytes: &[u8], trusted: bool) -> Result<Entry, V
         problems.push("there is no formula after the header".into());
         return Err(problems);
     }
-    let prog = match compile(src) {
-        Ok(p) => p,
+    let mut prog = Box::<Program>::default();
+    let declared = match compile_declared(src, &mut prog) {
+        Ok(d) => d,
         Err(e) => {
             let line = skip + src[..e.start.min(src.len())].matches('\n').count() + 1;
             problems.push(format!(
@@ -420,7 +381,30 @@ pub fn check_file_as(slug: &str, bytes: &[u8], trusted: bool) -> Result<Entry, V
             return Err(problems);
         }
     };
-    let us = prog.esp32_us();
+    // (compile_declared skips the optimiser: the program as it plays.)
+    let prog = compile(src).expect("it compiled");
+    let text_of = |r: Option<(u32, u32)>| r.map(|(a, b)| &src[a as usize..b as usize]);
+    // Its own name and line about it, as the web app shows them.
+    let (name, about) = (text_of(declared.name), text_of(declared.about));
+    match name {
+        Some(n) => field(&mut problems, "name", n, MAX_NAME),
+        None => problems.push("the formula needs a name: a first line like `name \"Rainbow rings\"`".into()),
+    }
+    match about {
+        Some(d) => field(&mut problems, "about line", d, MAX_DESCRIPTION),
+        None => problems.push("the formula needs a line about it, after its name: `about \"Rings rippling out from the middle\"`".into()),
+    }
+    if !trusted {
+        for (what, v) in [("name", name.unwrap_or("")), ("author", author)] {
+            if RESERVED.contains(&skeleton(v).as_str()) {
+                problems.push(format!("the {what} can't be OpenDMD's or a maintainer's"));
+            }
+        }
+    }
+    // As the panel plays it: with its still cache when it has values for
+    // one (a gallery formula is played as itself; a look is checked by the
+    // player when it is chosen).
+    let us = prog.esp32_us_still();
     if us > MAX_US {
         problems.push(format!(
             "the formula is too heavy for the panel: about {:.1} ms a frame, {:.0} ms at most",
@@ -431,13 +415,22 @@ pub fn check_file_as(slug: &str, bytes: &[u8], trusted: bool) -> Result<Entry, V
     if !problems.is_empty() {
         return Err(problems);
     }
+    let controls = (0..3)
+        .filter(|&k| declared.controls[k].is_some() || prog.sliders() & (1 << k) != 0)
+        .map(|k| match declared.controls[k] {
+            Some(c) => text_of(c.label).or(text_of(Some(c.name))).unwrap_or("").to_string(),
+            None => ["a", "b", "c"][k].to_string(),
+        })
+        .collect();
     Ok(Entry {
         slug: slug.to_string(),
-        name: name.to_string(),
-        description: description.to_string(),
+        name: name.unwrap_or("").to_string(),
+        about: about.unwrap_or("").to_string(),
         author: author.to_string(),
         licence: licence.to_string(),
-        values: vals,
+        bundle,
+        look: prog.meta().look(),
+        controls,
         src: src.to_string(),
         steps: prog.len(),
         loop_ms: prog.loop_ms(),
@@ -471,27 +464,27 @@ pub fn sample() -> Vec<u8> {
     p
 }
 
-/// One 128 × 32 RGB888 frame at `ms` into the loop, the sliders where the
-/// entry starts them and the clock at [`CLOCK`]; a formula that draws over
-/// a GIF is drawn over [`sample`], as the web app's editor shows it.
-pub fn frame(prog: &Program, values: &[Option<u8>; 3], ms: u32) -> Vec<u8> {
-    // As the web app's Math.round(v * 65536) (never a tie for hundredths).
-    let q = |v: Option<u8>| ((i32::from(v.unwrap_or(0)) << 16) + 50) / 100;
-    let inputs = Inputs {
-        t: Inputs::at_ms(ms),
+/// One 128 × 32 RGB888 frame at `ms` into the loop, the controls at their
+/// defaults (its `control` lines') and the clock at [`CLOCK`]; a formula
+/// that draws over a GIF is drawn over [`sample`], as the web app's editor
+/// shows it.
+pub fn frame(prog: &Program, ms: u32) -> Vec<u8> {
+    let mut inputs = Inputs {
         hour: CLOCK.0,
         minute: CLOCK.1,
         second: CLOCK.2,
-        a: q(values[0]),
-        b: q(values[1]),
-        c: q(values[2]),
+        ..Inputs::default()
     };
+    [inputs.a, inputs.b, inputs.c] = prog.meta().values([None; 3]);
+    // (A formula that never repeats: `ms` since it started, seed 0.)
+    inputs.set_ms(prog, u64::from(ms));
     let mut scratch: Box<Scratch<128>> = Box::new(Scratch::new());
     let mut out = vec![0u8; W * H * 3];
     let under = prog.over().then(sample);
-    render_rows(
+    render_rows_ink(
         prog,
         &mut scratch,
+        Some(&mut opendmd_psi::Ink::boxed()),
         &inputs,
         &OWN,
         under.as_deref(),
@@ -502,9 +495,23 @@ pub fn frame(prog: &Program, values: &[Option<u8>; 3], ms: u32) -> Vec<u8> {
 }
 
 /// The thumbnail's moment: 30% into the loop, on a frame (as the web app's
-/// tiles).
+/// tiles); for a formula that never repeats (`loop_ms` 0), of its first
+/// [`FOREVER_MS`].
 pub fn thumb_ms(loop_ms: u32) -> u32 {
-    (loop_ms * 3 / 10) / FRAME_MS * FRAME_MS
+    (shown(loop_ms) * 3 / 10) / FRAME_MS * FRAME_MS
+}
+
+/// What a formula that never repeats is shown over (its thumbnail and its
+/// sheet): its first minute.
+pub const FOREVER_MS: u32 = 60_000;
+
+/// The time a formula's frames are shown across: its loop, or a minute.
+fn shown(loop_ms: u32) -> u32 {
+    if loop_ms == 0 {
+        FOREVER_MS
+    } else {
+        loop_ms
+    }
 }
 
 /// The entry's thumbnail: one frame, 128 × 32, as a PNG.
@@ -513,7 +520,7 @@ pub fn thumbnail(e: &Entry) -> Vec<u8> {
     png::encode(
         W as u32,
         H as u32,
-        &frame(&prog, &e.values, thumb_ms(e.loop_ms)),
+        &frame(&prog, thumb_ms(e.loop_ms)),
     )
 }
 
@@ -528,8 +535,8 @@ pub fn sheet(e: &Entry) -> Vec<u8> {
     let h = N * fh + (N - 1) * GAP;
     let mut img = vec![0x16u8; w * h * 3];
     for k in 0..N {
-        let ms = (e.loop_ms * k as u32 / N as u32) / FRAME_MS * FRAME_MS;
-        let f = frame(&prog, &e.values, ms);
+        let ms = (shown(e.loop_ms) * k as u32 / N as u32) / FRAME_MS * FRAME_MS;
+        let f = frame(&prog, ms);
         let top = k * (fh + GAP);
         for y in 0..fh {
             for x in 0..w {
@@ -550,33 +557,28 @@ pub fn sheet(e: &Entry) -> Vec<u8> {
 }
 
 /// JSON for an entry (one line; `<`, `>` and `&` escaped too, so it is
-/// safe inside HTML as well).
+/// safe inside HTML as well). `look`: `[blend, amount]` or null.
 pub fn json(e: &Entry) -> String {
-    let mut vals = String::new();
-    for (k, v) in ["a", "b", "c"].iter().zip(e.values) {
-        if let Some(v) = v {
-            vals.push_str(&format!(",\"{k}\":{}", hundredths(v)));
-        }
-    }
+    let look = match e.look {
+        Some((b, k)) => format!("[{},{k}]", js(b)),
+        None => "null".into(),
+    };
+    let controls: Vec<String> = e.controls.iter().map(|c| js(c)).collect();
     format!(
-        "{{\"slug\":{},\"name\":{},\"description\":{},\"author\":{},\"licence\":{},\"src\":{},\"steps\":{},\"loop_ms\":{},\"inputs\":{},\"us\":{}{vals}}}",
+        "{{\"slug\":{},\"name\":{},\"about\":{},\"author\":{},\"licence\":{},\"bundle\":{},\"look\":{look},\"controls\":[{}],\"src\":{},\"steps\":{},\"loop_ms\":{},\"inputs\":{},\"us\":{}}}",
         js(&e.slug),
         js(&e.name),
-        js(&e.description),
+        js(&e.about),
         js(&e.author),
         js(&e.licence),
+        e.bundle,
+        controls.join(","),
         js(&e.src),
         e.steps,
         e.loop_ms,
         e.inputs,
         e.us
     )
-}
-
-/// `30` -> `0.3`, `100` -> `1`, `5` -> `0.05`.
-pub fn hundredths(v: u8) -> String {
-    let s = format!("{}.{:02}", v / 100, v % 100);
-    s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
 /// A JSON string.

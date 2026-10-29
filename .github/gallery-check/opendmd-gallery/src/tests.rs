@@ -1,6 +1,6 @@
 use super::*;
 
-const GOOD: &str = "-- name: Rainbow rings\n-- description: Rings rippling out from the middle\n-- author: @someone\n-- licence: CC0-1.0\nloop 4\nd = len((x - 0.5)*4, y - 0.5)\npal(rainbow, frac(d*1.5 - t/2))\n";
+const GOOD: &str = "-- author: @someone\n-- licence: CC0-1.0\nname \"Rainbow rings\"\nabout \"Rings rippling out from the middle\"\nloop 4\nd = len((x - 0.5)*4, y - 0.5)\npal(rainbow, frac(d*1.5 - t/2))\n";
 
 fn problems(slug: &str, text: &str) -> Vec<String> {
     check_file(slug, text.as_bytes()).expect_err("should fail")
@@ -16,47 +16,48 @@ fn a_good_file() {
     assert_eq!(e.name, "Rainbow rings");
     assert_eq!(e.author, "@someone");
     assert_eq!(e.licence, "CC0-1.0");
+    assert_eq!(e.about, "Rings rippling out from the middle");
     assert_eq!(
         e.src,
-        "loop 4\nd = len((x - 0.5)*4, y - 0.5)\npal(rainbow, frac(d*1.5 - t/2))\n"
+        "name \"Rainbow rings\"\nabout \"Rings rippling out from the middle\"\nloop 4\nd = len((x - 0.5)*4, y - 0.5)\npal(rainbow, frac(d*1.5 - t/2))\n"
     );
     assert_eq!(e.loop_ms, 4000);
     assert!(e.us > 0 && e.us <= MAX_US);
-    assert_eq!(e.values, [None; 3]);
+    assert!(!e.bundle && e.look.is_none() && e.controls.is_empty());
     let png = thumbnail(&e);
     assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
     assert!(sheet(&e).len() > png.len());
 }
 
 #[test]
-fn values_and_license_spelling() {
+fn declarations_and_license_spelling() {
+    // Controls (their defaults are where the sliders start), a look line.
     let t = GOOD.replace(
         "-- licence: CC0-1.0\n",
-        "-- license: CC-BY-4.0\n-- values: a=0.3 c=1\n",
-    );
+        "-- license: CC-BY-4.0\n",
+    ).replace(
+        "loop 4\n",
+        "control width 0..1 = 0.3 \"Ring width\"\ncontrol mode = soft, hard\nlook screen 40\nloop 4\n",
+    ).replace("frac(d*1.5 - t/2)", "frac(d*1.5 - t/2 + width + mode + c)");
     let e = check_file("x1", t.as_bytes()).unwrap();
     assert_eq!(e.licence, "CC-BY-4.0");
-    assert_eq!(e.values, [Some(30), None, Some(100)]);
-    assert!(e.src.starts_with("loop 4"));
-    for bad in [
-        "a=1.5",
-        "a=0.333",
-        "d=0.1",
-        "a=0.1 a=0.2",
-        "a=.5",
-        "a=",
-        "a=0.1  b=0.2",
-    ] {
-        let t = GOOD.replace(
-            "-- licence: CC0-1.0\n",
-            &format!("-- licence: CC0-1.0\n-- values: {bad}\n"),
-        );
-        assert!(has(&problems("x", &t), "values are like"), "{bad}");
-    }
-    assert_eq!(hundredths(30), "0.3");
-    assert_eq!(hundredths(5), "0.05");
-    assert_eq!(hundredths(100), "1");
-    assert_eq!(hundredths(0), "0");
+    assert_eq!(e.controls, ["Ring width", "mode", "c"]);
+    assert_eq!(e.look, Some(("screen", 40)));
+    assert!(e.src.starts_with("name \"Rainbow rings\"\n"));
+    let j = json(&e);
+    assert!(j.contains("\"look\":[\"screen\",40],\"controls\":[\"Ring width\",\"mode\",\"c\"]"), "{j}");
+    // At their defaults: as a slider at 0.3 draws it.
+    let p = compile(&e.src).unwrap();
+    let at = compile(&e.src.replace("control width 0..1 = 0.3", "control width 0..1 = 0")).unwrap();
+    assert_ne!(frame(&p, 0), frame(&at, 0));
+    // The old header (name, description, values) says what changed.
+    let old = "-- name: Rainbow rings\n-- description: Rings\n-- author: @someone\n-- licence: CC0-1.0\ngray(x)\n";
+    assert!(has(&problems("x", old), "the header is two lines now"));
+    // `-- bundle`: OpenDMD's examples only.
+    let b = GOOD.replace("-- licence: CC0-1.0\n", "-- licence: CC0-1.0\n-- bundle\n");
+    assert!(has(&problems("x", &b), "is for the examples OpenDMD ships"));
+    let e = check_file_as("x", b.as_bytes(), true).unwrap();
+    assert!(e.bundle && e.src.starts_with("name"));
 }
 
 #[test]
@@ -93,18 +94,23 @@ fn header_rules() {
     // Missing or out of order.
     assert!(has(
         &problems("x", "loop 4\ngray(x)\n"),
-        "must start with four lines"
+        "must start with two lines"
     ));
     let swapped = GOOD.replace(
-        "-- name: Rainbow rings\n-- description: Rings rippling out from the middle\n",
-        "-- description: Rings rippling out from the middle\n-- name: Rainbow rings\n",
+        "-- author: @someone\n-- licence: CC0-1.0\n",
+        "-- licence: CC0-1.0\n-- author: @someone\n",
     );
-    assert!(has(&problems("x", &swapped), "must start with four lines"));
-    // Limits.
+    assert!(has(&problems("x", &swapped), "must start with two lines"));
+    // The formula's own name and about lines.
+    let nameless = GOOD.replace("name \"Rainbow rings\"\n", "");
+    assert!(has(&problems("x", &nameless), "needs a name"));
+    let aboutless = GOOD.replace("about \"Rings rippling out from the middle\"\n", "");
+    assert!(has(&problems("x", &aboutless), "needs a line about it"));
+    // Limits (the language's own: 60 and 120; the gallery's name: 40).
     let long = GOOD.replace("Rainbow rings", &"n".repeat(41));
     assert!(has(&problems("x", &long), "the name is 41 characters"));
     let long = GOOD.replace("Rings rippling out from the middle", &"d".repeat(121));
-    assert!(has(&problems("x", &long), "the description is 121"));
+    assert!(has(&problems("x", &long), "doesn't compile"));
     let long = GOOD.replace("@someone", &"a".repeat(41));
     assert!(has(&problems("x", &long), "the author is 41"));
     let empty = GOOD.replace("-- author: @someone", "-- author:");
@@ -116,14 +122,15 @@ fn header_rules() {
     )
     .unwrap();
     assert_eq!(e.name, "Moiré ✨");
-    // HTML-ish text.
+    // HTML-ish text: the header's own check, the language's in quotes.
+    let ps = problems("x", &GOOD.replace("@someone", "a>b"));
+    assert!(has(&ps, "may not contain < or >"), "{ps:?}");
     for (k, v) in [
         ("Rainbow rings", "<img src=x onerror=alert(1)>"),
-        ("@someone", "a>b"),
         ("Rings rippling out from the middle", "<b>"),
     ] {
         let ps = problems("x", &GOOD.replace(k, v));
-        assert!(has(&ps, "may not contain < or >"), "{v}: {ps:?}");
+        assert!(has(&ps, "doesn't compile"), "{v}: {ps:?}");
     }
     // Licence allow-list.
     for l in ["MIT", "GPL-3.0", "cc0-1.0", "CC0", "CC-BY-SA-4.0", ""] {
@@ -157,14 +164,17 @@ fn hostile_characters() {
         '\r',
         '\u{2028}',
     ] {
-        let t = GOOD.replace("Rainbow rings", &format!("Rainbow{c}rings"));
+        let t = GOOD.replace("@someone", &format!("@some{c}one"));
         let ps = check_file("x", t.as_bytes()).expect_err(&format!("U+{:04X}", c as u32));
         assert!(has(&ps, "line 1"), "U+{:04X}: {ps:?}", c as u32);
+        // In the name: refused (by the checker, or the language's quotes).
+        let t = GOOD.replace("Rainbow rings", &format!("Rainbow{c}rings"));
+        assert!(check_file("x", t.as_bytes()).is_err(), "U+{:04X}", c as u32);
     }
     // A tab is fine in the formula, not in the header.
     assert!(check_file("x", GOOD.replace("d = len", "d =\tlen").as_bytes()).is_ok());
     assert!(has(
-        &problems("x", &GOOD.replace("Rainbow rings", "Rainbow\trings")),
+        &problems("x", &GOOD.replace("@someone", "@some\tone")),
         "control"
     ));
     // Not text.
@@ -173,7 +183,7 @@ fn hostile_characters() {
         "not plain text"
     ));
     assert!(has(
-        &check_file("x", b"-- name: a\0b").unwrap_err(),
+        &check_file("x", b"-- author: a\0b").unwrap_err(),
         "not plain text"
     ));
 }
@@ -186,14 +196,14 @@ fn size_compile_and_cost() {
     let broken = GOOD.replace("pal(rainbow, frac(d*1.5 - t/2))", "pal(rainbow, frac(tme))");
     let ps = problems("x", &broken);
     assert!(has(&ps, "line 7: the formula doesn't compile"), "{ps:?}");
+    // (Its own lines are counted from the file's top, header included.)
     // Heavy: noise and divisions per pixel.
     let heavy = GOOD.replace(
         "pal(rainbow, frac(d*1.5 - t/2))",
         "n = noise(x*8, y*4, t) + noise(x*4, y*8, t) + noise(x*2, y*2, t)\nm = 1/(d + 0.1) + 1/(x + 0.2) + 1/(y + 0.3)\npal(fire, frac(n + m))",
     );
     assert!(has(&problems("x", &heavy), "too heavy"));
-    let none =
-        "-- name: a\n-- description: b\n-- author: c\n-- licence: CC0-1.0\n-- only a comment\n";
+    let none = "-- author: c\n-- licence: CC0-1.0\n-- only a comment\n";
     assert!(has(&problems("x", none), "no formula"));
 }
 
@@ -201,7 +211,8 @@ fn size_compile_and_cost() {
 fn json_and_markdown_escape() {
     let e = check_file("rainbow-rings", GOOD.as_bytes()).unwrap();
     let j = json(&e);
-    assert!(j.starts_with("{\"slug\":\"rainbow-rings\",\"name\":\"Rainbow rings\""));
+    assert!(j.starts_with("{\"slug\":\"rainbow-rings\",\"name\":\"Rainbow rings\",\"about\":\"Rings rippling out from the middle\""));
+    assert!(j.contains("\"bundle\":false,\"look\":null,\"controls\":[]"), "{j}");
     assert!(j.contains("\\n"));
     assert_eq!(js("a<b>&\"\\"), "\"a\\u003cb\\u003e\\u0026\\\"\\\\\"");
     assert_eq!(
@@ -211,39 +222,42 @@ fn json_and_markdown_escape() {
     assert!(!md("a\u{202E}b\n").contains('\u{202E}'));
 }
 
-/// Every example in the web app's formulas.json passes, as the site build
-/// writes it (author OpenDMD, CC0).
+/// Every example (`opendmd-web/formulas/*.psi`) passes as the site build
+/// checks it (trusted: author OpenDMD), ten of them `-- bundle`, and every
+/// one that draws over a GIF says it can be the look.
 #[test]
 fn the_examples_pass() {
-    let text = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../opendmd-web/www/formulas.json"
-    ))
-    .unwrap();
-    let (mut n, mut over) = (0, 0);
-    for line in text.lines().filter(|l| l.starts_with('{')) {
-        let name = string_field(line, "name");
-        let desc = string_field(line, "desc");
-        let src = string_field(line, "src");
-        let file = format!("-- name: {name}\n-- description: {desc}\n-- author: OpenDMD\n-- licence: CC0-1.0\n{src}\n");
-        let e = check_file_as("example", file.as_bytes(), true)
-            .unwrap_or_else(|p| panic!("{name}: {p:?}"));
-        assert_eq!(e.src, format!("{src}\n"));
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../opendmd-web/formulas");
+    let mut files: Vec<_> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|x| x == "psi"))
+        .collect();
+    files.sort();
+    let (mut n, mut over, mut bundled) = (0, 0, 0);
+    for p in &files {
+        let slug = p.file_stem().unwrap().to_str().unwrap();
+        check_slug(slug).unwrap();
+        let e = check_file_as(slug, &std::fs::read(p).unwrap(), true)
+            .unwrap_or_else(|ps| panic!("{slug}: {ps:?}"));
+        assert_eq!(e.author, "OpenDMD");
         // Its thumbnail is lit (as site-smoke checks the gallery page: some
         // pixel's r + g + b over 90); one that draws over a GIF is drawn
         // over the sample picture, not black.
         let prog = compile(&e.src).unwrap();
-        let f = frame(&prog, &e.values, thumb_ms(e.loop_ms));
+        let f = frame(&prog, thumb_ms(e.loop_ms));
         assert!(
             f.chunks(3)
                 .any(|p| p.iter().map(|&v| u32::from(v)).sum::<u32>() > 90),
-            "{name}: its thumbnail is dark"
+            "{slug}: its thumbnail is dark"
         );
+        assert_eq!(prog.over(), e.look.is_some(), "{slug}: over a GIF, and a look line");
         over += usize::from(prog.over());
+        bundled += usize::from(e.bundle);
         n += 1;
     }
-    assert_eq!(n, 27);
-    assert!(over >= 6, "the examples that draw over a GIF: {over}");
+    assert_eq!((n, bundled), (33, 10));
+    assert!(over >= 8, "the examples that draw over a GIF: {over}");
 }
 
 /// A formula that draws over a GIF is previewed over the sample picture
@@ -259,31 +273,12 @@ fn over_the_sample() {
     assert_eq!(s[(31 * W) * 3], 30);
     let shown = compile("rgb(ur, ug, ub)").unwrap();
     assert!(shown.over());
-    let f = frame(&shown, &[None; 3], 0);
+    let f = frame(&shown, 0);
     let close = f.iter().zip(&s).all(|(a, b)| a.abs_diff(*b) <= 1);
     assert!(close, "rgb(ur, ug, ub) is the sample");
     let own = compile("rgb(0, 0, 0)").unwrap();
     assert!(!own.over());
-    assert!(frame(&own, &[None; 3], 0).iter().all(|&v| v == 0));
-}
-
-/// A JSON string field, the simple way (the file is one object a line).
-fn string_field(line: &str, key: &str) -> String {
-    let start = line.find(&format!("\"{key}\": \"")).unwrap() + key.len() + 5;
-    let mut out = String::new();
-    let mut chars = line[start..].chars();
-    while let Some(c) = chars.next() {
-        match c {
-            '"' => break,
-            '\\' => match chars.next().unwrap() {
-                'n' => out.push('\n'),
-                't' => out.push('\t'),
-                c => out.push(c),
-            },
-            c => out.push(c),
-        }
-    }
-    out
+    assert!(frame(&own, 0).iter().all(|&v| v == 0));
 }
 
 #[test]

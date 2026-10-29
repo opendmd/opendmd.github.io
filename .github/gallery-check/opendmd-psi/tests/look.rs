@@ -86,6 +86,12 @@ fn composes_as_written() {
     assert!(compose("loop 0.5\ngray(t)", "screen", 60)
         .unwrap()
         .starts_with("loop 0.5\npart look {"));
+    // One that never repeats: so does its look, the same picture.
+    let src = "loop forever\ngray(frac(t*0.15 + x))";
+    let look = compose(src, "screen", 40).unwrap();
+    assert!(look.starts_with("loop forever\npart look {"), "{look}");
+    let p = opendmd_psi::compile(&look).unwrap();
+    assert!(p.forever());
     assert!(compose(PLASMA, "lighten", 40).is_err(), "not a blend");
     assert!(compose("gray(", "screen", 40).is_err(), "does not compile");
 }
@@ -124,9 +130,11 @@ fn every_composition_compiles_to_a_look() {
     // Plasma, screened at 40 %: what the panel is asked to draw.
     let p = compile(&compose(PLASMA, "screen", 40).unwrap()).unwrap();
     assert_eq!(p.layers(), 1);
-    // (~8.2 ms: the spare measured it at 8.55 ms as a look, a 12 ms limit.)
+    // (~8.2 ms: the spare measured it at 8.55 ms as a look, a 12 ms limit;
+    // ~6.7 ms once its waves of x are worked out once a column; ~5.9 with
+    // the narrowed steps.)
     assert!(
-        (7_500..12_000).contains(&p.esp32_us()),
+        (5_000..12_000).contains(&p.esp32_us()),
         "{} µs",
         p.esp32_us()
     );
