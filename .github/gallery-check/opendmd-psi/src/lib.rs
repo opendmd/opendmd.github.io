@@ -45,7 +45,7 @@ mod tables;
 mod vm;
 
 pub use compile::{
-    compact, compile_declared, compile_heap_estimate, compile_into, compile_layout, compile_opts, compile_unfused, compile_with, number,
+    compact, compile_declared, compile_heap_estimate, compile_heap_for_tokens, compile_into, compile_layout, compile_opts, compile_unfused, compile_with, number, squeeze,
     Declared, DeclaredControl, Error, Info, MAX_ABOUT_TEXT, MAX_DEPTH, MAX_LABEL_TEXT,
     MAX_NAME_TEXT, MAX_NODES, MAX_SOURCE, NO_MEMORY,
 };
@@ -303,13 +303,20 @@ pub mod golden {
 }
 
 /// Formulas that make the compiler work hardest within what the panel
-/// accepts (a path of at most 2,048 B, as `fx_psi::path` writes it: the
+/// accepted inline (a path of at most [`worst::PATH_MAX`], as `fx_psi::path` writes it: the
 /// source compacted, `+` as `%2B`): compile-time tests, the bench, the
 /// host's stack probe (`examples/stack.rs`) and `psi-probe`'s stack report.
 #[doc(hidden)]
 pub mod worst {
     use alloc::format;
     use alloc::string::String;
+
+    /// The size the worst cases are made to: a path of 2,048 B, the inline
+    /// cap before Formulas were played by reference (~700-800 tokens). What
+    /// compiles on the device is bounded by its heap check instead
+    /// (`compile_heap_estimate`: about 1,300 tokens with ~63 KB free;
+    /// Endless road is ~1,100); nesting, not length, bounds the stack.
+    pub const PATH_MAX: usize = 2048;
 
     /// The path's length for `src` (`@formula?src=` + compacted, `+` 3 B).
     pub fn path_len(src: &str) -> usize {
@@ -324,7 +331,7 @@ pub mod worst {
         let mut k = 0;
         loop {
             let next = format!("{s}{}\n", line(k));
-            if path_len(&format!("{next}{}", end(k))) > 2048 {
+            if path_len(&format!("{next}{}", end(k))) > PATH_MAX {
                 return format!("{s}{}", end(k.saturating_sub(1)));
             }
             s = next;
@@ -359,7 +366,7 @@ pub mod worst {
     pub fn distinct() -> String {
         let mut s = String::from("v = 0");
         let mut k = 0;
-        while path_len(&format!("{s} + x*1.{k:03}\ngray(v)")) <= 2048 {
+        while path_len(&format!("{s} + x*1.{k:03}\ngray(v)")) <= PATH_MAX {
             s = format!("{s} + x*1.{k:03}");
             k += 1;
         }
@@ -375,7 +382,7 @@ pub mod worst {
             let next = format!(
                 "part p{k} {{\n{s}v = p{j}(x*0.5, y).v + p{j}(y, x).v + p{j}(x + 0.1, y).v + p{j}(x, y*2).v + p{j}(1 - x, y).v\ngray(v)\n}}\n"
             );
-            if path_len(&format!("{next}p{k}")) > 2048
+            if path_len(&format!("{next}p{k}")) > PATH_MAX
                 || crate::compile(&format!("{next}p{k}")).is_err_and(|e| e.msg.contains("too deep"))
             {
                 return format!("{s}p{j}");

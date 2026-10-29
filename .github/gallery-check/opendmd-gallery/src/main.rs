@@ -137,13 +137,14 @@ fn describe(e: &Entry) -> String {
 }
 
 /// A regular file's bytes (no symlinks, nothing over the limit).
-fn read_file(p: &Path) -> Result<Vec<u8>, String> {
+fn read_file(p: &Path, trusted: bool) -> Result<Vec<u8>, String> {
     let m = fs::symlink_metadata(p).map_err(|e| e.to_string())?;
     if !m.file_type().is_file() {
         return Err("not a regular file (a link or a folder)".into());
     }
-    if m.len() > MAX_FILE as u64 {
-        return Err(format!("the file is {} bytes: {MAX_FILE} at most", m.len()));
+    let most = opendmd_gallery::max_file(trusted);
+    if m.len() > most as u64 {
+        return Err(format!("the file is {} bytes: {most} at most", m.len()));
     }
     fs::read(p).map_err(|e| e.to_string())
 }
@@ -160,7 +161,7 @@ fn check(o: &Opts) -> ExitCode {
         let r = check_path(&format!("gallery/{name}"))
             .map_err(|e| vec![e])
             .and_then(|slug| {
-                read_file(f)
+                read_file(f, o.trusted)
                     .map_err(|e| vec![e])
                     .and_then(|b| check_file_as(&slug, &b, o.trusted))
             });

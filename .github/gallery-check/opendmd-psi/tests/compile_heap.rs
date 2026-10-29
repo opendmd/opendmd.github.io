@@ -166,7 +166,7 @@ fn compile_peak_heap_is_in_budget() {
     let mut bad = Vec::new();
     for (name, src, bundled) in formulas() {
         let (peak, n, r) = run(&src, &mut prog, usize::MAX);
-        let est = compile_heap_estimate(src.len());
+        let est = compile_heap_estimate(&src);
         eprintln!(
             "{name:<24} {:<7} {:>5} B source {peak:>7} B peak {n:>4} allocs (estimate {est} B){}",
             if bundled { "bundled" } else { "" },

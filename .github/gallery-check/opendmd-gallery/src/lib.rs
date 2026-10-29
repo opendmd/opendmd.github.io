@@ -44,6 +44,17 @@ pub mod png;
 
 /// A gallery file's size limit, bytes.
 pub const MAX_FILE: usize = 4096;
+
+/// The size limit for a file: [`MAX_FILE`], or for OpenDMD's own examples
+/// (`trusted`) as long as a formula can be, comments and all (the bundled
+/// ones are read on the panel by name, never sent in a link).
+pub const fn max_file(trusted: bool) -> usize {
+    if trusted {
+        opendmd_psi::MAX_SOURCE + 512
+    } else {
+        MAX_FILE
+    }
+}
 /// The header's limits, in characters.
 pub const MAX_NAME: usize = 40;
 pub const MAX_DESCRIPTION: usize = 120;
@@ -288,11 +299,9 @@ pub fn check_file(slug: &str, bytes: &[u8]) -> Result<Entry, Vec<String>> {
 /// lets the name or author be one of the [`RESERVED`], and the header carry
 /// `-- bundle`.
 pub fn check_file_as(slug: &str, bytes: &[u8], trusted: bool) -> Result<Entry, Vec<String>> {
-    if bytes.len() > MAX_FILE {
-        return Err(vec![format!(
-            "the file is {} bytes: {MAX_FILE} at most",
-            bytes.len()
-        )]);
+    let most = max_file(trusted);
+    if bytes.len() > most {
+        return Err(vec![format!("the file is {} bytes: {most} at most", bytes.len())]);
     }
     let text = match std::str::from_utf8(bytes) {
         Ok(t) => t,

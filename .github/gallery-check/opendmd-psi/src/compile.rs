@@ -20,8 +20,12 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-/// The longest source accepted (bytes).
-pub const MAX_SOURCE: usize = 4096;
+/// The longest source accepted (bytes): comments and indentation count, so
+/// it is roomy (4,096 until Formulas were played by reference, 2026-10-29:
+/// the readable Endless road is ~6 KB). What the panel compiles is bounded
+/// by its heap check, by tokens (`compile_heap_estimate`); a Formula read
+/// from the card is compacted first (8 KB at most), an inline path is 6 KB.
+pub const MAX_SOURCE: usize = 16 * 1024;
 /// Expression nodes (before dead ones are dropped): bounds compile time.
 pub const MAX_NODES: usize = 1024;
 /// Brackets and operators nested this deep: bounds the parser's stack.
@@ -94,24 +98,43 @@ fn no_memory() -> Error {
     Error::new(0, 0, NO_MEMORY)
 }
 
-/// What a compile of `src_len` bytes is expected to take from the heap at
-/// its peak, at most (bytes): the firmware asks for this much free, plus
-/// the compile's stack and a reserve, before it compiles. On the host
-/// (64-bit: its lists' entries are as big as the device's or bigger) every
-/// bundled and example Formula and the `worst` cases stay under it
-/// (`tests/compile_heap.rs`): the tokens (12 B a token, ~1 token per 2
-/// bytes), the nodes (16 B), the sharing index (4 KB) and the layout's
-/// lists; parts drawn in several places read their tokens again, hence
-/// the floor. Endless road (1,858 B compacted): 30.2 KB measured on the
-/// host, 32 KB here.
-pub const fn compile_heap_estimate(src_len: usize) -> usize {
-    let e = 6 * 1024 + 14 * src_len;
-    if e < 16 * 1024 {
-        16 * 1024
+/// What a compile of `src` is expected to take from the heap at its peak,
+/// at most (bytes): the firmware asks for this much free, plus the
+/// compile's stack and a reserve, before it compiles. Counted by **tokens**
+/// (one lexing pass that keeps nothing), not bytes, so a readable Formula
+/// with long names and comments costs what its tokens cost: the tokens (12 B
+/// each), the nodes (16 B, about one per two tokens), the sharing index
+/// (4 KB) and the layout's lists; parts drawn in several places read their
+/// tokens again, hence the floor. On the host (64-bit: its lists' entries
+/// are as big as the device's or bigger) every bundled and example Formula
+/// and the `worst` cases stay under it (`tests/compile_heap.rs`). A source
+/// that doesn't lex fails before it takes anything: the floor.
+pub fn compile_heap_estimate(src: &str) -> usize {
+    let mut count = Toks {
+        v: None,
+        n: 0,
+        nl: false,
+    };
+    let tokens = if src.len() > u16::MAX as usize {
+        0
+    } else {
+        lex_into(src, &mut count).map_or(0, |()| count.n)
+    };
+    compile_heap_for_tokens(tokens)
+}
+
+/// [`compile_heap_estimate`] for a count of tokens.
+pub const fn compile_heap_for_tokens(tokens: usize) -> usize {
+    let e = HEAP_BASE + HEAP_PER_TOKEN * tokens;
+    if e < HEAP_FLOOR {
+        HEAP_FLOOR
     } else {
         e
     }
 }
+const HEAP_BASE: usize = 6 * 1024;
+const HEAP_PER_TOKEN: usize = 30;
+const HEAP_FLOOR: usize = 16 * 1024;
 
 /// `v.push(x)`, or [`NO_MEMORY`] when the list can't grow (instead of the
 /// abort an infallible push is on the device). In the browser (wasm: the
@@ -888,6 +911,79 @@ pub fn compact(src: &str) -> String {
     out
 }
 
+/// The same formula as short as it goes, line for line: comment lines,
+/// blank lines, comments after code and indentation dropped, and the spaces
+/// next to an operator or bracket (`= , * + - / < > ( ) [ ] { } ? : ;`)
+/// too, so `x = a * -3` is `x=a*-3`. Never two `-` or `/` joined (that
+/// would start a comment); text in quotes and a character in quotes kept
+/// as written. It compiles to the very same program (tests/squeeze.rs holds
+/// that for every example): the firmware's built-in bundled Formulas are
+/// kept this way (build.rs), where every byte of the image counts.
+pub fn squeeze(src: &str) -> String {
+    const OPS: &[u8] = b"=,*+-/<>()[]{}?:;";
+    let mut out = String::with_capacity(src.len());
+    for line in src.lines() {
+        let b = line.as_bytes();
+        // The line's code: up to a comment outside quotes.
+        let (mut end, mut i, mut quote) = (b.len(), 0, false);
+        while i < b.len() {
+            let c = b[i];
+            if !quote && c == b'\'' && b.get(i + 2) == Some(&b'\'') {
+                i += 3;
+                continue;
+            }
+            if c == b'"' {
+                quote = !quote;
+            } else if !quote && (c == b'-' || c == b'/') && b.get(i + 1) == Some(&c) {
+                end = i;
+                break;
+            }
+            i += 1;
+        }
+        let code = line[..end].trim();
+        if code.is_empty() {
+            continue;
+        }
+        // Spaces out where nothing depends on them.
+        let c = code.as_bytes();
+        let mut kept = String::with_capacity(code.len());
+        let (mut i, mut quote) = (0, false);
+        while i < c.len() {
+            let ch = c[i];
+            if !quote && ch == b'\'' && c.get(i + 2) == Some(&b'\'') {
+                kept.push_str(&code[i..i + 3]);
+                i += 3;
+                continue;
+            }
+            if ch == b'"' {
+                quote = !quote;
+            }
+            if !quote && ch.is_ascii_whitespace() {
+                let mut j = i;
+                while j < c.len() && c[j].is_ascii_whitespace() {
+                    j += 1;
+                }
+                let prev = kept.as_bytes().last().copied().unwrap_or(b' ');
+                let next = c.get(j).copied().unwrap_or(b' ');
+                let glue = (prev == next && (prev == b'-' || prev == b'/'))
+                    || !(OPS.contains(&prev) || OPS.contains(&next));
+                if glue {
+                    kept.push(' ');
+                }
+                i = j;
+                continue;
+            }
+            // One character (whole, not a byte of one).
+            let n = code[i..].chars().next().map_or(1, char::len_utf8);
+            kept.push_str(&code[i..i + n]);
+            i += n;
+        }
+        out.push_str(&kept);
+        out.push('\n');
+    }
+    out
+}
+
 // --- names ----------------------------------------------------------------------
 
 /// `loop forever`'s loop (Q16 seconds, as `loop N`'s): longer than any.
@@ -1081,6 +1177,14 @@ impl Dag {
                 at.1,
                 "this formula is too long for the panel — simplify it",
             ));
+        }
+        // Grown by half, never past MAX_NODES: the old and the new block are
+        // held at once while it grows (`compile_heap_estimate` counts that).
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.nodes.len() == self.nodes.capacity() {
+            let cap = self.nodes.capacity();
+            let more = (cap / 2).max(16).min(MAX_NODES - cap);
+            self.nodes.try_reserve_exact(more).map_err(|_| no_memory())?;
         }
         try_push(&mut self.nodes, n)?;
         let id = (self.nodes.len() - 1) as Id;
