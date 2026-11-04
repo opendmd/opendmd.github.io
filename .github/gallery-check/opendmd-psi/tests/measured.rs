@@ -240,6 +240,25 @@ pub const JIT_EFFECTS: &[(&str, &str, u32)] = &[
         include_str!("../../opendmd-web/formulas/plasma.psi"),
         2657,
     ),
+    // psi-p0 on the spare (paint80-713cd, 2026-11-04,
+    // /srv/scratch/opendmd-psi-p0-paint-probe-spare1.txt): the effect path
+    // with the JIT on, as the other rows (the tween's VM frame is 757: the
+    // player keeps the faster).
+    (
+        "p0 Megacity sketch",
+        include_str!("../../docs/research/psi-rebuild-device/p0-road-v2-city.psi"),
+        6245,
+    ),
+    (
+        "p0 big",
+        include_str!("../../docs/research/psi-rebuild-device/p0-big.psi"),
+        1429,
+    ),
+    (
+        "p0 tween",
+        include_str!("../../docs/research/psi-rebuild-device/p0-tween.psi"),
+        818,
+    ),
 ];
 pub const JIT_LOOKS: &[(&str, &str, &str, u8, u32)] = &[
     (
@@ -352,3 +371,44 @@ pub const PAINT_FORMULAS: &[(&str, &str, u32, u32)] = &[
     // (Painted, the second run.)
     ("Neon city", include_str!("../../opendmd-web/formulas/neon-city.psi"), 4289, 4037),
 ];
+
+/// P0b-4 and the guards a row on the spare (paint80-01e06, 2026-11-04,
+/// `/srv/scratch/opendmd-psi-p0b4-paint-probe-spare1.txt`, the paint
+/// probe's `cmp` lines): direct frames from `start` ms (seed
+/// `golden::SEED`), µs, VM and kernel, each against its frame's own
+/// estimate. `fused`: compiled with the fused compares. The sources are
+/// firmware/build.rs's (`u` reads `t`: no still cache).
+pub const P0B4_U: &str = "loop 8\nu = frac(x + t/8)\n";
+pub const P0B4: &[(&str, &str, bool, u32, u32, u32)] = &[
+    ("sel4 fused", "gray(frac((u < y)*u + (y < frac(u*3))*y + (u*2 < y)*0.5 + (y <= u*0.7)*0.25))", true, 0, 2781, 1134),
+    ("sel4 unfused", "gray(frac((u < y)*u + (y < frac(u*3))*y + (u*2 < y)*0.5 + (y <= u*0.7)*0.25))", false, 0, 2645, 1308),
+    ("cnt2 fused", "gray(frac(((u >= y) + (u >= y*0.5))*0.2 + ((y >= u*0.5) + (y >= u*0.3))*0.2))", true, 0, 2232, 1034),
+    ("cnt2 unfused", "gray(frac(((u >= y) + (u >= y*0.5))*0.2 + ((y >= u*0.5) + (y >= u*0.3))*0.2))", false, 0, 2286, 1248),
+    ("guards none", "", true, 0, 6358, 3859),
+    ("guards on", "t >= 0", true, 0, 6634, 3944),
+    ("guards off", "t < 0", true, 0, 2027, 1212),
+    ("guards rows", "py < 16", true, 0, 4345, 2589),
+    ("guards base", "gray(frac(u*0.1))", true, 0, 729, 519),
+    ("road-v2 exit fused", "road", true, 2_056_049, 12984, 7103),
+    ("road-v2 exit unfused", "road", false, 2_056_049, 12884, 8609),
+    ("road-v2 mouth fused", "road", true, 733_049, 12946, 7091),
+    ("road-v2 mouth unfused", "road", false, 733_049, 12760, 8636),
+    ("road-v2 forest-desert fused", "road", true, 544_049, 10353, 6514),
+    ("road-v2 forest-desert unfused", "road", false, 544_049, 10407, 7269),
+    ("road-v2 desert fused", "road", true, 2_177_549, 8866, 5607),
+    ("road-v2 desert unfused", "road", false, 2_177_549, 8902, 6127),
+];
+
+/// The `guards` cases' source: three scenes `when` (none for "").
+pub fn p0b4_guards(when: &str) -> String {
+    let mut f = String::from(P0B4_U);
+    for k in 1..=3 {
+        match when {
+            "" => f += &format!("b{k}a = sin(u*{k}.7 + y)*0.3\nb{k}b = sin(y*{k}.3 + u)*0.3\n"),
+            w => f += &format!(
+                "scene s{k} when {w} {{\n  b{k}a = sin(u*{k}.7 + y)*0.3\n  b{k}b = sin(y*{k}.3 + u)*0.3\n}}\n"
+            ),
+        }
+    }
+    f + "gray(frac(u*0.1 + b1a + b1b + b2a + b2b + b3a + b3b))\n"
+}

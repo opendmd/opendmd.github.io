@@ -53,6 +53,7 @@ pub mod reference;
     all(feature = "jit", target_arch = "xtensa", target_os = "espidf")
 ))]
 pub mod jit;
+mod jitplan;
 #[cfg(feature = "compiler")]
 pub mod look;
 mod meta;
@@ -70,13 +71,16 @@ mod vm;
 #[cfg(feature = "compiler")]
 pub use compile::{
     compact, compile_declared, compile_heap_estimate, compile_heap_for_tokens, compile_into,
-    compile_layout, compile_look, compile_look_with, compile_opts, compile_portable,
-    compile_unfused, compile_with, squeeze, Declared, DeclaredControl, Info, MAX_ABOUT_TEXT,
-    MAX_DEPTH, MAX_LABEL_TEXT, MAX_NAME_TEXT, MAX_NODES, MAX_SOURCE,
+    compile_layout, compile_look, compile_look_with, compile_measured, compile_opts,
+    compile_portable, compile_portable_with, compile_unfused, compile_with, squeeze, Declared,
+    DeclaredControl, Info, MAX_ABOUT_TEXT, MAX_DEPTH, MAX_LABEL_TEXT, MAX_NAME_TEXT, MAX_NODES,
+    MAX_SOURCE,
 };
 pub use draw::{Ink, Plane, FRAME_STEPS, LINE_STEPS, PRIMITIVES, TURNS};
 pub use meta::{Control, Meta, BLENDS};
-pub use program::{Op, Program, H, MAX_OPS, MAX_SCALARS, MAX_TABLE, REGS, W};
+pub use program::{
+    Op, Program, SceneFrame, H, MAX_OPS, MAX_STEPS, MAX_PALETTES, MAX_SCALARS, MAX_TABLE, REGS, USER_PALETTES, W,
+};
 pub use rate::{draw_slow, render_fast, render_held, Held, MAX_RATE};
 pub use still::{Still, StillLane, STILL_LANES};
 /// (psi-probe's references for `fixed::sqrt` and `len`.)
@@ -88,7 +92,7 @@ pub use tables::{FONT_4X6, FONT_5X7, FONT_BOLD, OWN, PALETTES, SIN};
 #[cfg(feature = "stats")]
 pub use vm::stats;
 pub use vm::{
-    pair_row, q16, render_rows, render_rows_beam, render_rows_changed, render_rows_ink,
+    pair_row, q16, scene_rows, render_rows, render_rows_beam, render_rows_changed, render_rows_ink,
     render_rows_ink_turns, render_rows_still, render_with, Inputs, PairSink, Scratch, BEAM_START,
     Q16_ONE,
 };
@@ -137,21 +141,54 @@ pub fn compile(src: &str) -> Result<Program, Error> {
 }
 
 #[cfg(feature = "compiler")]
+/// A zeroed [`Program`] on the heap, never on the stack (`compile_into`
+/// and its kin take a zeroed one: `program_is_plain_data`); an error, not
+/// an abort, when the heap can't give it (the panel's probe builds at the
+/// rig's heap).
+fn zeroed_program() -> Result<alloc::boxed::Box<Program>, Error> {
+    let layout = core::alloc::Layout::new::<Program>();
+    // SAFETY: `Program` is not zero-sized; a non-null block of `layout`
+    // from the global allocator is what `Box` frees, and a Program is
+    // integers and arrays of integers all the way down: all-zero is valid.
+    let p = unsafe { alloc::alloc::alloc_zeroed(layout) } as *mut Program;
+    if p.is_null() {
+        return Err(Error {
+            start: 0,
+            end: 0,
+            msg: alloc::string::String::from("not enough memory to compile this formula right now"),
+        });
+    }
+    Ok(unsafe { alloc::boxed::Box::from_raw(p) })
+}
+
+#[cfg(feature = "compiler")]
 /// A Formula compiled for the player ([`psb`]): its program, and when its
 /// `look` line composes a blend or an amount, its program as a look.
 pub fn build(src: &str) -> Result<alloc::vec::Vec<u8>, Error> {
+    build_with(src, true)
+}
+
+#[cfg(feature = "compiler")]
+/// [`build`] with (`cmp`) or without the fused compares (P0b-4; the same
+/// frames): the paint probe's before and after. A look program, when the
+/// Formula has one, is [`build`]'s.
+#[doc(hidden)]
+pub fn build_with(src: &str, cmp: bool) -> Result<alloc::vec::Vec<u8>, Error> {
     let mut d = Declared::default();
-    let mut tmp = Program::default();
-    compile_declared(src, &mut tmp).map(|x| d = x)?;
+    // (One program on the heap, zeroed in place, for the declarations and
+    // then the player's (each compile clears it): a Program is 7.4 KB, and
+    // the panel's probe builds on its main task's 16 KB stack, or on a
+    // thread whose stack is taken from the same heap.)
+    let mut play = zeroed_program()?;
+    compile_declared(src, &mut play).map(|x| d = x)?;
     let name = d
         .name
         .and_then(|(a, b)| src.get(a as usize..b as usize))
         .unwrap_or("");
-    let mut play = alloc::boxed::Box::new(Program::default());
-    compile_portable(src, &mut play)?;
+    compile_portable_with(src, &mut play, cmp)?;
     let look = match play.meta().look() {
         Some((blend, amount)) if blend != "over" || amount < 100 => {
-            let mut l = alloc::boxed::Box::new(Program::default());
+            let mut l = zeroed_program()?;
             compile_look(src, &mut l)?;
             Some(l)
         }
@@ -326,7 +363,20 @@ pub mod golden {
         ("rate-100", RATE_100, 2990, 0xa1c2d3a39d0f7014),
         ("rate-clock", RATE_CLOCK, 41_000, 0x5c3d0e0186886076),
         ("rate-forever", RATE_FOREVER, 7_777, 0x1a156c950305d3a6),
+        // Tweens of palettes (psi-p0): nested, in halves, at three times.
+        ("tween", TWEEN, 0, 0x1bfdf360e2732725),
+        ("tween", TWEEN, 2_470, 0xdd00436c9886c525),
+        ("tween", TWEEN, 7_990, 0x1c16efa901f24d25),
+        ("tween-one", TWEEN_ONE, 1_234, 0x712551f14dd475b9),
     ];
+
+    /// Tween golden formulas (psi-p0): two halves, one of them a tween of
+    /// tweens, worked out once a frame; one with a built-in palette.
+    pub const TWEEN: &str = "loop 8\npalette dD = #f80, #fc0, #08f, #fff\npalette dN = #400, #320, #002, #224\npalette cD = #f0f, #0ff, #888, #ccc\npalette cN = #202, #022, #111, #333\npalette tun = #000, #444, #f90, #222\nnight = 0.5 + 0.5*sin(t*0.8)\np = frac(t/8)\npalette scene = tween(tween(dD, dN, night), tween(cD, cN, night), p), tween(tun, dN, p)\npal(scene, floor(x*4)/32 + (y > 0.5)*0.5)";
+    pub const TWEEN_ONE: &str = "loop 4\npalette sea = #002, #06c, #4cf, #fff\npalette s = tween(sea, rainbow, 0.5 + 0.5*sin(t*1.57))\nlayer { pal(s, x) }\nlayer multiply { cycle(s, y, t/4 + py/64, 0.5) }";
+    /// More than 256 steps and 200 values at once (psi-p0): 351 once a
+    /// frame, so the draw stage's loop and s go on at steps past 255.
+    pub const BIG: &str = "loop 8\nk1 = sin(t*1.0010 + 0.0076)\nk2 = sin(t*1.0020 + 0.0153)\nk3 = sin(t*1.0030 + 0.0229)\nk4 = sin(t*1.0040 + 0.0305)\nk5 = sin(t*1.0050 + 0.0382)\nk6 = sin(t*1.0060 + 0.0458)\nk7 = sin(t*1.0070 + 0.0534)\nk8 = sin(t*1.0080 + 0.0611)\nk9 = sin(t*1.0090 + 0.0687)\nk10 = sin(t*1.0100 + 0.0763)\nk11 = sin(t*1.0110 + 0.0840)\nk12 = sin(t*1.0120 + 0.0916)\nk13 = sin(t*1.0130 + 0.0992)\nk14 = sin(t*1.0140 + 0.1069)\nk15 = sin(t*1.0150 + 0.1145)\nk16 = sin(t*1.0160 + 0.1221)\nk17 = sin(t*1.0171 + 0.1298)\nk18 = sin(t*1.0181 + 0.1374)\nk19 = sin(t*1.0191 + 0.1450)\nk20 = sin(t*1.0201 + 0.1527)\nk21 = sin(t*1.0211 + 0.1603)\nk22 = sin(t*1.0221 + 0.1679)\nk23 = sin(t*1.0231 + 0.1756)\nk24 = sin(t*1.0241 + 0.1832)\nk25 = sin(t*1.0251 + 0.1908)\nk26 = sin(t*1.0261 + 0.1985)\nk27 = sin(t*1.0271 + 0.2061)\nk28 = sin(t*1.0281 + 0.2137)\nk29 = sin(t*1.0291 + 0.2214)\nk30 = sin(t*1.0301 + 0.2290)\nk31 = sin(t*1.0311 + 0.2366)\nk32 = sin(t*1.0321 + 0.2443)\nk33 = sin(t*1.0331 + 0.2519)\nk34 = sin(t*1.0341 + 0.2595)\nk35 = sin(t*1.0351 + 0.2672)\nk36 = sin(t*1.0361 + 0.2748)\nk37 = sin(t*1.0371 + 0.2824)\nk38 = sin(t*1.0381 + 0.2901)\nk39 = sin(t*1.0391 + 0.2977)\nk40 = sin(t*1.0401 + 0.3053)\nk41 = sin(t*1.0411 + 0.3130)\nk42 = sin(t*1.0421 + 0.3206)\nk43 = sin(t*1.0431 + 0.3282)\nk44 = sin(t*1.0441 + 0.3359)\nk45 = sin(t*1.0451 + 0.3435)\nk46 = sin(t*1.0461 + 0.3511)\nk47 = sin(t*1.0471 + 0.3588)\nk48 = sin(t*1.0481 + 0.3664)\nk49 = sin(t*1.0491 + 0.3740)\nk50 = sin(t*1.0502 + 0.3817)\nk51 = sin(t*1.0512 + 0.3893)\nk52 = sin(t*1.0522 + 0.3969)\nk53 = sin(t*1.0532 + 0.4046)\nk54 = sin(t*1.0542 + 0.4122)\nk55 = sin(t*1.0552 + 0.4198)\nk56 = sin(t*1.0562 + 0.4275)\nk57 = sin(t*1.0572 + 0.4351)\nk58 = sin(t*1.0582 + 0.4427)\nk59 = sin(t*1.0592 + 0.4504)\nk60 = sin(t*1.0602 + 0.4580)\nk61 = sin(t*1.0612 + 0.4656)\nk62 = sin(t*1.0622 + 0.4733)\nk63 = sin(t*1.0632 + 0.4809)\nk64 = sin(t*1.0642 + 0.4885)\nk65 = sin(t*1.0652 + 0.4962)\nk66 = sin(t*1.0662 + 0.5038)\nk67 = sin(t*1.0672 + 0.5115)\nk68 = sin(t*1.0682 + 0.5191)\nk69 = sin(t*1.0692 + 0.5267)\nk70 = sin(t*1.0702 + 0.5344)\ns = k1*0.00014 + k2*0.00029 + k3*0.00043 + k4*0.00057 + k5*0.00071 + k6*0.00086 + k7*0.00100 + k8*0.00114 + k9*0.00129 + k10*0.00143 + k11*0.00157 + k12*0.00171 + k13*0.00186 + k14*0.00200 + k15*0.00214 + k16*0.00229 + k17*0.00243 + k18*0.00257 + k19*0.00271 + k20*0.00286 + k21*0.00300 + k22*0.00314 + k23*0.00329 + k24*0.00343 + k25*0.00357 + k26*0.00371 + k27*0.00386 + k28*0.00400 + k29*0.00414 + k30*0.00429 + k31*0.00443 + k32*0.00457 + k33*0.00471 + k34*0.00486 + k35*0.00500 + k36*0.00514 + k37*0.00528 + k38*0.00543 + k39*0.00557 + k40*0.00571 + k41*0.00586 + k42*0.00600 + k43*0.00614 + k44*0.00628 + k45*0.00643 + k46*0.00657 + k47*0.00671 + k48*0.00686 + k49*0.00700 + k50*0.00714 + k51*0.00728 + k52*0.00743 + k53*0.00757 + k54*0.00771 + k55*0.00786 + k56*0.00800 + k57*0.00814 + k58*0.00828 + k59*0.00843 + k60*0.00857 + k61*0.00871 + k62*0.00886 + k63*0.00900 + k64*0.00914 + k65*0.00928 + k66*0.00943 + k67*0.00957 + k68*0.00971 + k69*0.00986 + k70*0.01000\ndraw {\n  for j < 40 {\n    if j % 3 == 0 { dot(j*3 + s, 5, 1) } else { line(j*3, 10 + s, j*3 + 2, 24, 0.5, 1) }\n  }\n  if s > 0 { line(0, 30, 127, 30) } else { line(0, 1, 127, 1) }\n}\ngray(frac(x*3.1 + y*1.7 + s)*0.5 + ink*0.5)";
 
     /// `cycle` golden formulas: a still index turned once a frame; per-row
     /// turns of a palette of its own, scaled and as a covered layer.
@@ -395,6 +445,9 @@ pub mod golden {
     /// rule, dots, tables at every level, loops of 1 and 1,024 turns, loops
     /// nested, `ink` through a part and through a look.
     pub const DRAWN: &[(&str, &str, u32, bool, u64)] = &[
+        // 379 steps, 233 values; the draw stage from step 351 (psi-p0).
+        ("big", BIG, 0, false, 0x62c00cf899951f3f),
+        ("big", BIG, 5_150, true, 0x623ea41cb2d93df0),
         // Paint (the scene stage): every primitive, the palettes, a
         // sprite in colours flipped, text and a number, an `if`/`else` in a
         // loop, painted over a colour line and alone (over the picture).

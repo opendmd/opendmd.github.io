@@ -61,6 +61,43 @@ pub(crate) trait Target {
     fn run(&mut self, ctx: &mut [u32], out: *mut u8);
     /// Run the row stage's function (at `at` in the code) on `sc`.
     fn run_rows(&mut self, at: usize, ctx: &mut [u32], sc: *mut i32);
+    /// Write `bytes` over the code at `at` (a guard turned on or off).
+    fn patch(&mut self, at: usize, bytes: &[u8]);
+    /// Which guards the code has on now (bit j, `Lowered::guards[j]`; as
+    /// emitted, all).
+    fn guards_on(&mut self) -> &mut u32;
+}
+
+/// Each scene's guard on or off for the row about to be drawn, by its
+/// condition (worked out for the row by now): the sites whose condition
+/// changed since the last row patched (P0b: the test once a row, none a
+/// pixel).
+#[inline]
+#[cfg_attr(
+    all(target_os = "espidf", feature = "sram1-iram"),
+    link_section = ".iram1.s1"
+)]
+pub(crate) fn patch_guards<T: Target>(t: &mut T, low: &Lowered, sc: &Sc) {
+    let n = low.guards.len();
+    if n == 0 {
+        return;
+    }
+    let mask = if n >= 32 { u32::MAX } else { (1u32 << n) - 1 };
+    let mut want = 0u32;
+    for (j, g) in low.guards.iter().enumerate() {
+        want |= u32::from(sc[g.cond as usize] != 0) << j;
+    }
+    let have = t.guards_on();
+    let diff = (*have ^ want) & mask;
+    if diff == 0 {
+        return;
+    }
+    *have = (*have & !mask) | want;
+    for (j, g) in low.guards.iter().enumerate() {
+        if diff & (1 << j) != 0 {
+            t.patch(g.at, if want & (1 << j) != 0 { &g.on } else { &g.off });
+        }
+    }
 }
 
 /// A colour as a word: `r | g << 8 | b << 16`.
@@ -102,7 +139,7 @@ pub(crate) unsafe fn eval_helper(id: u8, a: [u32; 5], ptr: &dyn Fn(u32) -> *mut 
             }
         }
         hid::NOISE_O => {
-            let sc = &*(ptr(a[3]) as *const [i32; MAX_SCALARS]);
+            let sc = &*(ptr(a[3]) as *const Sc);
             let k = noise_slot(
                 (a[4] as u8).wrapping_sub(code::NOISE_O) as usize % NOISE_CTX,
                 0,
@@ -119,7 +156,7 @@ pub(crate) unsafe fn eval_helper(id: u8, a: [u32; 5], ptr: &dyn Fn(u32) -> *mut 
             tab(tabs, a[2] as u8, a[3] as u8, i(0))
         }
         hid::PICK => {
-            let sc = &*(ptr(a[1]) as *const [i32; MAX_SCALARS]);
+            let sc = &*(ptr(a[1]) as *const Sc);
             pick(sc, a[2] as u8, a[3] as u8, i(0))
         }
         hid::SPR => {
@@ -163,7 +200,7 @@ fn colour_of(st: &Rows<'_>, pal: u8, v: i32, k: u8, shift: u8) -> u32 {
     let k = if k == NONE {
         fixed::ONE
     } else {
-        st.scratch.sc[(k & 0x7f) as usize] >> shift
+        st.scratch.sc[k as usize] >> shift
     };
     pack(fixed::scale_rgb(p[fixed::pal_index(v)], k))
 }
@@ -173,7 +210,10 @@ static ZEROS: [u8; W * 3] = [0; W * 3];
 
 /// Fill the words that change from row to row (`per_row`), or those that
 /// do not (once a frame, before the rows).
-#[cfg_attr(all(target_os = "espidf", feature = "sram1-iram"), link_section = ".iram1.s1")]
+#[cfg_attr(
+    all(target_os = "espidf", feature = "sram1-iram"),
+    link_section = ".iram1.s1"
+)]
 fn fill<T: Target>(t: &mut T, low: &Lowered, ctx: &mut [u32], st: &Rows<'_>, per_row: bool) {
     let s = st.scratch;
     for ((w, out), &row) in low.words.iter().zip(ctx.iter_mut()).zip(&low.per_row) {
@@ -196,11 +236,11 @@ fn fill<T: Target>(t: &mut T, low: &Lowered, ctx: &mut [u32], st: &Rows<'_>, per
                 };
                 t.addr(p as *const u8, W * 4)
             }
-            Word::Scalar(k) => s.sc[(k & 0x7f) as usize] as u32,
+            Word::Scalar(k) => s.sc[k as usize] as u32,
             Word::Pal(k) => t.addr(palette(st.tables, st.own, k).as_ptr() as *const u8, 96),
             Word::Sin => t.addr(st.tables.sin.as_ptr() as *const u8, 512),
             Word::Helper(id) => t.helper(id),
-            Word::Sc => t.addr(s.sc.as_ptr() as *const u8, MAX_SCALARS * 4),
+            Word::Sc => t.addr(s.sc.as_ptr() as *const u8, SC * 4),
             Word::Tabs => t.addr(st.prog.tables.as_ptr() as *const u8, MAX_TABLE * 4),
             Word::Glyphs(c) => {
                 let g = &st.glyphs[(c.saturating_sub(code::DIGIT) as usize).min(4)];
@@ -209,12 +249,10 @@ fn fill<T: Target>(t: &mut T, low: &Lowered, ctx: &mut [u32], st: &Rows<'_>, per
                     core::mem::size_of::<Glyphs>(),
                 )
             }
-            Word::Colour { pal, v, k, shift } => {
-                colour_of(st, pal, s.sc[(v & 0x7f) as usize], k, shift)
-            }
+            Word::Colour { pal, v, k, shift } => colour_of(st, pal, s.sc[v as usize], k, shift),
             Word::Entry { pal, v } => {
                 let p = palette(st.tables, st.own, pal);
-                t.addr(p[fixed::pal_index(s.sc[(v & 0x7f) as usize])].as_ptr(), 3)
+                t.addr(p[fixed::pal_index(s.sc[v as usize])].as_ptr(), 3)
             }
             Word::Init(c) | Word::Const(c) => c as u32,
             Word::Ink => match st.ink {
@@ -236,7 +274,7 @@ fn fill<T: Target>(t: &mut T, low: &Lowered, ctx: &mut [u32], st: &Rows<'_>, per
                     0
                 }
             }
-            Word::Cover(k) => s.sc[(k & 0x7f) as usize].clamp(0, fixed::ONE) as u32,
+            Word::Cover(k) => s.sc[k as usize].clamp(0, fixed::ONE) as u32,
             Word::Pick {
                 pal,
                 b,
@@ -304,12 +342,19 @@ pub(crate) fn frame<T: Target>(
     if prog.forever() {
         vm::wset(&mut scratch.lanes[REGS], 0, inputs.tw);
     }
-    for op in &prog.ops[..fe] {
+    // (Its tweens, the section's last steps, with its own palettes below.)
+    for op in &prog.ops[..prog.tweens().start.min(fe)] {
         if code::is_wide(op.code) {
             vm::wide_step(&mut scratch.sc, &mut scratch.lanes[REGS], op);
         } else {
             vm::scalar(&mut scratch.sc, op, tables, &prog.tables);
         }
+    }
+    // A formula's own palettes, worked out once for the frame (before the
+    // draw stage, whose values may take the tweens' weights' slots).
+    let mut own: Pals = [[[0; 3]; 32]; USER_PALETTES];
+    if prog.uses & OWNPAL != 0 {
+        own_palettes(prog, &scratch.sc, &mut own);
     }
     #[cfg(feature = "stats")]
     clk.lap(stats::FRAME);
@@ -347,10 +392,6 @@ pub(crate) fn frame<T: Target>(
         }
         _ => Cache::Off,
     };
-    let mut own: Pals = [[[0; 3]; 32]; USER_PALETTES];
-    if prog.uses & OWNPAL != 0 {
-        unpack_palettes(&prog.tables, &mut own);
-    }
     let glyphs = [
         glyphs(tables, code::DIGIT),
         glyphs(tables, code::GLYPH),
@@ -489,6 +530,7 @@ pub(crate) fn frame<T: Target>(
             // SAFETY: as above: W × 3 bytes at `d`, not `src`'s.
             unsafe { core::ptr::copy_nonoverlapping(src.as_ptr(), d, W * 3) };
         }
+        patch_guards(t, low, &scratch.sc);
         t.run(ctx, d);
         if let Some(p) = paint {
             // SAFETY: `dest` gives the row's W × 3 bytes at `d`.
@@ -665,30 +707,77 @@ mod device {
     /// `div`'s and `noise_o`'s helpers, the next most called (Endless road's
     /// kernels): in SRAM1's IRAM with the `sram1-iram` build, else as the
     /// generic shims are.
-    #[cfg_attr(all(target_os = "espidf", feature = "sram1-iram"), link_section = ".iram1.s1")]
+    #[cfg_attr(
+        all(target_os = "espidf", feature = "sram1-iram"),
+        link_section = ".iram1.s1"
+    )]
     extern "C" fn shim_div(a: u32, b: u32, c: u32, d: u32, e: u32) -> u32 {
         // SAFETY: as `shim`.
         unsafe { eval_helper(hid::DIV, [a, b, c, d, e], &|p| p as usize as *mut u8) }
     }
 
-    #[cfg_attr(all(target_os = "espidf", feature = "sram1-iram"), link_section = ".iram1.s1")]
+    #[cfg_attr(
+        all(target_os = "espidf", feature = "sram1-iram"),
+        link_section = ".iram1.s1"
+    )]
     extern "C" fn shim_noise_o(a: u32, b: u32, c: u32, d: u32, e: u32) -> u32 {
         // SAFETY: as `shim`.
         unsafe { eval_helper(hid::NOISE_O, [a, b, c, d, e], &|p| p as usize as *mut u8) }
     }
 
     const SHIMS: [Shim; hid::COUNT as usize] = [
-        shim_div, shim::<1>, shim::<2>, shim::<3>, shim::<4>, shim::<5>, shim::<6>, shim::<7>,
-        shim::<8>, shim_noise_o, shim::<10>, shim::<11>, shim::<12>, shim::<13>, shim_pick,
-        shim::<15>, shim::<16>, shim::<17>, shim::<18>,
+        shim_div,
+        shim::<1>,
+        shim::<2>,
+        shim::<3>,
+        shim::<4>,
+        shim::<5>,
+        shim::<6>,
+        shim::<7>,
+        shim::<8>,
+        shim_noise_o,
+        shim::<10>,
+        shim::<11>,
+        shim::<12>,
+        shim::<13>,
+        shim_pick,
+        shim::<15>,
+        shim::<16>,
+        shim::<17>,
+        shim::<18>,
     ];
 
     type KernelFn = extern "C" fn(*mut u32, *mut u8);
     type RowsFn = extern "C" fn(*mut u32, *mut i32);
 
-    struct Device(KernelFn);
+    /// The kernel's function, its block's first word, and which of its
+    /// guards are on (`Kernel::guards_on`).
+    struct Device<'k>(KernelFn, &'k mut u32);
 
-    impl Target for Device {
+    impl Target for Device<'_> {
+        fn patch(&mut self, at: usize, bytes: &[u8]) {
+            // A byte at a time into its word (IRAM takes only word
+            // accesses): a few bytes, when a guard's condition changes.
+            let base = self.0 as usize;
+            for (i, &b) in bytes.iter().enumerate() {
+                let a = base + at + i;
+                let w = (a & !3) as *mut u32;
+                let sh = (a & 3) * 8;
+                // SAFETY: within the block (a site is inside the code,
+                // `lower`'s), word-aligned.
+                unsafe {
+                    let v = w.read_volatile();
+                    w.write_volatile((v & !(0xff << sh)) | u32::from(b) << sh);
+                }
+            }
+            // A data barrier (`memw`), as after the code was copied in: the
+            // stores done before the kernel is called (no instruction cache
+            // to flush for internal SRAM).
+            core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        }
+        fn guards_on(&mut self) -> &mut u32 {
+            self.1
+        }
         fn addr(&mut self, p: *const u8, _: usize) -> u32 {
             p as usize as u32
         }
@@ -715,6 +804,8 @@ mod device {
         code_bytes: usize,
         low: Lowered,
         ctx: Vec<u32>,
+        /// Which guards the code has on (as copied in, all).
+        guards_on: u32,
     }
 
     // SAFETY: the block is owned memory like a `Box`'s; nothing else
@@ -748,6 +839,7 @@ mod device {
             code_bytes,
             low,
             ctx,
+            guards_on: u32::MAX,
         })
     }
 
@@ -801,10 +893,13 @@ mod device {
             self.block as usize
         }
 
-        fn device(&self) -> Device {
+        fn device(block: *mut u32, guards_on: &mut u32) -> Device<'_> {
             // SAFETY: the block holds a function of this signature
             // (`lower`'s prologue and epilogue: the windowed ABI).
-            Device(unsafe { core::mem::transmute::<*mut u32, KernelFn>(self.block) })
+            Device(
+                unsafe { core::mem::transmute::<*mut u32, KernelFn>(block) },
+                guards_on,
+            )
         }
 
         /// Render the rows `rows` has a bit for of a frame of the program
@@ -896,7 +991,7 @@ mod device {
             if self.low.rate && under.is_none() {
                 crate::rate::draw_slow::<128>(prog, scratch, inputs, tables, rows, out);
             }
-            let mut d = self.device();
+            let mut d = Self::device(self.block, &mut self.guards_on);
             let base = out.as_mut_ptr();
             // SAFETY: row < 32, within `out` (asserted above).
             let dest = |row: usize| unsafe { base.add(row * W * 3) };
@@ -997,7 +1092,7 @@ mod device {
                 // SAFETY: j < 3: within `buf`.
                 unsafe { base.add(j * W * 3) }
             };
-            let mut d = self.device();
+            let mut d = Self::device(self.block, &mut self.guards_on);
             frame(
                 &mut d,
                 &self.low,

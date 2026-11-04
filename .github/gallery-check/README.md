@@ -21,7 +21,7 @@ fails unless every change:
   no subfolder, no symbolic link, submodule or executable file, at most 20
   files;
 - has a slug of lower-case letters, digits and single hyphens (≤ 48);
-- is at most 4 KB of UTF-8 text with LF line endings, no control characters
+- is at most 36 KB of UTF-8 text with LF line endings, no control characters
   (a tab only in the formula), no invisible, joining or direction-changing
   characters (the "Trojan Source" ones: U+202A–202E, U+2066–2069, …), no
   private-use ones, no more than two accents stacked on a letter;
@@ -32,7 +32,9 @@ fails unless every change:
   name and author that don't pass for OpenDMD or a maintainer (lookalike
   letters included); `-- bundle` (OpenDMD's examples only) is refused;
 - compiles with OpenDMD's Psi compiler (the same crate the display runs) and
-  costs at most 10 ms a frame on the display (`Program::esp32_us`).
+  costs at most 10 ms a frame on the display (`Program::tier_us`: with the JIT where it takes the formula), and is at
+  most 4,500 bytes once compiled for it (so a link to it stays within the
+  display's 6,144-byte path).
 
 It draws eight frames of each formula that passes into a PNG, kept as the
 run's `formula-previews` artifact (14 days) for the reviewer, and writes a

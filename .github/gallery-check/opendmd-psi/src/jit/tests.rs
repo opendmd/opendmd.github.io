@@ -3,7 +3,7 @@
 //! without the still cache, and random formulas. A kernel that draws one
 //! byte differently from the VM fails here.
 
-use super::emu::{Emu, EmuTarget};
+use super::emu::EmuTarget;
 use super::lower::{lower, Lowered};
 use super::{check_rows, frame, CHECK_ROWS};
 use crate::program::{Program, H, W};
@@ -68,9 +68,7 @@ fn kernel_frame_beam(
     before: Option<&[u8]>,
     sink: Option<crate::PairSink<'_>>,
 ) -> (Vec<u8>, u64, [u32; H]) {
-    let mut t = EmuTarget {
-        emu: Emu::new(&low.code),
-    };
+    let mut t = EmuTarget::new(&low.code);
     let mut ctx = vec![0u32; low.words.len()];
     let mut s = Scratch::<128>::new();
     // (Word-aligned, as the player's canvas.)
@@ -636,9 +634,7 @@ fn the_check_rows_alone_are_the_frames_rows() {
             u32::MAX,
             &mut want,
         );
-        let mut t = EmuTarget {
-            emu: Emu::new(&low.code),
-        };
+        let mut t = EmuTarget::new(&low.code);
         let mut ctx = vec![0u32; low.words.len()];
         let mut buf = [[0u8; W * 3]; CHECK_ROWS.len()];
         let base = buf.as_mut_ptr() as *mut u8;
@@ -871,6 +867,56 @@ fn cycled_palettes_draw_the_same_through_kernels() {
         let prog = compile(src).unwrap();
         let times = [0, 130, 1000, 2470, 5555, 7990];
         if let Err(why) = same_as_vm("cycle", src, &prog, &times) {
+            panic!("{src}: on the VM ({why})");
+        }
+    }
+}
+
+/// Tweens of palettes (worked out once a frame, before the kernel's words):
+/// the bytes of the VM's frame, as the palette changes from frame to frame.
+#[test]
+fn tweened_palettes_draw_the_same_through_kernels() {
+    let cases = [
+        "loop 8\npalette d = #048, #8cf, #fff\npalette n = #002, #124, #468\npalette s = tween(d, n, 0.5 + 0.5*sin(t*0.8))\npal(s, y) * (0.5 + x/2)",
+        "loop 8\npalette a = #f00, #0f0\npalette b = #00f, #ff0, #0ff\npalette s = tween(tween(a, b, t/8), fire, frac(t/3))\ncycle(s, x + y, t/4 + py/40)",
+        "loop 8\npalette a = #f80, #fc0, #08f, #fff\npalette b = #400, #320, #002, #224\npalette c = #f0f, #0ff, #888, #ccc\nw = frac(t/8)\npalette s = tween(a, b, w), tween(c, b, 1 - w)\npal(s, floor(px/8)/16) * (py > 15 ? 1 : 0.5)",
+    ];
+    for src in cases {
+        let prog = compile(src).unwrap();
+        let times = [0, 130, 1000, 2470, 5555, 7990];
+        if let Err(why) = same_as_vm("tween", src, &prog, &times) {
+            panic!("{src}: on the VM ({why})");
+        }
+    }
+}
+
+/// Scenes (`scene NAME when c { … }`): the kernel's branch a pixel and its
+/// zeros, and the row function's, the bytes of the VM's frame, the scene on
+/// and off within a frame and from frame to frame.
+#[test]
+fn scenes_draw_the_same_through_kernels() {
+    let cases = [
+        "loop 8\non = frac(t/8) > 0.5\nscene a when on * (py < 20) {\n  h = hash(floor(px/6), 3)\n  w = (frac(px/6) > 0.3) * (frac(py/3) > 0.4) * (h > 0.3)\n  lit = w * (hash(floor(px/2), floor(py/3)) > 0.5)\n}\nscene b when 1 - on {\n  wave = sin(x*12 + t*2 + y*6) * 0.5 + 0.5\n}\nrgb(lit, wave*0.3 + lit*0.5, wave + h*0.2*(py < 20))",
+        "loop 4\nscene s when py > 10 + 8*sin(t*1.57) {\n  r = y*2\n  g = sin(x*8 + r)\n  n = noise(x*6, y*3, t)\n}\npal(fire, g*0.5 + n*0.5 + r*0.1)",
+        "loop 4\nk = x*3\nscene s when t > 1 {\n  d = len(x - 0.5, y - 0.5)\n  e = k + d\n}\nrgb(frac(e), d, k/3)",
+        "look\nloop 4\nscene s when t > 2 {\n  m = atan2(x - 0.5, y - 0.5) + len(x, y)\n}\nunder * 0.5 + rgb(m, m, m) * 0.5",
+    ];
+    for src in cases {
+        let prog = compile(src).unwrap();
+        let low = lower(&prog).unwrap_or_else(|w| panic!("{src}: the JIT refuses: {w}"));
+        assert!(low.rows_at.is_some(), "{src}: the row function");
+        // Each pixel guard a site the driver patches (no test a pixel).
+        let n = prog.ops[prog.row_end as usize..prog.len()]
+            .iter()
+            .filter(|o| o.code == crate::program::code::GUARD)
+            .count();
+        assert_eq!(low.guards.len(), n, "{src}: a site for each guard");
+        for g in &low.guards {
+            assert_eq!(g.on.len(), g.off.len());
+            assert_eq!(&low.code[g.at..g.at + g.on.len()], &g.on[..]);
+        }
+        let times = [0, 130, 1000, 1500, 2470, 3300, 5555, 7990];
+        if let Err(why) = same_as_vm("scene", src, &prog, &times) {
             panic!("{src}: on the VM ({why})");
         }
     }
@@ -1116,4 +1162,123 @@ fn damaged_programs_lower_safely() {
         }
     }
     println!("{lowered} damaged programs lowered, {differ} drew otherwise than the VM");
+}
+
+/// P0b-2: the editor's "does the panel's JIT take it" (`Program::jit_takes`,
+/// the lowering's rules without emitting) is the lowering's answer — over
+/// the bundled Formulas, the goldens, the sketches, the device cases and
+/// random formulas, wide ones (many values alive at once) among them.
+#[test]
+fn jit_takes_is_lower() {
+    let mut srcs: Vec<String> = bundled().into_iter().map(|(_, s)| s).collect();
+    for &(_, s, _, _) in crate::golden::FRAMES {
+        srcs.push(s.into());
+    }
+    for &(_, s, _, _, _) in crate::golden::DRAWN.iter().chain(crate::golden::OVER) {
+        srcs.push(s.into());
+    }
+    for (_, s) in crate::sketches::ALL {
+        srcs.push(s.into());
+    }
+    let dev = Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/research/psi-rebuild-device");
+    for e in std::fs::read_dir(dev).unwrap().flatten() {
+        if e.path().extension().is_some_and(|x| x == "psi") {
+            srcs.push(std::fs::read_to_string(e.path()).unwrap());
+        }
+    }
+    let mut r = Rng(0x1d17_0b5e_55ed_0b2b);
+    for k in 0..600usize {
+        // 1 to 12 values alive at once into the colour.
+        let n = 4 + k % 9;
+        let mut src = String::from("loop 4\n");
+        for j in 0..n {
+            let f = ["sin", "frac", "abs", "noise", "hash", "floor"][(j + k) % 6];
+            let a = match f {
+                "noise" => format!("noise(x*{j}.3, y*{k}, t)"),
+                "hash" => format!("hash(px*{}, py)", j + 1),
+                _ => format!("{f}(x*{j}.7 + y*{}.1 + {})", k % 7, expr(&mut r, 1)),
+            };
+            src += &format!("v{j} = {a}\n");
+        }
+        let sum: Vec<String> = (0..n).map(|j| format!("v{j}*{}.{j}", j % 3)).collect();
+        let v = sum.join(" + ");
+        src += &match k % 3 {
+            0 => format!("gray({v})"),
+            1 => format!("hsv(x, 1, {v})"),
+            _ => format!("pal(fire, {v})"),
+        };
+        srcs.push(src);
+    }
+    let (mut yes, mut no, mut bad) = (0, 0, Vec::new());
+    for src in &srcs {
+        let Ok(prog) = compile(src) else { continue };
+        let real = crate::jit::refusal(&prog);
+        if prog.jit_takes() != real.is_none() {
+            bad.push(format!("{real:?}: {src}"));
+        }
+        if real.is_none() {
+            yes += 1;
+        } else {
+            no += 1;
+        }
+    }
+    println!("jit_takes: {yes} taken, {no} refused, {} disagree", bad.len());
+    assert!(bad.is_empty(), "{}", bad.join("\n---\n"));
+    assert!(yes > 200 && no > 20, "{yes} {no}");
+}
+
+/// The fused compares (P0b-4) through the kernel: every case of
+/// `crate::tests::fused_compare_cases`, the bytes of the VM's frame (the
+/// pixel templates and the row function's).
+#[test]
+fn fused_compares_draw_the_same_through_kernels() {
+    let mut lowered = 0;
+    for (src, _) in crate::tests::fused_compare_cases() {
+        let prog = compile(&src).unwrap();
+        let times = [0, 1999, 2000, 4000, 7321];
+        if same_as_vm("fused", &src, &prog, &times).is_ok() {
+            lowered += 1;
+        }
+    }
+    assert!(lowered >= 250, "only {lowered} lowered");
+}
+
+/// Endless road V2 (its scenes, the fused compares, the guards) through
+/// the kernel at points of its cycle: each place and transition, by day
+/// and by night, three seeds.
+#[test]
+fn road_v2_draws_the_same_through_kernels() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let src = std::fs::read_to_string(root.join("../opendmd-web/experiments/road-v2/road-v2.psi"))
+        .unwrap();
+    let prog = compile(&src).unwrap();
+    let low = lower(&prog).unwrap_or_else(|w| panic!("the JIT refuses road-v2: {w}"));
+    let u = picture();
+    for seed in [0.0, 1.0 / 3.0, 2.0 / 3.0] {
+        for k in 0..24 {
+            // Through the cycle (324 s), and a day later (the sun moved).
+            for day in [0u64, 1] {
+                let p = (k as f64 + 0.5) / 24.0;
+                let t = (p - seed - 0.125 + 2.0 + day as f64 * 3.0) * 324.0;
+                let mut inputs = golden::inputs(0);
+                inputs.seed = (seed * 65536.0) as i32;
+                inputs.set_ms(&prog, (t * 1000.0) as u64);
+                let want = vm_frame(&prog, &inputs, None, PLAIN);
+                let (got, _) = kernel_frame(&prog, &low, &inputs, None, PLAIN);
+                if let Some(d) = first_diff(&got, &want) {
+                    panic!("road-v2 seed {seed} at {t} s: the kernel's pixel {d:?}");
+                }
+                let with = With {
+                    under: Some(&u),
+                    ink: prog.draws(),
+                };
+                let want = vm_frame(&prog, &inputs, None, with);
+                let (got, _) = kernel_frame(&prog, &low, &inputs, None, with);
+                assert!(
+                    first_diff(&got, &want).is_none(),
+                    "road-v2 over a picture, {t} s"
+                );
+            }
+        }
+    }
 }

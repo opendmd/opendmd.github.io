@@ -241,12 +241,14 @@ rgb(0.5, #f00, 1)
 --- 1:10 `rgb(r, g, b)` takes three numbers, not colours: write a colour alone, as `#f80 * k`
 
 === E401
-<<8200*x >>
---- 1:16385 too long: a formula can be 16384 characters at most
+<<16400*x >>
+--- 1:32769 too long: a formula can be 32768 characters at most
 
 === E402
-gray(<<200; + ;sin(x * {k})>>)
---- 1:1 this formula is too long for the panel: 599 steps, the limit is 256
+v = x
+<<260;\n;v = sin(v*1.01 + x)>>
+gray(v)
+--- 262:1 this formula is too long for the panel: 781 steps (per frame 0, draw 0, per row 0, per pixel 781), the limit is 768
 
 === E403
 <<14;\n;w{k} = sin(x * {k})>>
@@ -254,8 +256,8 @@ gray(<<14; + ;w{k}>>)
 --- 15:1 this formula holds more than 12 values at once (the panel's registers): use each sooner
 
 === E404
-gray(x<<140;; + {k}.37>>)
---- 1:1 this formula needs more than 128 numbers and once-a-frame values: use fewer
+gray(x<<260;; + {k}.37>>)
+--- 1:1 this formula needs 269 numbers and once-a-frame values, more than the 241 it can hold (steps: per frame 0, draw 0, per row 0, per pixel 261): use fewer
 
 === E405
 v = <<200*(>>x<<200*)>>
@@ -567,19 +569,29 @@ pal(p, x)
 --- 1:19 a palette is 1 to 32 colours: `palette sea = #003, #06c, #fff`
 
 === E923
-palette p1 = #f00
-palette p2 = #0f0
-palette p3 = #00f
-palette p4 = #fff
-pal(p4, x)
---- 4:1 a formula can have 3 palettes of its own at most
+palette p1 = #111, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010
+palette p2 = #222, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010
+palette p3 = #333, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010
+palette p4 = #444, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010
+palette p5 = #555, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010
+palette p6 = #666, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010
+palette p7 = #777, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010
+palette p8 = #888, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010
+palette p9 = #999, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010
+pal(p9, x)
+--- 9:1 a formula can have 8 palettes of its own at most
 
 === E924
-table T = <<200;, ;{k}>>
-palette p = #f00
-palette q = #0f0
-pal(q, T[x])
---- 3:1 tables, sprites and palettes hold 256 numbers in all — this would make 264
+table T = <<250;, ;{k}>>
+sprite s {
+  key . 0, X 1
+  <<64*X>>
+  <<64*X>>
+  <<64*X>>
+  <<64*X>>
+}
+gray(s[px, py] + T[x])
+--- 2:1 tables and sprites hold 256 numbers in all — this would make 261
 
 === E925
 palette sea = deep #003, deep #06c
@@ -614,7 +626,7 @@ palette pa = #f00
 palette pb = #0f0
 layer { cycle(pa, x, t) }
 layer add { cycle(pb, x, t/2) }
---- 4:13 a formula holds 3 palettes: its own (2 here) and one more for each turn `cycle` gives (2 here)
+--- 4:13 a formula holds 3 palettes that `pal` and `cycle` read: its own (2 here) and one more for each turn `cycle` gives (2 here)
 
 === E934
 cycle(fire, x)
@@ -627,6 +639,36 @@ pal(fire, x, 0.5, 2)
 === E935
 cycle(fire, x, t, 0.5, 2)
 --- 1:22 `cycle` takes a palette, the picture and the turn (and how much of the pixel it covers, 0 to 1, if you like); found `,`
+
+=== E936
+palette day = #048, #8cf
+palette night = #002, #224
+palette sky = tween(day, night, x)
+pal(sky, y)
+--- 3:33 `tween` mixes a palette once a frame (by t or a frame value), but this uses `x` (the pixel's position across, 0 at the left to 1 at the right)
+
+=== E937
+palette a = #000, #fff
+palette b = #f00, #0f0
+palette s = tween(a, b, 0.5), tween(fire, b, 0.5)
+pal(s, x)
+--- 3:37 a palette's half is a tween of palettes of your own with 16 colours at most: `fire` is not one
+
+=== E938
+palette a = #000, #fff
+palette b = #f00, #0f0
+palette s = tween(a, b, t/8)
+loop 8
+draw { pset(3, 3, pal(s, 0.5)) }
+gray(x)
+--- 5:23 `s` is a tween, worked out every frame: paint takes a palette of colours (`palette p = #000, #fff`)
+
+=== E939
+palette a = #000, #fff
+palette b = #f00, #0f0
+palette s = tween(a, tween(a, tween(a, tween(a, tween(a, tween(a, b, 0.1), 0.2), 0.3), 0.4), 0.5), 0.6)
+pal(s, x)
+--- 4:1 the tweens need more than 4 palettes worked out at once: nest them less deeply, or tween fewer palettes that only tweens read
 
 === E941
 layer { gray(x) }
@@ -903,3 +945,31 @@ f(x)
 fn p(v) = hsv(v, 1, 1)
 gray(p(x))
 --- 2:6 `p(…)` is a whole colour: use it alone on the colour line (only `#…` and `rgb(r, g, b)` go into sums)
+
+=== E970
+scene s when x > 0.5 {
+  v = y
+}
+gray(v)
+--- 1:14 a scene's `when` is worked out once a frame or once a row (by t, a frame value or py), but this uses `x` (the pixel's position across, 0 at the left to 1 at the right)
+
+=== E971
+scene s when t > 1 {
+  gray(x)
+}
+gray(0)
+--- 2:3 a scene holds values: `name = …` lines (its colours, drawing and palettes go outside it)
+
+=== E972
+<<16;\n;scene s{k} when t > {k} { v{k} = x*{k} }>>
+gray(v1)
+--- 16:1 a formula can have 15 scenes at most
+
+=== E973
+loop 4
+scene s when t > 1 {
+  v = sin(x*9)
+}
+layer rate 4 { gray(v) }
+layer add { gray(y*0.1) }
+--- 6:13 a `rate` layer can't read a scene's per-pixel values: work them out outside the scene, or leave `rate` out

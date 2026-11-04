@@ -149,7 +149,7 @@ pub(crate) fn run<const N: usize>(
     let mut na = 0usize;
     let start = prog.frame_end as usize;
     let end = (prog.draw_end as usize).min(MAX_OPS);
-    let m = |v: u8| (v & 0x7f) as usize;
+    let m = |v: u8| v as usize;
     let mut pen = Pen {
         prims: 0,
         steps: 0,
@@ -166,7 +166,7 @@ pub(crate) fn run<const N: usize>(
                 sc[m(op.d)] = 0;
                 // Out of turns: past the loop (its END), not into it.
                 if turns >= TURNS {
-                    pc = (op.b as usize + 1).max(pc);
+                    pc = (op.target() + 1).max(pc);
                 } else if lanes {
                     #[cfg(not(target_arch = "wasm32"))]
                     if let Some((n, next)) = as_lanes(prog, s, t, ink, &mut pen, pc - 1, turns) {
@@ -179,7 +179,7 @@ pub(crate) fn run<const N: usize>(
                 turns += 1;
                 let k = fixed::add(sc[m(op.a)], ONE);
                 sc[m(op.a)] = k;
-                let back = op.c as usize;
+                let back = op.target();
                 if k < sc[m(op.b)] && turns < TURNS && back > start && back < pc {
                     pc = back;
                 }
@@ -194,10 +194,10 @@ pub(crate) fn run<const N: usize>(
             // Forward only (the verifier holds it): no loop can come of it.
             code::IF => {
                 if sc[m(op.a)] == 0 {
-                    pc = (op.b as usize).max(pc);
+                    pc = op.target().max(pc);
                 }
             }
-            code::JUMP => pc = (op.b as usize).max(pc),
+            code::JUMP => pc = op.target().max(pc),
             _ => super::vm::scalar(sc, &op, t, &prog.tables),
         }
     }
@@ -236,13 +236,13 @@ fn args_paint(
     ink: &mut Ink,
     pen: &mut Pen,
     op: &Op,
-    sc: &[i32; MAX_SCALARS],
+    sc: &Sc,
     args: &mut [i32; 9],
     na: &mut usize,
 ) {
     for v in [op.a, op.b, op.c] {
         if *na < args.len() {
-            args[*na] = sc[(v & 0x7f) as usize];
+            args[*na] = sc[v as usize];
             *na += 1;
         }
     }
@@ -283,11 +283,10 @@ fn run_lanes<const N: usize>(
     vl: &VecLoop,
     n: u32,
 ) {
-    use crate::program::LANE;
     let body = at + 1..vl.end;
-    // A register's operand: `L_I + r` with the lane bit (register `r`
-    // is `s.lanes[r]`).
-    let lane = |r: usize| LANE | (2 + r as u8);
+    // A register's operand: lane `L_I + r` (register `r` is
+    // `s.lanes[r]`).
+    let reg_op = |r: usize| lane(L_I + r as u8);
     let spare = vl.regs as usize + 1;
     let mut j0 = 0u32;
     while j0 < n {
@@ -304,7 +303,7 @@ fn run_lanes<const N: usize>(
             let mut any = false;
             for f in [&mut o.a, &mut o.b, &mut o.c].into_iter().take(ar) {
                 if let Some(r) = vl.reg(*f) {
-                    *f = lane(r);
+                    *f = reg_op(r);
                     any = true;
                 }
             }
@@ -318,9 +317,9 @@ fn run_lanes<const N: usize>(
             // A step that writes a register it reads: into the spare one,
             // then copied (the lane loops write one register while
             // reading others).
-            let reads_d = [o.a, o.b, o.c][..ar].contains(&lane(d));
+            let reads_d = [o.a, o.b, o.c][..ar].contains(&reg_op(d));
             let w = if reads_d { spare.min(REGS) } else { d };
-            o.d = lane(w);
+            o.d = reg_op(w);
             super::vm::lane_draw(s, &o, t, &prog.tables);
             if w != d {
                 let (lo, hi) = s.lanes.split_at_mut(w);
@@ -328,10 +327,10 @@ fn run_lanes<const N: usize>(
             }
         }
         // The lines and dots, turn by turn: each operand a register's
-        // lane at the turn (`0x80 | r`) or a value the same every turn (its
+        // lane at the turn (`lane(r)`) or a value the same every turn (its
         // slot), looked up once a lane of turns.
         let (sc, lanes) = (&s.sc, &s.lanes);
-        let src = |v: u8| vl.reg(v).map_or(v & 0x7f, |r| 0x80 | r as u8);
+        let src = |v: u8| vl.reg(v).map_or(v, |r| lane(r as u8));
         let prim = |op: &Op| matches!(op.code, code::LINE_FROM | code::LINE_TO | code::DOT);
         let mut ps = [[0u8; 4]; PRIMS];
         let mut np = 0;
@@ -363,7 +362,7 @@ fn run_lanes<const N: usize>(
 }
 
 /// One line or dot of a lane loop's turn `j`: each operand a register's
-/// lane at the turn (`0x80 | r`) or a slot. In IRAM with [`Pen::line`]:
+/// lane at the turn (`lane(r)`) or a slot. In IRAM with [`Pen::line`]:
 /// the two were ~12 % of Starfield's frame instructions from flash
 /// (display-isolation 2026-11-02, esp32sim's block profile).
 #[cfg(not(target_arch = "wasm32"))]
@@ -373,15 +372,15 @@ fn lane_prim<const N: usize>(
     pen: &mut Pen,
     ink: &mut Ink,
     p: [u8; 4],
-    sc: &[i32; MAX_SCALARS],
+    sc: &Sc,
     lanes: &[[i32; N]; REGS + 1],
     j: usize,
 ) {
     let at = |o: u8| {
-        if o & 0x80 != 0 {
-            lanes[(o & 0x7f) as usize % (REGS + 1)][j % N]
+        if is_lane(o) {
+            lanes[lane_no(o) as usize % (REGS + 1)][j % N]
         } else {
-            sc[o as usize % MAX_SCALARS]
+            sc[o as usize]
         }
     };
     let (a, b, c) = (at(p[1]), at(p[2]), at(p[3]));

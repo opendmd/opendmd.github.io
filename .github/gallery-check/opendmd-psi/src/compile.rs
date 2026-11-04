@@ -33,7 +33,7 @@ mod notes;
 /// the readable Endless road is ~6 KB). What the panel compiles is bounded
 /// by its heap check, by tokens (`compile_heap_estimate`); a Formula read
 /// from the card is compacted first (8 KB at most), an inline path is 6 KB.
-pub const MAX_SOURCE: usize = 16 * 1024;
+pub const MAX_SOURCE: usize = 32 * 1024;
 /// Expression nodes (before dead ones are dropped): bounds compile time.
 pub const MAX_NODES: usize = 1024;
 /// Brackets, operators and function calls nested this deep: bounds the
@@ -1012,17 +1012,20 @@ const LV_LOOP2: u8 = 3;
 const LV_ROW: u8 = 4;
 const LV_PIXEL: u8 = 5;
 
-const K_CONST: u8 = 200;
-const K_INPUT: u8 = 201;
+/// Node kinds that are not steps: above every op code (the fused
+/// compares are 0xf0..=0xf5), `code >= K_CONST` is "not a step".
+const K_CONST: u8 = 250;
+const _: () = assert!(code::CMP_LAST < K_CONST);
+const K_INPUT: u8 = 251;
 /// A `for` loop's counter (`val`: the loop's number), given a scalar slot
 /// when the loop is laid out.
-const K_COUNTER: u8 = 202;
+const K_COUNTER: u8 = 252;
 /// A value that grows without end plus a small one that varies more than
 /// once a frame (`t*0.15 + x`: `a` the wide part, `b` the small one), at
 /// the small one's level. Never laid out: whatever takes it is rewritten
 /// ([`Dag::wide_op`]) into the wide part's way back to a Q16.16 and the
 /// small one (`noise(w + s)` is a `NOISE_O` of `frac(w) + s`).
-const K_SPLIT: u8 = 203;
+const K_SPLIT: u8 = 253;
 /// A `K_INPUT`'s `val` for `t` in a `loop forever` formula: wide slot 0.
 const WIDE_T: i32 = 0x100;
 
@@ -1030,6 +1033,12 @@ const WIDE_T: i32 = 0x100;
 /// (`Parser::varies_err`).
 const DRAW_ONLY: &str = "`draw { }` runs once a frame, before any pixel, but ";
 const CYCLE_ROW: &str = "`cycle` turns a whole row at once (by t, a frame value or py), but ";
+/// E970.
+const SCENE_WHEN: &str = "a scene's `when` is worked out once a frame or once a row (by t, a frame value or py), but ";
+/// Scenes a formula may have (`code::GUARD`'s `c` keeps its number).
+const MAX_SCENES: usize = 15;
+/// E936.
+const TWEEN_FRAME: &str = "`tween` mixes a palette once a frame (by t or a frame value), but ";
 
 /// E901: a value that grows without end where it can't go.
 const GROWS: &str = "`t` grows without end in `loop forever`, and this can't take it: \
@@ -1074,6 +1083,14 @@ struct Dag {
     /// language service's per-op costs).
     #[cfg(feature = "syntax")]
     made: Vec<(Id, usize, usize)>,
+    /// `scene NAME when c { … }`: the nodes each made, `(first, end, its
+    /// number from 1)` (`end` `NO` while it is read), and the one being
+    /// read (0: none). Its row and pixel values are its own
+    /// ([`Dag::scene_of`]): never shared with a value outside it.
+    scenes: Vec<(Id, Id, u8)>,
+    scene: u8,
+    /// Each scene's `when` (scene k's at k − 1).
+    conds: Vec<Id>,
 }
 
 /// Index slots: a power of two, twice [`MAX_NODES`] (4 KB, freed with the
@@ -1099,6 +1116,21 @@ impl Node {
 }
 
 impl Dag {
+    /// The scene whose steps work node `i` out (0: none): a row or pixel
+    /// value made while the scene was read.
+    fn scene_of(&self, i: usize) -> u8 {
+        let m = &self.nodes[i];
+        if m.level < LV_ROW || m.code >= K_CONST {
+            return 0;
+        }
+        self.scenes
+            .iter()
+            .find(|&&(a, e, _)| i >= a as usize && (e == NO || i < e as usize))
+            .map_or(0, |s| s.2)
+    }
+}
+
+impl Dag {
     fn level(&self, id: Id) -> u8 {
         self.nodes[id as usize].level
     }
@@ -1112,10 +1144,17 @@ impl Dag {
     #[inline(never)]
     fn push(&mut self, n: Node, at: (usize, usize)) -> Result<Id, Error> {
         let mut slot = n.hash() & (SLOTS - 1);
+        let tag = if self.scene != 0 && n.level >= LV_ROW && n.code < K_CONST {
+            self.scene
+        } else {
+            0
+        };
         loop {
             match self.index[slot] {
                 NO => break,
-                i if self.nodes[i as usize] == n => return Ok(i),
+                i if self.nodes[i as usize] == n && self.scene_of(i as usize) == tag => {
+                    return Ok(i)
+                }
                 _ => slot = (slot + 1) & (SLOTS - 1),
             }
         }
@@ -1189,9 +1228,9 @@ impl Dag {
         let (val, level) = match inp {
             Input::T if self.forever => (WIDE_T, LV_FRAME),
             Input::Seed => (S_SEED as i32, LV_FRAME),
-            Input::X => ((LANE | L_X) as i32, LV_PIXEL),
-            Input::Px => ((LANE | L_PX) as i32, LV_PIXEL),
-            Input::I => ((LANE | L_I) as i32, LV_PIXEL),
+            Input::X => (lane(L_X) as i32, LV_PIXEL),
+            Input::Px => (lane(L_PX) as i32, LV_PIXEL),
+            Input::I => (lane(L_I) as i32, LV_PIXEL),
             Input::Y => (S_Y as i32, LV_ROW),
             Input::Py => (S_PY as i32, LV_ROW),
             Input::T => (S_T as i32, LV_FRAME),
@@ -2008,7 +2047,50 @@ struct Table<'s> {
     len: usize,
 }
 
-/// `palette NAME = #…, …`: the formula's own palette `j` (`pal`'s 5 + j).
+/// A formula's own palette: its colours (its 32 entries, and over 16 when
+/// it has 16 or fewer: for a tween's half), or a tween of palettes worked
+/// out once a frame (`tween`: its parts' roots in `Parser::pnodes`, the
+/// second a half's or `NO_PART`); the live slot `pal` and `cycle` read it
+/// from, once one does.
+struct OwnPal {
+    entries: [i32; 32],
+    half: Option<[i32; 16]>,
+    tween: Option<[u16; 2]>,
+    live: Option<u8>,
+}
+
+const NO_PART: u16 = u16::MAX;
+
+/// A tween's palette: one of the formula's own (`Parser::palettes`), a
+/// built-in (`PALETTES`' id), or another tween (`Parser::pnodes`), with
+/// where it is written (errors).
+#[derive(Clone, Copy)]
+enum PSrc {
+    Own(usize, (usize, usize)),
+    Builtin(u8, (usize, usize)),
+    Node(u16),
+}
+
+/// `tween(p, q, w)`.
+#[derive(Clone, Copy)]
+struct PNode {
+    p: PSrc,
+    q: PSrc,
+    w: Id,
+}
+
+/// A tween step as `emit` lays it out: `TWEEN d, a, b` with its weight's
+/// node.
+#[derive(Clone, Copy)]
+struct TweenOp {
+    d: u8,
+    a: u8,
+    b: u8,
+    w: Id,
+}
+
+/// `palette NAME = #…, …` (or `= tween(…)`): the formula's own palette
+/// `j` (`Parser::palettes`).
 struct Palette<'s> {
     name: &'s str,
     at: usize,
@@ -2098,9 +2180,10 @@ struct Parser<'s> {
     table_names: Vec<Table<'s>>,
     sprites: Vec<Sprite<'s>>,
     /// The formula's own palettes (32 entries each, 0x00RRGGBB; the same
-    /// stored once) and their names.
-    palettes: Vec<[i32; 32]>,
+    /// colours stored once; tweens), their names, and the tweens' nodes.
+    palettes: Vec<OwnPal>,
     palette_names: Vec<Palette<'s>>,
+    pnodes: Vec<PNode>,
     /// The draw stage: its items, the `draw` that wrote them, whether the
     /// lines being read are recorded (not for a part read again at another
     /// place: its draw stage is the one read where it is written), how deep
@@ -3045,9 +3128,8 @@ impl<'s> Parser<'s> {
         }
         self.next();
         let pname = self.text(p);
-        let own = self
-            .palette_named(pname)
-            .map(|k| 5 + self.palette_names[k].j as u8);
+        let own = self.palette_named(pname).map(|k| self.palette_names[k].j);
+        let own = own.map(|j| 5 + self.live_of(j));
         let Some(pal) = PALETTES.iter().find(|e| e.0 == pname).map(|e| e.1).or(own) else {
             return Err(self.unknown_palette(p));
         };
@@ -3392,6 +3474,86 @@ impl<'s> Parser<'s> {
                 scope: self.scope,
             },
         )?;
+        self.end_of_statement()
+    }
+
+    /// `scene NAME when …` at the cursor (not a keyword: `scene = 3` still
+    /// sets a name).
+    fn is_scene(&self) -> bool {
+        let t = self.peek();
+        let w = self.tok(self.pos + 2);
+        t.tok == Tok::Name
+            && self.text(t) == "scene"
+            && self.tok(self.pos + 1).tok == Tok::Name
+            && w.tok == Tok::Name
+            && self.text(w) == "when"
+    }
+
+    /// `scene NAME when c { name = … }`: values whose row and pixel steps
+    /// run only while `c` (once a frame or once a row) is not 0; a name it
+    /// sets reads 0 after it while it is off (its row and pixel values
+    /// are zeroed by its guard, `code::GUARD`; any other, a constant, a
+    /// frame value or one from outside, is `c ? v : 0`).
+    #[inline(never)]
+    fn scene_block(&mut self) -> Result<(), Error> {
+        let kw = self.next();
+        self.next(); // its name
+        self.next(); // `when`
+        let st = self.peek();
+        let mut c = self.expr(0)?;
+        let at = (
+            st.start,
+            self.toks[self.pos.saturating_sub(1)].get().end.max(st.end),
+        );
+        if self.dag.level(c) > LV_ROW {
+            // E970.
+            return Err(self.varies_err(at, SCENE_WHEN, c));
+        }
+        if self.dag.grows(c) {
+            // (Not 0 where it is not: `min(c, 1)`.)
+            let one = self.dag.constant(ONE, at)?;
+            c = self.dag.op(code::MIN, [c, one, 0], at)?;
+        }
+        if self.dag.scenes.len() >= MAX_SCENES {
+            // E972.
+            return self.err(kw, format!("a formula can have {MAX_SCENES} scenes at most"));
+        }
+        self.expect(Tok::LBrace, "`{` (as in `scene city when c { … }`)")?;
+        self.skip_newlines();
+        let k = self.dag.scenes.len() as u8 + 1;
+        try_push(&mut self.dag.scenes, (self.dag.nodes.len() as Id, NO, k))?;
+        try_push(&mut self.dag.conds, c)?;
+        self.dag.scene = k;
+        let first_local = self.locals.len();
+        loop {
+            let t = self.peek();
+            if t.tok == Tok::RBrace {
+                self.next();
+                break;
+            }
+            if !self.is_assignment() {
+                self.dag.scene = 0;
+                // E971.
+                return self.err(
+                    t,
+                    "a scene holds values: `name = …` lines (its colours, drawing and palettes go outside it)",
+                );
+            }
+            self.assignment(false)?;
+            self.skip_newlines();
+        }
+        self.dag.scene = 0;
+        if let Some(s) = self.dag.scenes.last_mut() {
+            s.1 = self.dag.nodes.len() as Id;
+        }
+        // Its names: 0 while it is off.
+        let zero = self.dag.constant(0, at)?;
+        for j in first_local..self.locals.len() {
+            let id = self.locals[j].id;
+            if self.dag.scene_of(id as usize) != k {
+                self.locals[j].id = self.dag.op(code::SELECT, [c, id, zero], at)?;
+            }
+        }
         self.end_of_statement()
     }
 
@@ -3897,14 +4059,21 @@ impl<'s> Parser<'s> {
     /// `palette NAME = #…, #…, …` at `kw`: 1 to 32 colours (a `,` may end a
     /// line), spread over the palette's 32 entries so that `pal(NAME, i/(n −
     /// 1))` is colour `i` (the first at 0, the last at 1, the others in
-    /// steps between), as the tables' last 32 numbers (the next palette's
-    /// the 32 below).
+    /// steps between), and with 16 colours or fewer over 16 too (a tween's
+    /// half reads those). Or `palette NAME = tween(…)` ([`tween_palette`]).
     #[inline(never)]
     fn palette(&mut self, kw: Token) -> Result<(), Error> {
         self.next();
         let n = self.next();
         let name = self.new_name(n, Naming::Thing)?;
         self.next(); // `=`
+        let t = self.peek();
+        if t.tok == Tok::Name
+            && self.text(t) == "tween"
+            && self.tok(self.pos + 1).tok == Tok::LParen
+        {
+            return self.tween_palette(name, n);
+        }
         let mut cols: Vec<u32> = Vec::new();
         let from = self.pos as u32;
         loop {
@@ -3950,25 +4119,44 @@ impl<'s> Parser<'s> {
         // Entry e (where `pal` reads k in e/32..(e + 1)/32) is the colour
         // nearest its middle, (e + ½)/32·(n − 1): so k = i/(n − 1), exact
         // or a hair below (a division per pixel is a multiply), is colour i.
+        // Over 16 entries the same way (16 colours: entry e is colour e).
         let last = cols.len() - 1;
         let mut entries = [0i32; 32];
         for (e, v) in entries.iter_mut().enumerate() {
             *v = cols[((2 * e + 1) * last + 32) / 64] as i32;
         }
-        let j = match self.palettes.iter().position(|p| *p == entries) {
+        let half = (cols.len() <= 16).then(|| {
+            let mut h = [0i32; 16];
+            for (e, v) in h.iter_mut().enumerate() {
+                *v = cols[((2 * e + 1) * last + 16) / 32] as i32;
+            }
+            h
+        });
+        let same = |p: &OwnPal| p.tween.is_none() && p.entries == entries && p.half == half;
+        let j = match self.palettes.iter().position(same) {
             Some(j) => j,
             None => {
-                if self.palettes.len() >= USER_PALETTES {
+                // (In halves of a store place, as the store lays them out: a
+                // palette of 16 colours or fewer may go in a tween's half;
+                // the layout's own check, `lay_palettes`, has the last word.)
+                let halves = |p: &OwnPal| if p.half.is_some() { 1 } else { 2 };
+                let held: usize = self.palettes.iter().filter(|p| p.tween.is_none()).map(halves).sum();
+                if held + if half.is_some() { 1 } else { 2 } > 2 * MAX_PALETTES {
                     // E923.
                     return self.err(
                         kw,
-                        format!("a formula can have {USER_PALETTES} palettes of its own at most"),
+                        format!("a formula can have {MAX_PALETTES} palettes of its own at most"),
                     );
                 }
-                if self.tables.len() + 32 * (self.palettes.len() + 1) > MAX_TABLE {
-                    return Err(self.too_full(kw, 32));
-                }
-                try_push(&mut self.palettes, entries)?;
+                try_push(
+                    &mut self.palettes,
+                    OwnPal {
+                        entries,
+                        half,
+                        tween: None,
+                        live: None,
+                    },
+                )?;
                 self.palettes.len() - 1
             }
         };
@@ -3987,15 +4175,169 @@ impl<'s> Parser<'s> {
         self.end_of_statement()
     }
 
-    /// E924: the tables, sprites and palettes would pass the 256 numbers.
+    /// `palette NAME = tween(P, Q, w)` (the cursor at `tween`), or two of
+    /// them, `tween(…), tween(…)`: the palette's low and high 16 entries,
+    /// each of palettes of 16 colours at most (E937). Its 32 entries are
+    /// worked out once a frame (`code::TWEEN`); `NAME.n` is 32, `NAME.step`
+    /// one entry.
+    #[inline(never)]
+    fn tween_palette(&mut self, name: &'s str, n: Token) -> Result<(), Error> {
+        let from = self.pos as u32;
+        let mut parts = [NO_PART; 2];
+        for (k, part) in parts.iter_mut().enumerate() {
+            let t = self.peek();
+            if t.tok != Tok::Name || self.text(t) != "tween" {
+                return Err(self.expected(
+                    t,
+                    "another `tween(…)`: a palette is one tween, or two (its halves)",
+                ));
+            }
+            *part = self.tween_node()?;
+            if k == 1 || self.peek().tok != Tok::Comma {
+                break;
+            }
+            self.next();
+            self.skip_newlines();
+        }
+        if parts[1] != NO_PART {
+            // Each half: palettes of the formula's own of 16 colours or
+            // fewer (their entries over 16), and tweens of them.
+            let mut stack: Vec<PSrc> = Vec::new();
+            for &r in &parts {
+                stack.push(PSrc::Node(r));
+            }
+            while let Some(s) = stack.pop() {
+                let at = match s {
+                    PSrc::Node(k) => {
+                        let m = self.pnodes[k as usize];
+                        stack.push(m.p);
+                        stack.push(m.q);
+                        continue;
+                    }
+                    PSrc::Own(j, _) if self.palettes[j].half.is_some() => continue,
+                    PSrc::Own(_, at) | PSrc::Builtin(_, at) => at,
+                };
+                // E937.
+                return Err(Error::new(
+                    at.0,
+                    at.1,
+                    format!(
+                        "a palette's half is a tween of palettes of your own with 16 colours at most: `{}` is not one",
+                        sub(self.src, at.0, at.1)
+                    ),
+                ));
+            }
+        }
+        try_push(
+            &mut self.palettes,
+            OwnPal {
+                entries: [0; 32],
+                half: None,
+                tween: Some(parts),
+                live: None,
+            },
+        )?;
+        try_push(
+            &mut self.palette_names,
+            Palette {
+                name,
+                at: n.start,
+                scope: self.scope,
+                j: self.palettes.len() - 1,
+                n: 32,
+                from,
+                to: from,
+            },
+        )?;
+        self.end_of_statement()
+    }
+
+    /// `tween(P, Q, w)` at the cursor: its node.
+    #[inline(never)]
+    fn tween_node(&mut self) -> Result<u16, Error> {
+        let kw = self.next();
+        self.expect(Tok::LParen, "`(` (as in `tween(day, night, w)`)")?;
+        let p = self.tween_src()?;
+        self.expect(
+            Tok::Comma,
+            "`,` and the palette to mix towards (as in `tween(day, night, w)`)",
+        )?;
+        let q = self.tween_src()?;
+        self.expect(
+            Tok::Comma,
+            "`,` and how far to mix, 0 to 1 (as in `tween(day, night, w)`)",
+        )?;
+        let st = self.peek();
+        let mut w = self.expr(0)?;
+        let at = (
+            st.start,
+            self.toks[self.pos.saturating_sub(1)].get().end.max(st.end),
+        );
+        if self.dag.level(w) > LV_FRAME {
+            // E936.
+            return Err(self.varies_err(at, TWEEN_FRAME, w));
+        }
+        if self.dag.grows(w) {
+            // (Held to 0..1 anyway: past 1 is 1.)
+            let one = self.dag.constant(ONE, at)?;
+            w = self.dag.op(code::MIN, [w, one, 0], at)?;
+        }
+        self.expect(Tok::RParen, "`)` (as in `tween(day, night, w)`)")?;
+        if self.pnodes.len() >= u16::MAX as usize - 1 {
+            return self.err(kw, "this is nested too deeply — split it into named steps");
+        }
+        try_push(&mut self.pnodes, PNode { p, q, w })?;
+        Ok((self.pnodes.len() - 1) as u16)
+    }
+
+    /// A tween's palette at the cursor: a name (the formula's own or a
+    /// built-in) or another `tween(…)`.
+    fn tween_src(&mut self) -> Result<PSrc, Error> {
+        let t = self.peek();
+        if t.tok != Tok::Name {
+            return Err(self.expected(t, "a palette (as in `tween(day, night, w)`)"));
+        }
+        let name = self.text(t);
+        if name == "tween" && self.tok(self.pos + 1).tok == Tok::LParen {
+            return Ok(PSrc::Node(self.tween_node()?));
+        }
+        self.next();
+        let at = (t.start, t.end);
+        if let Some(k) = self.palette_named(name) {
+            return Ok(PSrc::Own(self.palette_names[k].j, at));
+        }
+        match PALETTES.iter().find(|e| e.0 == name).map(|e| e.1) {
+            // E932.
+            Some(255) => self.err(
+                t,
+                "`tween` mixes palettes of colours, and gray is not one: write your own, `palette g = #000, #fff`",
+            ),
+            Some(b) => Ok(PSrc::Builtin(b, at)),
+            None => Err(self.unknown_palette(t)),
+        }
+    }
+
+    /// The live slot `pal` and `cycle` read the formula's own palette `j`
+    /// from: given at its first (E933 past three, with the turns, once
+    /// the formula is read).
+    fn live_of(&mut self, j: usize) -> u8 {
+        if let Some(l) = self.palettes[j].live {
+            return l;
+        }
+        let l = self.palettes.iter().filter(|p| p.live.is_some()).count() as u8;
+        self.palettes[j].live = Some(l);
+        l
+    }
+
+    /// E924: the tables and sprites would pass the 256 numbers.
     #[cold]
     #[inline(never)]
     fn too_full(&self, kw: Token, more: usize) -> Error {
         self.fail_at(
             kw,
             format!(
-                "tables, sprites and palettes hold {MAX_TABLE} numbers in all — this would make {}",
-                self.tables.len() + 32 * self.palettes.len() + more
+                "tables and sprites hold {MAX_TABLE} numbers in all — this would make {}",
+                self.tables.len() + more
             ),
         )
     }
@@ -4280,7 +4622,7 @@ impl<'s> Parser<'s> {
         {
             Some(k) => k,
             None => {
-                if self.tables.len() + words.len() + 32 * self.palettes.len() > MAX_TABLE {
+                if self.tables.len() + words.len() > MAX_TABLE {
                     // E917.
                     return Err(self.too_full(kw, words.len()));
                 }
@@ -4342,7 +4684,7 @@ impl<'s> Parser<'s> {
         {
             Some(k) => k,
             None => {
-                if self.tables.len() + vals.len() + 32 * self.palettes.len() > MAX_TABLE {
+                if self.tables.len() + vals.len() > MAX_TABLE {
                     return self.err(
                         kw,
                         format!(
@@ -5139,7 +5481,7 @@ impl<'s> Parser<'s> {
                 _ => self
                     .palettes
                     .get((pal - 5) as usize)
-                    .map_or(0, |p| p[e] as u32),
+                    .map_or(0, |p| p.entries[e] as u32),
             };
             try_push(&mut self.paint, c)?;
         }
@@ -5172,9 +5514,17 @@ impl<'s> Parser<'s> {
         } else {
             let pt = self.next();
             let pname = self.text(pt);
-            let own = self
-                .palette_named(pname)
-                .map(|k| 5 + self.palette_names[k].j as u8);
+            // (The paint palette's colours are fixed: a palette of the
+            // formula's own by its index here, never a live slot.)
+            let own = self.palette_named(pname).map(|k| self.palette_names[k].j);
+            if own.is_some_and(|j| self.palettes[j].tween.is_some()) {
+                // E938.
+                return self.err(
+                    pt,
+                    format!("`{pname}` is a tween, worked out every frame: paint takes a palette of colours (`palette p = #000, #fff`)"),
+                );
+            }
+            let own = own.map(|j| 5 + j as u8);
             let Some(pal) = PALETTES.iter().find(|e| e.0 == pname).map(|e| e.1).or(own) else {
                 return Err(self.unknown_palette(pt));
             };
@@ -5289,7 +5639,7 @@ impl<'s> Parser<'s> {
                 {
                     Some(k) if !vals.is_empty() => k,
                     _ => {
-                        if self.tables.len() + vals.len() + 32 * self.palettes.len() > MAX_TABLE {
+                        if self.tables.len() + vals.len() > MAX_TABLE {
                             return self.err(st, "this text doesn't fit: tables, sprites and texts hold 256 numbers in all");
                         }
                         try_extend(&mut self.tables, &vals)?;
@@ -5496,6 +5846,7 @@ impl<'s> Parser<'s> {
                 "table" => self.table(t)?,
                 _ if self.is_sprite() => self.sprite(t)?,
                 _ if self.is_palette() => self.palette(t)?,
+                _ if end == Tok::Eof && self.is_scene() => self.scene_block()?,
                 "for" => return Err(self.misplaced(t)),
                 "use" => {
                     return self.err(
@@ -5997,12 +6348,49 @@ pub fn compile_portable(src: &str, prog: &mut Program) -> Result<Info, Error> {
     compile_impl(src, prog, true, false, true, false)
 }
 
+/// [`compile_portable`] with (`cmp`) or without the fused compares (P0b-4;
+/// the same bytes): the paint probe's before and after.
+#[doc(hidden)]
+pub fn compile_portable_with(src: &str, prog: &mut Program, cmp: bool) -> Result<Info, Error> {
+    compile_full(
+        src,
+        prog,
+        (true, false, true, false, false, cmp),
+        None,
+        #[cfg(feature = "syntax")]
+        None,
+    )
+}
+
 /// [`compile_into`] without the fused runs' markers (`crate::fuse`; the
 /// same bytes): for the tests that compare, and psi-probe's before and
 /// after.
 #[doc(hidden)]
 pub fn compile_unfused(src: &str, prog: &mut Program) -> Result<Info, Error> {
     compile_impl(src, prog, true, true, true, false)
+}
+
+/// [`compile_with`] with (`cmp`) or without the fused compares (P0b-4,
+/// `fuse_compares`; the same bytes): without, each comparison a step of
+/// its own, as the device measured the estimate's rows before them (the
+/// estimate's tests, psi-probe's before and after, the tests that
+/// compare).
+#[doc(hidden)]
+pub fn compile_measured(
+    src: &str,
+    prog: &mut Program,
+    runs: bool,
+    narrow: bool,
+    cmp: bool,
+) -> Result<Info, Error> {
+    compile_full(
+        src,
+        prog,
+        (runs, narrow, true, true, false, cmp),
+        None,
+        #[cfg(feature = "syntax")]
+        None,
+    )
 }
 
 /// [`compile_with`] with (`reuse`) or without scalar slots used again once
@@ -6033,7 +6421,7 @@ fn compile_impl(
     compile_full(
         src,
         prog,
-        (runs, narrow, reuse, fuse, false),
+        (runs, narrow, reuse, fuse, false, true),
         None,
         #[cfg(feature = "syntax")]
         None,
@@ -6050,7 +6438,7 @@ fn compile_impl(
 fn compile_full<'s>(
     src: &'s str,
     prog: &mut Program,
-    (runs, narrow, reuse, fuse, look): (bool, bool, bool, bool, bool),
+    (runs, narrow, reuse, fuse, look, cmp): (bool, bool, bool, bool, bool, bool),
     mut declared: Option<&mut Declared>,
     #[cfg(feature = "syntax")] sink: Option<&'s mut (dyn crate::syntax::Sink + 's)>,
 ) -> Result<Info, Error> {
@@ -6059,7 +6447,7 @@ fn compile_full<'s>(
         src,
         prog,
         runs,
-        reuse,
+        (reuse, cmp),
         look,
         declared.as_deref_mut(),
         #[cfg(feature = "syntax")]
@@ -6072,7 +6460,7 @@ fn compile_full<'s>(
             src,
             prog,
             false,
-            reuse,
+            (reuse, cmp),
             look,
             declared,
             #[cfg(feature = "syntax")]
@@ -6106,7 +6494,7 @@ pub fn compile_declared(src: &str, prog: &mut Program) -> Result<Declared, Error
     compile_full(
         src,
         prog,
-        (true, false, true, false, false),
+        (true, false, true, false, false, true),
         Some(&mut d),
         #[cfg(feature = "syntax")]
         None,
@@ -6120,7 +6508,7 @@ fn compile_inner<'s>(
     src: &'s str,
     prog: &mut Program,
     runs: bool,
-    reuse: bool,
+    (reuse, cmp): (bool, bool),
     look: bool,
     declared: Option<&mut Declared>,
     #[cfg(feature = "syntax")] sink: Option<&'s mut (dyn crate::syntax::Sink + 's)>,
@@ -6152,6 +6540,9 @@ fn compile_inner<'s>(
             deps: Vec::new(),
             #[cfg(feature = "syntax")]
             made: Vec::new(),
+            scenes: Vec::new(),
+            scene: 0,
+            conds: Vec::new(),
         },
         locals: Vec::new(),
         depth: 0,
@@ -6167,6 +6558,7 @@ fn compile_inner<'s>(
         sprites: Vec::new(),
         palettes: Vec::new(),
         palette_names: Vec::new(),
+        pnodes: Vec::new(),
         draw: Vec::new(),
         funcs: Vec::new(),
         calling: Vec::new(),
@@ -6195,7 +6587,7 @@ fn compile_inner<'s>(
     let body = p.body(Tok::Eof);
     #[cfg(feature = "syntax")]
     p.observe();
-    finish(src, &mut p, body?, prog, (runs, reuse, look), declared)
+    finish(src, &mut p, body?, prog, (runs, reuse, look, cmp), declared)
 }
 
 /// The rest of [`compile_inner`], once the formula is read: the program
@@ -6207,7 +6599,7 @@ fn finish(
     p: &mut Parser<'_>,
     body: Body,
     prog: &mut Program,
-    (runs, reuse, look): (bool, bool, bool),
+    (runs, reuse, look, cmp): (bool, bool, bool, bool),
     declared: Option<&mut Declared>,
 ) -> Result<Info, Error> {
     if let Some(v) = body.loop_v {
@@ -6281,9 +6673,6 @@ fn finish(
     }
     prog.tables[..p.tables.len()].copy_from_slice(&p.tables);
     prog.paint[..p.paint.len()].copy_from_slice(&p.paint);
-    for (j, entries) in p.palettes.iter().enumerate() {
-        prog.tables[user_palette_at(j)..][..32].copy_from_slice(entries);
-    }
     if p.dag.forever {
         // E905 at the formula's own value that grows and varies across the
         // panel, when one is on the way.
@@ -6345,14 +6734,14 @@ fn finish(
             turns.push(tn);
         }
     }
-    let n_own = p.palettes.len();
+    let n_own = p.palettes.iter().filter(|o| o.live.is_some()).count();
     if n_own + turns.len() > USER_PALETTES {
         // E933.
         return Err(Error::new(
             ct.start,
             ct.end,
             format!(
-                "a formula holds {USER_PALETTES} palettes: its own ({n_own} here) and one more for each turn `cycle` gives ({} here)",
+                "a formula holds {USER_PALETTES} palettes that `pal` and `cycle` read: its own ({n_own} here) and one more for each turn `cycle` gives ({} here)",
                 turns.len()
             ),
         ));
@@ -6360,6 +6749,8 @@ fn finish(
     for (j, &tn) in turns.iter().enumerate() {
         p.dag.nodes[tn as usize].b = (n_own + j) as Id;
     }
+    // The palette store and the tweens.
+    let tweens = lay_palettes(p, prog, (ct.start, ct.end))?;
     let mut steps = Vec::with_capacity(layers.len());
     for (k, c) in layers.iter().enumerate() {
         let plain = k == 0 && !backdrop;
@@ -6453,16 +6844,21 @@ fn finish(
     p.sprites = Vec::new();
     p.palettes = Vec::new();
     p.palette_names = Vec::new();
+    p.pnodes = Vec::new();
     p.dag.index = Vec::new();
     p.dag.divs = Vec::new();
     // A limit hit while laying out the steps is the formula's as a whole:
     // point at its (top) colour line.
     #[cfg(feature = "syntax")]
-    let mut seen = (Vec::new(), Vec::new());
+    let mut seen = (Vec::new(), Vec::new(), None);
+    if cmp {
+        fuse_compares(&mut p.dag, &steps, &p.draw, &tweens)?;
+    }
     emit(
         &p.dag,
         &steps,
         &p.draw,
+        &tweens,
         backdrop,
         runs,
         reuse,
@@ -6484,6 +6880,243 @@ fn finish(
     })
 }
 
+/// The palette store (`Program::pals`) and the tween steps for the
+/// formula's own palettes: each palette of colours `pal` or `cycle` reads
+/// in the store slot of its live slot (the frame starts from those), then
+/// the palettes the tweens read, a slot each or a half (a palette in a
+/// tween's half: its colours over 16), E923 past [`MAX_PALETTES`]; each
+/// tween `pal` or `cycle` reads into its live slot, and the tweens those
+/// read into working palettes (E939 past [`TWEEN_TEMPS`] at once), in
+/// order. A tween inside another is worked out into the outer one's
+/// destination when it is its first palette (in place: `own_palettes`
+/// reads an entry's sources before it writes it), else into a working
+/// palette.
+#[inline(never)]
+fn lay_palettes(
+    p: &Parser<'_>,
+    prog: &mut Program,
+    at: (usize, usize),
+) -> Result<Vec<TweenOp>, Error> {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Lay {
+        Full(usize),
+        Builtin(u8),
+        Low(usize),
+        High(usize),
+    }
+    struct L<'a> {
+        pals: &'a [OwnPal],
+        nodes: &'a [PNode],
+        prog: &'a mut Program,
+        map: Vec<(Lay, u8)>,
+        lo: [bool; MAX_PALETTES],
+        hi: [bool; MAX_PALETTES],
+        temps: [bool; TWEEN_TEMPS],
+        loc: Vec<u8>,
+        ops: Vec<TweenOp>,
+        at: (usize, usize),
+    }
+    impl L<'_> {
+        fn put(&mut self, lay: Lay) -> Result<u8, Error> {
+            if let Some(&(_, s)) = self.map.iter().find(|m| m.0 == lay) {
+                return Ok(s);
+            }
+            let (lo, hi) = match lay {
+                Lay::Low(_) => (true, false),
+                Lay::High(_) => (false, true),
+                _ => (true, true),
+            };
+            let Some(s) = (0..MAX_PALETTES).find(|&s| !(lo && self.lo[s]) && !(hi && self.hi[s]))
+            else {
+                // E923.
+                return Err(Error::new(
+                    self.at.0,
+                    self.at.1,
+                    format!("a formula can have {MAX_PALETTES} palettes of its own at most"),
+                ));
+            };
+            self.lo[s] |= lo;
+            self.hi[s] |= hi;
+            let out = &mut self.prog.pals[32 * s..32 * s + 32];
+            match lay {
+                Lay::Full(j) => {
+                    for (o, &v) in out.iter_mut().zip(&self.pals[j].entries) {
+                        *o = v as u32 & 0xff_ffff;
+                    }
+                }
+                Lay::Builtin(b) => {
+                    for (o, c) in out.iter_mut().zip(crate::tables::PALETTES[b as usize % 5]) {
+                        *o = (c[0] as u32) << 16 | (c[1] as u32) << 8 | c[2] as u32;
+                    }
+                }
+                Lay::Low(j) | Lay::High(j) => {
+                    let h = self.pals[j].half.unwrap_or([0; 16]);
+                    let o = if lo { &mut out[..16] } else { &mut out[16..] };
+                    for (o, &v) in o.iter_mut().zip(&h) {
+                        *o = v as u32 & 0xff_ffff;
+                    }
+                }
+            }
+            try_push(&mut self.map, (lay, s as u8))?;
+            Ok(s as u8)
+        }
+
+        fn temp(&mut self) -> Result<u8, Error> {
+            let Some(k) = self.temps.iter().position(|&u| !u) else {
+                // E939.
+                return Err(Error::new(
+                    self.at.0,
+                    self.at.1,
+                    format!("the tweens need more than {TWEEN_TEMPS} palettes worked out at once: nest them less deeply, or tween fewer palettes that only tweens read"),
+                ));
+            };
+            self.temps[k] = true;
+            Ok((USER_PALETTES + k) as u8)
+        }
+
+        fn free(&mut self, d: u8) {
+            if let Some(k) = (d as usize).checked_sub(USER_PALETTES) {
+                self.temps[k % TWEEN_TEMPS] = false;
+            }
+        }
+
+        /// A destination as a source.
+        fn src(d: u8) -> u8 {
+            if (d as usize) < USER_PALETTES {
+                TW_LIVE + d
+            } else {
+                TW_TEMP + d - USER_PALETTES as u8
+            }
+        }
+
+        fn leaf(&mut self, s: PSrc, half: u8) -> Result<u8, Error> {
+            match s {
+                PSrc::Own(j, _) if self.pals[j].tween.is_some() => Ok(self.loc[j]),
+                PSrc::Own(j, _) => self.put(match half {
+                    TW_LOW => Lay::Low(j),
+                    TW_HIGH => Lay::High(j),
+                    _ => Lay::Full(j),
+                }),
+                PSrc::Builtin(b, _) => self.put(Lay::Builtin(b)),
+                PSrc::Node(_) => Ok(0),
+            }
+        }
+
+        /// Node `r` into destination `d` (its entries `half` says).
+        fn gen(&mut self, r: u16, d: u8, half: u8) -> Result<(), Error> {
+            let m = self.nodes[r as usize];
+            let a = match m.p {
+                PSrc::Node(k) => {
+                    self.gen(k, d, half)?;
+                    Self::src(d)
+                }
+                s => self.leaf(s, half)?,
+            };
+            let (b, t) = match m.q {
+                PSrc::Node(k) => {
+                    let t = self.temp()?;
+                    self.gen(k, t, half)?;
+                    (Self::src(t), Some(t))
+                }
+                s => (self.leaf(s, half)?, None),
+            };
+            try_push(
+                &mut self.ops,
+                TweenOp {
+                    d: d | half,
+                    a,
+                    b,
+                    w: m.w,
+                },
+            )?;
+            if let Some(t) = t {
+                self.free(t);
+            }
+            Ok(())
+        }
+    }
+    let pals = &p.palettes[..];
+    let n = pals.len();
+    let leaves = |parts: [u16; 2], f: &mut dyn FnMut(usize)| {
+        let mut stack: Vec<u16> = parts.iter().copied().filter(|&r| r != NO_PART).collect();
+        while let Some(r) = stack.pop() {
+            let m = p.pnodes[r as usize];
+            for s in [m.p, m.q] {
+                match s {
+                    PSrc::Node(k) => stack.push(k),
+                    PSrc::Own(j, _) => f(j),
+                    PSrc::Builtin(..) => {}
+                }
+            }
+        }
+    };
+    // The tweens worked out: those `pal` or `cycle` reads, and those they
+    // read; for one of the others, the last that reads it.
+    let mut need = try_vec(false, n)?;
+    let mut last = try_vec(0usize, n)?;
+    for j in (0..n).rev() {
+        need[j] |= pals[j].live.is_some();
+        if let (true, Some(parts)) = (need[j], pals[j].tween) {
+            leaves(parts, &mut |k| {
+                need[k] = true;
+                last[k] = last[k].max(j);
+            });
+        }
+    }
+    let mut l = L {
+        pals,
+        nodes: &p.pnodes,
+        prog,
+        map: Vec::new(),
+        lo: [false; MAX_PALETTES],
+        hi: [false; MAX_PALETTES],
+        temps: [false; TWEEN_TEMPS],
+        loc: try_vec(0u8, n)?,
+        ops: Vec::new(),
+        at,
+    };
+    // The live palettes of colours first: in their own slots.
+    for (j, o) in pals.iter().enumerate() {
+        if let (None, Some(s)) = (o.tween, o.live) {
+            let s = s as usize % MAX_PALETTES;
+            (l.lo[s], l.hi[s]) = (true, true);
+            for (d, &v) in l.prog.pals[32 * s..32 * s + 32].iter_mut().zip(&o.entries) {
+                *d = v as u32 & 0xff_ffff;
+            }
+            try_push(&mut l.map, (Lay::Full(j), s as u8))?;
+        }
+    }
+    for j in 0..n {
+        let (true, Some(parts)) = (need[j], pals[j].tween) else {
+            continue;
+        };
+        let d = match pals[j].live {
+            Some(s) => s,
+            None => l.temp()?,
+        };
+        for (k, &r) in parts.iter().enumerate() {
+            if r == NO_PART {
+                continue;
+            }
+            let half = match (k, parts[1] == NO_PART) {
+                (_, true) => 0,
+                (0, _) => TW_LOW,
+                _ => TW_HIGH,
+            };
+            l.gen(r, d, half)?;
+        }
+        l.loc[j] = L::src(d);
+        // The working palettes of tweens this was the last to read.
+        for k in 0..j {
+            if need[k] && last[k] == j && pals[k].tween.is_some() && pals[k].live.is_none() {
+                let s = l.loc[k];
+                l.free(s - TW_TEMP + USER_PALETTES as u8);
+            }
+        }
+    }
+    Ok(l.ops)
+}
+
 /// The formula as its own `look` line asks to be drawn over a GIF (`look
 /// screen 40`: its colour put on with that blend, covering that much):
 /// the player's look program. A formula with no `look` line, or `look`
@@ -6492,7 +7125,7 @@ pub fn compile_look(src: &str, prog: &mut Program) -> Result<Info, Error> {
     compile_full(
         src,
         prog,
-        (true, false, true, false, true),
+        (true, false, true, false, true, true),
         None,
         #[cfg(feature = "syntax")]
         None,
@@ -6511,7 +7144,7 @@ pub fn compile_look_with(
     compile_full(
         src,
         prog,
-        (runs, narrow, true, true, true),
+        (runs, narrow, true, true, true, true),
         None,
         #[cfg(feature = "syntax")]
         None,
@@ -6561,7 +7194,13 @@ pub fn compile_observed<'s>(
     prog: &mut Program,
     sink: &'s mut (dyn crate::syntax::Sink + 's),
 ) -> Result<Info, Error> {
-    compile_full(src, prog, (true, true, true, true, false), None, Some(sink))
+    compile_full(
+        src,
+        prog,
+        (true, true, true, true, false, true),
+        None,
+        Some(sink),
+    )
 }
 
 #[cfg(feature = "syntax")]
@@ -6822,6 +7461,204 @@ impl Step {
     }
 }
 
+/// A comparison node as `x op y`, op `LT` or `LE` (`a > b` is `b < a`,
+/// `step(e, x)` is `e <= x`), or `None` for any other node.
+fn as_lt_le(m: &Node) -> Option<(u8, Id, Id)> {
+    match m.code {
+        code::LT => Some((code::LT, m.a, m.b)),
+        code::GT => Some((code::LT, m.b, m.a)),
+        code::LE => Some((code::LE, m.a, m.b)),
+        code::GE => Some((code::LE, m.b, m.a)),
+        // step(e, x): x >= e
+        code::STEP => Some((code::LE, m.a, m.b)),
+        _ => None,
+    }
+}
+
+/// A comparison node's two readings as `s op t` (op `LT LE GT GE`): with
+/// its first operand as `s`, and with its second.
+fn as_sided(m: &Node) -> Option<[(u8, Id, Id); 2]> {
+    use code::*;
+    let (a, b) = (m.a, m.b);
+    Some(match m.code {
+        LT => [(LT, a, b), (GT, b, a)],
+        GT => [(GT, a, b), (LT, b, a)],
+        LE => [(LE, a, b), (GE, b, a)],
+        GE => [(GE, a, b), (LE, b, a)],
+        // step(e, x): x >= e
+        STEP => [(LE, a, b), (GE, b, a)],
+        _ => return None,
+    })
+}
+
+/// P0b-4: a comparison only one step reads, fused into that step, so the
+/// two are one step (one less against the cap, and one loop or a short
+/// branch instead of a compare and a multiply or an add):
+///
+/// - `cmp * v`, `v * cmp`, `cmp ? v : 0`, `cmp ? 0 : v` → `SEL_LT`/`SEL_LE`;
+/// - `cmp1 + cmp2` of one value against two (`(v >= lo) + (v >= hi)`) →
+///   `CNT_*`.
+///
+/// Exact: `mul(1, v)` is `v` and `mul(0, v)` is 0 (neither saturates), and
+/// the count is the sum of two 0s or 1s. The comparison stays a node, read
+/// by nothing (`emit` leaves it out). Only where the comparison is worked
+/// out as often as the step that reads it (a row's comparison read per
+/// pixel stays a row step: once a row against a test a pixel), and never
+/// across scenes.
+#[inline(never)]
+fn fuse_compares(
+    dag: &mut Dag,
+    steps: &[Step],
+    draw: &[DItem],
+    tweens: &[TweenOp],
+) -> Result<(), Error> {
+    let n = dag.nodes.len();
+    // What is live, and how many live steps read each node.
+    let mut live = try_vec(false, n)?;
+    let mut uses = try_vec(0u16, n)?;
+    let root = |x: Id, live: &mut Vec<bool>, uses: &mut Vec<u16>| {
+        if let Some(l) = live.get_mut(x as usize) {
+            *l = true;
+            uses[x as usize] = uses[x as usize].saturating_add(1);
+        }
+    };
+    for st in steps {
+        for x in st.reads() {
+            root(x, &mut live, &mut uses);
+        }
+    }
+    for item in draw {
+        let one;
+        let ids: &[Id] = match item {
+            DItem::Line(v) => v,
+            DItem::Dot(v) => v,
+            DItem::Paint(_, v, k) => &v[..*k as usize],
+            DItem::If(c) | DItem::For(c, _) => {
+                one = [*c];
+                &one
+            }
+            _ => &[],
+        };
+        for &x in ids {
+            root(x, &mut live, &mut uses);
+        }
+    }
+    for tw in tweens {
+        root(tw.w, &mut live, &mut uses);
+    }
+    for k in 0..dag.conds.len() {
+        let c = dag.conds[k];
+        root(c, &mut live, &mut uses);
+    }
+    for i in (0..n).rev() {
+        if !live[i] || dag.nodes[i].code >= K_CONST {
+            continue;
+        }
+        let xs: Vec<Id> = reads(dag, i).collect();
+        for x in xs {
+            live[x as usize] = true;
+            uses[x as usize] = uses[x as usize].saturating_add(1);
+        }
+    }
+    let sc: Vec<u8> = (0..n).map(|i| dag.scene_of(i)).collect();
+    // What the column run and the still cache could take: a comparison
+    // they would work out once a column (or keep) is not fused into a step
+    // they would not (crt's channel masks: once a column, against a
+    // compare a pixel).
+    let (col, still) = (column_nodes(dag), still_nodes(dag));
+    let apart = |x: Id, y: Id| {
+        let (x, y) = (x as usize, y as usize);
+        (col[x] && !col[y]) || (still[x] && !still[y])
+    };
+    // A comparison `x` the step `i` may take in: read once (by `i`), as
+    // often as `i`, in `i`'s scene or none.
+    let takes = |dag: &Dag, i: usize, x: Id| {
+        let x = x as usize;
+        x < i
+            && uses[x] == 1
+            && dag.nodes[x].level == dag.nodes[i].level
+            && (sc[x] == 0 || sc[x] == sc[i])
+            && as_lt_le(&dag.nodes[x]).is_some()
+    };
+    for i in 0..n {
+        if !live[i] {
+            continue;
+        }
+        let m = dag.nodes[i];
+        let zero = |x: Id| dag.konst(x) == Some(0);
+        let sel = match m.code {
+            code::MUL if takes(dag, i, m.a) => Some((m.a, m.b, false)),
+            code::MUL if takes(dag, i, m.b) => Some((m.b, m.a, false)),
+            code::SELECT if zero(m.c) && takes(dag, i, m.a) => Some((m.a, m.b, false)),
+            code::SELECT if zero(m.b) && takes(dag, i, m.a) => Some((m.a, m.c, true)),
+            _ => None,
+        };
+        if let Some((cmp, v, not)) = sel {
+            let Some((op, x, y)) = as_lt_le(&dag.nodes[cmp as usize]) else {
+                continue;
+            };
+            if apart(cmp, v) {
+                continue;
+            }
+            // not (x < y) is y <= x; not (x <= y) is y < x.
+            let (code, a, b) = match (op, not) {
+                (code::LT, false) => (code::SEL_LT, x, y),
+                (_, false) => (code::SEL_LE, x, y),
+                (code::LT, true) => (code::SEL_LE, y, x),
+                (_, true) => (code::SEL_LT, y, x),
+            };
+            dag.nodes[i] = Node {
+                code,
+                a,
+                b,
+                c: v,
+                val: 0,
+                ..m
+            };
+            live[cmp as usize] = false;
+            continue;
+        }
+        if m.code == code::ADD
+            && m.a != m.b
+            && takes(dag, i, m.a)
+            && takes(dag, i, m.b)
+            && !apart(m.a, m.b)
+            && !apart(m.b, m.a)
+        {
+            let (Some(p), Some(q)) = (
+                as_sided(&dag.nodes[m.a as usize]),
+                as_sided(&dag.nodes[m.b as usize]),
+            ) else {
+                continue;
+            };
+            let found = p.iter().find_map(|&(o1, s1, t1)| {
+                q.iter()
+                    .find(|&&(o2, s2, _)| o2 == o1 && s2 == s1)
+                    .map(|&(_, _, t2)| (o1, s1, t1, t2))
+            });
+            if let Some((op, s, t1, t2)) = found {
+                let code = match op {
+                    code::LT => code::CNT_LT,
+                    code::LE => code::CNT_LE,
+                    code::GT => code::CNT_GT,
+                    _ => code::CNT_GE,
+                };
+                live[m.a as usize] = false;
+                live[m.b as usize] = false;
+                dag.nodes[i] = Node {
+                    code,
+                    a: s,
+                    b: t1,
+                    c: t2,
+                    val: 0,
+                    ..m
+                };
+            }
+        }
+    }
+    Ok(())
+}
+
 /// A formula's slow layers (`layer rate N { }`): the first `layers`
 /// colour steps, redrawn every `rate`th frame, reading what `reads` says
 /// (`crate::rate::READS_*`).
@@ -6943,21 +7780,23 @@ fn emit(
     dag: &Dag,
     steps: &[Step],
     draw: &[DItem],
+    tweens: &[TweenOp],
     backdrop: bool,
     runs: bool,
     reuse: bool,
     slow: Option<Slow>,
     prog: &mut Program,
-    #[cfg(feature = "syntax")] seen: &mut (Vec<usize>, Vec<usize>),
+    #[cfg(feature = "syntax")] seen: &mut (Vec<usize>, Vec<usize>, Option<&'static str>),
 ) -> Result<(), Error> {
     let nodes = &dag.nodes;
     let n = nodes.len();
-    let too_long = |steps: usize| {
+    // (E402 tells the steps of each section: where to look.)
+    let too_long = |steps: usize, [f, d, r, p]: [usize; 4]| {
         Error::new(
             0,
             0,
             format!(
-                "this formula is too long for the panel: {steps} steps, the limit is {MAX_OPS}"
+                "this formula is too long for the panel: {steps} steps (per frame {f}, draw {d}, per row {r}, per pixel {p}), the limit is {MAX_STEPS}"
             ),
         )
     };
@@ -7003,7 +7842,27 @@ fn emit(
             need[x as usize] = 0;
         }
     }
+    // The tweens' weights (once a frame, before the palettes).
+    for tw in tweens {
+        need[tw.w as usize] = 0;
+    }
     close(&mut need);
+    // Each node's scene (row and pixel values only), and each scene's
+    // `when` where the scene has a step.
+    let sc: Vec<u8> = (0..n).map(|i| dag.scene_of(i)).collect();
+    let mut guarded = [[false; 2]; MAX_SCENES + 1];
+    for i in 0..n {
+        if sc[i] != 0 && need[i] != NONE && nodes[i].code < K_CONST {
+            guarded[sc[i] as usize][usize::from(nodes[i].level == LV_PIXEL)] = true;
+        }
+    }
+    for (k, &c) in dag.conds.iter().enumerate() {
+        if guarded[k + 1] != [false; 2] {
+            need[c as usize] = 0;
+        }
+    }
+    close(&mut need);
+    let n_guards: usize = guarded.iter().flatten().filter(|&&g| g).count();
     if inked {
         prog.uses |= INKED;
     }
@@ -7024,10 +7883,33 @@ fn emit(
             _ => 1,
         })
         .sum();
-    let total =
-        (0..n).filter(|&i| is_op(i)).count() + steps.len() + control + usize::from(slow.is_some());
-    if total > MAX_OPS {
-        return Err(too_long(total));
+    let total = (0..n).filter(|&i| is_op(i)).count()
+        + steps.len()
+        + control
+        + usize::from(slow.is_some())
+        + tweens.len()
+        + n_guards;
+    // The steps of each section (per frame, the draw stage, per row, per
+    // pixel with the colours), as `Program::counts` gives them.
+    let sections = |markers: usize| {
+        let mut sec = [0usize; 4];
+        for i in (0..n).filter(|&i| is_op(i)) {
+            sec[match nodes[i].level {
+                LV_FRAME => 0,
+                LV_LOOP1 | LV_LOOP2 => 1,
+                LV_ROW => 2,
+                _ => 3,
+            }] += 1;
+        }
+        sec[0] += tweens.len();
+        sec[2] += guarded.iter().filter(|g| g[0]).count();
+        sec[3] += guarded.iter().filter(|g| g[1]).count();
+        sec[1] += control;
+        sec[3] += steps.len() + usize::from(slow.is_some()) + markers;
+        sec
+    };
+    if total > MAX_STEPS {
+        return Err(too_long(total, sections(0)));
     }
     // Where each node's value lives: a slot of `vs` (`VS` + its index,
     // given a scalar slot once the steps are laid out: `assign_slots`), or
@@ -7091,7 +7973,7 @@ fn emit(
                 nodes[i].val as u8 as u16
             };
             set[i] = true;
-            if nodes[i].val as u8 == LANE | L_I {
+            if nodes[i].val as u8 == lane(L_I) {
                 prog.uses |= USES_I;
             }
         } else if is_op(i)
@@ -7176,10 +8058,40 @@ fn emit(
             }
         }
     }
+    // A scene's row steps (together in node order: it made them in a run)
+    // after its guard; how many it skips, once they are laid out.
+    let mut open: Option<(usize, u8)> = None;
+    let close_guard = |ops: &mut [WOp], open: &mut Option<(usize, u8)>| -> Result<(), Error> {
+        if let Some((g, _)) = open.take() {
+            let n = ops.len() - g - 1;
+            if n > 255 {
+                return Err(Error::new(0, 0, format!("this formula is too long for the panel: a scene takes {n} steps a row, the limit is 255")));
+            }
+            ops[g].b = n as u16;
+        }
+        Ok(())
+    };
     for level in [LV_FRAME, LV_ROW] {
         for i in 0..n {
             let m = &nodes[i];
             if is_op(i) && m.level == level && m.code != code::TURN {
+                if level == LV_ROW && open.map_or(0, |o| o.1) != sc[i] {
+                    close_guard(&mut ops, &mut open)?;
+                    if sc[i] != 0 {
+                        let c = dag.conds[sc[i] as usize - 1];
+                        if !set[c as usize] {
+                            return Err(Error::new(0, 0, String::from(LAYOUT_BUG)));
+                        }
+                        open = Some((ops.len(), sc[i]));
+                        ops.push(WOp {
+                            code: code::GUARD,
+                            d: 0,
+                            a: loc[c as usize],
+                            b: 0,
+                            c: u16::from(sc[i]) << 4,
+                        });
+                    }
+                }
                 // A wide value has a wide slot; a noise's offset its place.
                 let d = if code::is_wide(m.code) && code::wide_ops(m.code).0 {
                     if next_wide >= WIDE {
@@ -7202,6 +8114,20 @@ fn emit(
             }
         }
         if level == LV_FRAME {
+            // The tweens, the section's last steps (`Program::tweens`).
+            for tw in tweens {
+                if !set[tw.w as usize] {
+                    return Err(Error::new(0, 0, String::from(LAYOUT_BUG)));
+                }
+                prog.uses |= OWNPAL;
+                ops.push(WOp {
+                    code: code::TWEEN,
+                    d: u16::from(tw.d),
+                    a: u16::from(tw.a),
+                    b: u16::from(tw.b),
+                    c: loc[tw.w as usize],
+                });
+            }
             prog.frame_end = ops.len().min(MAX_OPS) as u16;
             // The draw stage: FOR (its END patched in when it comes), the
             // loop's values, its lines and inner loops; END back to just
@@ -7249,12 +8175,12 @@ fn emit(
                                 b: 0,
                                 c: 0,
                             });
-                            ops[at].b = ops.len().min(255) as u16;
+                            ops[at].b = ops.len() as u16;
                         }
                     }
                     DItem::EndIf => {
                         if let Some(at) = ifs.pop() {
-                            ops[at].b = ops.len().min(255) as u16;
+                            ops[at].b = ops.len() as u16;
                         }
                     }
                     DItem::For(ctr, count) => {
@@ -7286,13 +8212,13 @@ fn emit(
                         let Some((at, ks, cs)) = open.pop() else {
                             continue;
                         };
-                        ops[at].b = ops.len().min(255) as u16;
+                        ops[at].b = ops.len() as u16;
                         ops.push(WOp {
                             code: code::END,
                             d: 0,
                             a: ks,
                             b: cs,
-                            c: (at + 1).min(255) as u16,
+                            c: (at + 1) as u16,
                         });
                     }
                     DItem::Line(v) => {
@@ -7323,6 +8249,7 @@ fn emit(
             }
             prog.draw_end = ops.len().min(MAX_OPS) as u16;
         } else {
+            close_guard(&mut ops, &mut open)?;
             // `cycle`'s turns, the row section's last steps (the JIT's
             // driver runs them after its row function): palette slot `b`
             // (`finish`'s) as palette `val` turned by `a`.
@@ -7380,6 +8307,14 @@ fn emit(
         }
     }
     let slow_px = |i: usize| in_slow.get(i).copied().unwrap_or(false);
+    if (0..n).any(|i| sc[i] != 0 && px_op(i) && slow_px(i)) {
+        // E973.
+        return Err(Error::new(
+            0,
+            0,
+            "a `rate` layer can't read a scene's per-pixel values: work them out outside the scene, or leave `rate` out",
+        ));
+    }
     let col = column_nodes(dag);
     let in_col: Vec<bool> = (0..n).map(|i| px_op(i) && col[i] && !slow_px(i)).collect();
     let mut no_still = Vec::new();
@@ -7394,6 +8329,9 @@ fn emit(
         .map(|i| value_ns(nodes[i].code))
         .sum();
     let mut layout = None;
+    // Why a column run the formula has was left out, the first time a
+    // layout with it is given up (said in a note: it costs a 32nd as much).
+    let mut col_lost: Option<&'static str> = None;
     // A formula that cycles a palette (`cycle`) asks the still cache first:
     // its picture is usually still, and with the index cached a frame is
     // the palette's turn and a look-up (console-lessons 2.1). The others
@@ -7428,8 +8366,12 @@ fn emit(
         {
             continue;
         }
-        // The markers are steps too: at the step limit, the plain layout.
+        // The markers are not the formula's steps: `MAX_OPS` has room for
+        // both past `MAX_STEPS`, so this holds at the cap.
         if total + markers + usize::from(!cached.is_empty()) > MAX_OPS {
+            if use_col {
+                col_lost.get_or_insert("its marker does not fit the program");
+            }
             continue;
         }
         let lay = pixel_seq(
@@ -7442,9 +8384,42 @@ fn emit(
             use_col,
             slow.map_or(0, |s| s.layers),
         );
+        // A marker's run is a byte (`COLUMN a`, `STILL a`, `SLOW a`).
+        if lay.slow_len > 255 {
+            return Err(Error::new(
+                0,
+                0,
+                format!(
+                    "this formula is too long for the panel: its slow layers take {} steps a pixel, the limit is 255",
+                    lay.slow_len
+                ),
+            ));
+        }
+        if lay.run_len > 255 || lay.col_len > 255 {
+            if lay.col_len > 255 {
+                col_lost.get_or_insert("it is over 255 steps");
+            }
+            continue;
+        }
+        let mut lay = lay;
+        if n_guards > 0 {
+            let runs = [lay.run_len, lay.col_len, lay.slow_len];
+            match scene_blocks(dag, steps, &sc, &lay.seq, runs) {
+                Some(seq) => lay.seq = seq,
+                None => {
+                    if lay.col_len > 0 {
+                        col_lost.get_or_insert("the scenes' steps could not be laid out around it");
+                    }
+                    continue;
+                }
+            }
+        }
         if let Some(r) = registers(nodes, steps, &lay.seq, &lay.pinned) {
             layout = Some((lay, cached, r));
             break;
+        }
+        if use_col {
+            col_lost.get_or_insert("it holds more values at once than the registers");
         }
     }
     let Some((lay, cached, (regs, used))) = layout else {
@@ -7469,10 +8444,29 @@ fn emit(
         } else {
             Vec::new()
         };
+        seen.2 = if col_len > 0 { None } else { col_lost };
     }
+    #[cfg(not(feature = "syntax"))]
+    let _ = col_lost;
     let mut marker = None;
+    // Each guard: its step, its item, its scene.
+    let mut guards: Vec<(usize, usize, u8)> = Vec::new();
     for (at, item) in seq.iter().enumerate() {
         match *item {
+            Item::Guard(s) => {
+                let c = dag.conds[s as usize - 1];
+                if !set[c as usize] {
+                    return Err(Error::new(0, 0, String::from(LAYOUT_BUG)));
+                }
+                guards.push((ops.len(), at, s));
+                ops.push(WOp {
+                    code: code::GUARD,
+                    d: 0,
+                    a: loc[c as usize],
+                    b: 0,
+                    c: u16::from(s) << 4,
+                });
+            }
             Item::Column => ops.push(WOp {
                 code: code::COLUMN,
                 d: 0,
@@ -7505,7 +8499,7 @@ fn emit(
                 });
             }
             Item::Value(i) => {
-                let d = (LANE | (L_REG0 + regs[at])) as u16;
+                let d = lane(L_REG0 + regs[at]) as u16;
                 loc[i] = d;
                 set[i] = true;
                 ops.push(mk(&nodes[i], d, &loc, &set, &mut vs, &mut ch, &mut tabs)?);
@@ -7538,9 +8532,47 @@ fn emit(
                 });
             }
         }
-        if ops.len() > MAX_OPS {
-            return Err(too_long(ops.len()));
+        // (The column run's and the still cache's markers are not the
+        // formula's steps: `MAX_OPS` has room for them past the cap.)
+        let marks = ops
+            .iter()
+            .filter(|o| matches!(o.code, code::COLUMN | code::STILL))
+            .count();
+        if ops.len() > MAX_OPS || ops.len() - marks > MAX_STEPS {
+            let steps = ops.len() - marks;
+            return Err(too_long(steps, sections(steps.saturating_sub(total))));
         }
+    }
+    // Each guard's run (its scene's values after it, a step each) and the
+    // registers of those read after the run (zeroed while it is off).
+    for &(g, at, s) in &guards {
+        let end = seq[at + 1..]
+            .iter()
+            .position(|it| !matches!(*it, Item::Value(i) if sc[i] == s))
+            .map_or(seq.len(), |k| at + 1 + k);
+        let m = end - at - 1;
+        if m > 255 {
+            return Err(Error::new(0, 0, format!("this formula is too long for the panel: a scene takes {m} steps a pixel, the limit is 255")));
+        }
+        let mut later = alloc::vec![false; n];
+        for it in &seq[end..] {
+            match *it {
+                Item::Value(j) => reads(dag, j).for_each(|x| later[x as usize] = true),
+                Item::Colour(k) => steps[k].reads().for_each(|x| later[x as usize] = true),
+                _ => {}
+            }
+        }
+        let mut mask = 0u16;
+        for p in at + 1..end {
+            if let Item::Value(i) = seq[p] {
+                if later[i] {
+                    mask |= 1 << regs[p];
+                }
+            }
+        }
+        ops[g].b = m as u16;
+        ops[g].d = mask & 0xff;
+        ops[g].c |= mask >> 8;
     }
     // The marker's skip: the run is every value after it up to the first
     // that isn't in it (`still_seq` puts them together); its registers.
@@ -7608,7 +8640,7 @@ fn assign_slots(
     prog: &mut Program,
 ) -> Result<usize, Error> {
     let n = vs.len();
-    // (u16 throughout: positions are at most 258; the compile's heap peaks
+    // (u16 throughout: positions are at most MAX_OPS + 2; the compile's heap peaks
     // here, and on the ESP32.)
     const INF: u16 = u16::MAX;
     // Positions: a step's index + 1 (0 is the frame's start, the constants').
@@ -7638,13 +8670,15 @@ fn assign_slots(
         if op.code == code::FOR {
             loops.push((p, op.b + 1));
         }
-        if (code::writes_scalar(op.code) || op.code == code::FOR) && op.d >= VS {
-            let k = (op.d - VS) as usize;
+        // (A draw stage step's target is a step's index, not a slot.)
+        let [d, a, b, c] = operand_fields(op);
+        if (code::writes_scalar(op.code) || op.code == code::FOR) && d >= VS {
+            let k = (d - VS) as usize;
             start[k] = start[k].min(p);
         } else {
-            use_at(&mut end, op.d, p);
+            use_at(&mut end, d, p);
         }
-        for v in [op.a, op.b, op.c] {
+        for v in [a, b, c] {
             use_at(&mut end, v, p);
         }
     }
@@ -7682,16 +8716,11 @@ fn assign_slots(
         order[*p as usize] = k as u16;
         *p += 1;
     }
-    let too_many = || {
-        Error::new(
-            0,
-            0,
-            format!("this formula needs more than {MAX_SCALARS} numbers and once-a-frame values: use fewer"),
-        )
-    };
-    let mut phys = alloc::vec![0u8; n];
+    // Slots from `base` up, counted on past the limit (E404 tells how
+    // many the formula needs, and its steps by section: where to look).
+    let mut phys = alloc::vec![0u16; n];
     let mut active: Vec<u16> = Vec::new();
-    let mut free: Vec<u8> = Vec::new();
+    let mut free: Vec<u16> = Vec::new();
     let mut next = base;
     for &k in &order {
         let k = k as usize;
@@ -7705,48 +8734,88 @@ fn assign_slots(
         });
         phys[k] = match free.pop() {
             Some(p) => p,
-            None if next < MAX_SCALARS => {
+            None => {
                 next += 1;
-                (next - 1) as u8
+                (next - 1) as u16
             }
-            None => return Err(too_many()),
         };
         active.push(k as u16);
+    }
+    let tables: usize = (0..n)
+        .filter_map(|k| match vs[k] {
+            VSlot::Pick(j) => Some(ch[j as usize].len()),
+            _ => None,
+        })
+        .sum();
+    if next + tables > MAX_SCALARS {
+        let f = prog.frame_end as usize;
+        return Err(Error::new(
+            0,
+            0,
+            format!(
+                "this formula needs {} numbers and once-a-frame values, more than the {MAX_SCALARS} it can hold (steps: per frame {f}, draw {}, per row {}, per pixel {}): use fewer",
+                next + tables,
+                de.saturating_sub(f),
+                re.saturating_sub(de),
+                ops.len().saturating_sub(re),
+            ),
+        ));
+    }
+    for k in 0..n {
         if let VSlot::Const(v) = vs[k] {
             prog.init[phys[k] as usize] = v;
         }
     }
     // The picks' tables, each its choices' slots in a row.
-    let map = |phys: &[u8], v: u16| {
+    let map = |phys: &[u16], v: u16| {
         if v >= VS {
-            phys[(v - VS) as usize]
+            phys[(v - VS) as usize] as u8
         } else {
             v as u8
         }
     };
     for k in 0..n {
         if let VSlot::Pick(j) = vs[k] {
-            let ch = &ch[j as usize];
-            if next + ch.len() > MAX_SCALARS {
-                return Err(too_many());
-            }
-            phys[k] = next as u8;
-            for &c in ch {
+            phys[k] = next as u16;
+            for &c in &ch[j as usize] {
                 prog.init[next] = map(&phys, c) as i32;
                 next += 1;
             }
         }
     }
     for (o, w) in prog.ops.iter_mut().zip(ops) {
+        let [d, a, b, c] = operand_fields(w);
         *o = Op {
             code: w.code,
-            d: map(&phys, w.d),
-            a: map(&phys, w.a),
-            b: map(&phys, w.b),
-            c: map(&phys, w.c),
+            d: map(&phys, d),
+            a: map(&phys, a),
+            b: map(&phys, b),
+            c: map(&phys, c),
         };
+        if let Some(at) = target_of(w) {
+            o.set_target(at as usize);
+        }
     }
     Ok(next)
+}
+
+/// A draw stage step's target as laid out (`IF`'s, `JUMP`'s, a `FOR`'s
+/// END in `b`, an `END`'s step back in `c`: [`Op::target`]).
+fn target_of(w: &WOp) -> Option<u16> {
+    match w.code {
+        code::IF | code::JUMP | code::FOR => Some(w.b),
+        code::END => Some(w.c),
+        _ => None,
+    }
+}
+
+/// A step's `d a b c` as slots: its target (`target_of`) 0.
+fn operand_fields(w: &WOp) -> [u16; 4] {
+    match w.code {
+        code::IF | code::JUMP | code::FOR => [w.d, w.a, 0, 0],
+        code::END => [0, w.a, w.b, 0],
+        _ => [w.d, w.a, w.b, w.c],
+    }
 }
 
 /// What a step reading a value with no place yet says (never seen: a bug in
@@ -7764,6 +8833,8 @@ enum Item {
     Column,
     /// The slow layers' marker (`code::SLOW`).
     Slow,
+    /// A scene's guard (`code::GUARD`): the values after it of that scene.
+    Guard(u8),
 }
 
 /// A wide noise's code.
@@ -7818,7 +8889,7 @@ fn registers(
                     last_use[x as usize] = at;
                 }
             }
-            Item::Still | Item::Column | Item::Slow => {}
+            Item::Still | Item::Column | Item::Slow | Item::Guard(_) => {}
         }
     }
     // A kept column value is never given up: the rows after the first
@@ -7876,11 +8947,13 @@ fn still_nodes(dag: &Dag) -> Vec<bool> {
             K_CONST => true,
             K_INPUT => {
                 let v = m.val as u8;
-                v == LANE | L_X || v == LANE | L_PX || v == LANE | L_I || v == S_Y || v == S_PY
+                v == lane(L_X) || v == lane(L_PX) || v == lane(L_I) || v == S_Y || v == S_PY
             }
             K_COUNTER | K_SPLIT => false,
             // (A wide noise's offsets move every frame.)
             c if (code::U_R..=code::INKN).contains(&c) || c == code::UAT || is_noise_o(c) => false,
+            // (A scene's values are 0 while it is off.)
+            _ if dag.scene_of(i) != 0 => false,
             _ => reads(dag, i).all(|x| still[x as usize]),
         };
     }
@@ -8032,6 +9105,94 @@ fn still_run(
     ok.then_some((run, first))
 }
 
+/// The pixel order with each scene's values together after its guard
+/// (`Item::Guard`), or `None` when that can't be had in this layout (a
+/// scene's values among the runs' or the slow layers'). For each scene, the
+/// items from its first value to its last are put in three groups, each in
+/// its order: those that need none of its values (before), its values, and
+/// those that need them (after) — the same dependencies, since a value of
+/// the scene needs nothing that needs one.
+fn scene_blocks(
+    dag: &Dag,
+    steps: &[Step],
+    sc: &[u8],
+    seq: &[Item],
+    [run_len, col_len, slow_len]: [usize; 3],
+) -> Option<Vec<Item>> {
+    let n = dag.nodes.len();
+    let mut seq = seq.to_vec();
+    // Where the runs and the slow layers end (the JIT's kernel starts
+    // after the runs): a scene's values after.
+    let mut from = 0;
+    for (at, it) in seq.iter().enumerate() {
+        let len = match it {
+            Item::Still => run_len,
+            Item::Column => col_len,
+            Item::Slow => slow_len,
+            _ => continue,
+        };
+        from = from.max(at + 1 + len);
+    }
+    let scenes = dag.conds.len() as u8;
+    for k in 1..=scenes {
+        let of = |it: &Item| matches!(*it, Item::Value(i) if sc[i] == k);
+        let Some(first) = seq.iter().position(of) else {
+            continue;
+        };
+        let last = seq.iter().rposition(of).unwrap_or(first);
+        if first < from {
+            return None;
+        }
+        let mut dep = alloc::vec![false; n];
+        for i in 0..n {
+            dep[i] = sc[i] == k || reads(dag, i).any(|x| dep[x as usize]);
+        }
+        let needs = |it: &Item| match *it {
+            Item::Value(i) => dep[i],
+            Item::Colour(c) => steps[c].reads().any(|x| dep[x as usize]),
+            _ => false,
+        };
+        if seq[first..=last]
+            .iter()
+            .any(|it| matches!(it, Item::Still | Item::Column | Item::Slow))
+        {
+            return None;
+        }
+        // The three groups, in place: a stable partition by rank.
+        let rank = |it: &Item| {
+            if of(it) {
+                1u8
+            } else {
+                2 * u8::from(needs(it))
+            }
+        };
+        let mut out: Vec<Item> = Vec::with_capacity(last + 1 - first);
+        for g in 0..3 {
+            for it in &seq[first..=last] {
+                if rank(it) == g {
+                    out.push(*it);
+                }
+            }
+        }
+        seq[first..=last].copy_from_slice(&out);
+    }
+    // A guard before each scene's values (one run each, as above).
+    let mut out = Vec::with_capacity(seq.len() + scenes as usize);
+    let mut cur = 0u8;
+    for it in seq {
+        let s = match it {
+            Item::Value(i) => sc[i],
+            _ => 0,
+        };
+        if s != 0 && s != cur {
+            out.push(Item::Guard(s));
+        }
+        cur = s;
+        out.push(it);
+    }
+    Some(out)
+}
+
 /// A laid-out pixel section: the order, the cached run's and the column
 /// run's lengths, and the values kept in their registers for the frame.
 struct PixelSeq {
@@ -8149,11 +9310,12 @@ fn column_nodes(dag: &Dag) -> Vec<bool> {
             LV_PIXEL => match m.code {
                 K_INPUT => {
                     let v = m.val as u8;
-                    v == LANE | L_X || v == LANE | L_PX
+                    v == lane(L_X) || v == lane(L_PX)
                 }
                 K_CONST => true,
                 K_COUNTER => false,
                 c if (code::U_R..=code::INKN).contains(&c) || c == code::UAT => false,
+                _ if dag.scene_of(i) != 0 => false,
                 _ => reads(dag, i).all(|x| col[x as usize]),
             },
             _ => false,

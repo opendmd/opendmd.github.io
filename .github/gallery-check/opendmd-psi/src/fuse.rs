@@ -83,14 +83,8 @@ pub(crate) fn name(kind: u8) -> &'static str {
 
 #[inline]
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-fn is_lane(v: u8) -> bool {
-    v & LANE != 0
-}
-
-#[inline]
-#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn is_reg(v: u8) -> bool {
-    v & LANE != 0 && v & !LANE >= L_REG0
+    is_lane(v) && lane_no(v) >= L_REG0
 }
 
 /// The register a pixel step writes, if it writes one.
@@ -256,13 +250,20 @@ pub(crate) fn fuse(prog: &mut Program) {
     let slow = prog
         .slow_marker()
         .map_or(0..0, |m| m + 1..m + 1 + prog.ops[m].a as usize);
+    // Scenes' guarded runs: a fused run inside one or outside all.
+    let guards: Vec<core::ops::Range<usize>> = (re..pe)
+        .filter(|&g| prog.ops[g].code == code::GUARD)
+        .map(|g| g + 1..g + 1 + prog.ops[g].b as usize)
+        .collect();
+    let guard_of = |k: usize| guards.iter().position(|r| r.contains(&k));
+    let mut extra = alloc::vec![0usize; guards.len()];
     let mut runs: Vec<(usize, u8, usize)> = Vec::new();
     let mut k = start;
     while k < pe && runs.len() < room {
         let ops = &prog.ops[k..pe];
         if matches!(
             ops[0].code,
-            code::STILL | code::COLUMN | code::FUSE | code::SLOW
+            code::STILL | code::COLUMN | code::FUSE | code::SLOW | code::GUARD
         ) {
             k += 1;
             continue;
@@ -273,8 +274,14 @@ pub(crate) fn fuse(prog: &mut Program) {
             Some((kind, n, mid, dst))
                 if ok(n, mid, dst)
                     && (kind != F_CHECKER3 || floored(prog, re, k))
-                    && slow.contains(&k) == slow.contains(&(k + n - 1)) =>
+                    && slow.contains(&k) == slow.contains(&(k + n - 1))
+                    && guard_of(k) == guard_of(k + n - 1)
+                    // (A guard's count is a byte.)
+                    && guard_of(k).is_none_or(|j| guards[j].len() + extra[j] < 255) =>
             {
+                if let Some(j) = guard_of(k) {
+                    extra[j] += 1;
+                }
                 runs.push((k, kind, n));
                 k += n;
             }
@@ -284,6 +291,11 @@ pub(crate) fn fuse(prog: &mut Program) {
     if runs.is_empty() {
         return;
     }
+    // Each guard counts the markers put among its steps.
+    let adds: Vec<usize> = guards
+        .iter()
+        .map(|r| runs.iter().filter(|&&(at, _, _)| r.contains(&at)).count())
+        .collect();
     // Insert the markers, from the end.
     let mut end = pe + runs.len();
     let mut src = pe;
@@ -304,6 +316,14 @@ pub(crate) fn fuse(prog: &mut Program) {
     }
     debug_assert_eq!(end, src);
     prog.pixel_end = (pe + runs.len()) as u16;
+    let mut j = 0;
+    for g in re..pe + runs.len() {
+        if prog.ops[g].code == code::GUARD {
+            let b = prog.ops[g].b as usize + adds.get(j).copied().unwrap_or(0);
+            prog.ops[g].b = b as u8;
+            j += 1;
+        }
+    }
     // The slow layers' marker counts the markers put among its steps.
     if let Some(m) = prog.slow_marker() {
         let inside = runs

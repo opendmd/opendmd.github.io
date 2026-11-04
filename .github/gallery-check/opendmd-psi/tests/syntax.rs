@@ -168,6 +168,21 @@ fn notes_say_where_a_formula_costs_more() {
         "{:?}",
         n.notes
     );
+    // A column run left out (here: its ten values and the sum's would
+    // need more registers than the panel has) is said, with why.
+    let mut src = String::from("loop 8\n");
+    for k in 0..10 {
+        src += &format!("c{k} = hash(floor(px/{}), {k}) * sin(t/8)\n", k + 2);
+    }
+    src += "v = (y < c0) + (y < c1)*2 + (y < c2)*3 + (y < c3)*4 + (y < c4)*5 + (y < c5)*6 + (y < c6)*7 + (y < c7)*8 + (y < c8)*9 + (y < c9)*10\ngray(v/80)";
+    let n = notes(&src);
+    assert!(
+        n.notes.iter().any(|x| x.1.starts_with(
+            "column run: left out (it holds more values at once than the registers)"
+        )),
+        "{:?}",
+        n.notes
+    );
     // A sum worked out per pixel that brackets better.
     let n = notes("X = sin(t)*20\nd = px*py - 64 - X\ngray(d/64)");
     assert!(

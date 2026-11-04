@@ -887,6 +887,66 @@ pub fn w_floor(a: i64) -> i64 {
     a & !0xffff
 }
 
+/// `c` where `a < b`, else 0: exactly `mul(lt(a, b), c)` (1·c and 0·c
+/// never saturate), the fused `SEL_LT`.
+#[inline(always)]
+pub fn sel_lt(a: i32, b: i32, c: i32) -> i32 {
+    if a < b {
+        c
+    } else {
+        0
+    }
+}
+
+/// `c` where `a <= b`, else 0: `mul(le(a, b), c)` (`SEL_LE`).
+#[inline(always)]
+pub fn sel_le(a: i32, b: i32, c: i32) -> i32 {
+    if a <= b {
+        c
+    } else {
+        0
+    }
+}
+
+/// How many of `v < a`, `v < b` hold, as 0, 1 or 2: exactly `add(lt(v,
+/// a), lt(v, b))` (`CNT_LT`).
+#[inline(always)]
+pub fn cnt_lt(v: i32, a: i32, b: i32) -> i32 {
+    (((v < a) as i32) + ((v < b) as i32)) << 16
+}
+
+/// `add(le(v, a), le(v, b))` (`CNT_LE`).
+#[inline(always)]
+pub fn cnt_le(v: i32, a: i32, b: i32) -> i32 {
+    (((v <= a) as i32) + ((v <= b) as i32)) << 16
+}
+
+/// `add(gt(v, a), gt(v, b))` (`CNT_GT`).
+#[inline(always)]
+pub fn cnt_gt(v: i32, a: i32, b: i32) -> i32 {
+    (((v > a) as i32) + ((v > b) as i32)) << 16
+}
+
+/// `add(ge(v, a), ge(v, b))` (`CNT_GE`): a band's index.
+#[inline(always)]
+pub fn cnt_ge(v: i32, a: i32, b: i32) -> i32 {
+    (((v >= a) as i32) + ((v >= b) as i32)) << 16
+}
+
+/// Fused compare `c` (`program::code::SEL_LT..=CNT_GE`) of `a b x`.
+#[inline]
+pub fn cmp_fused(c: u8, a: i32, b: i32, x: i32) -> i32 {
+    use crate::program::code::*;
+    match c {
+        SEL_LT => sel_lt(a, b, x),
+        SEL_LE => sel_le(a, b, x),
+        CNT_LT => cnt_lt(a, b, x),
+        CNT_LE => cnt_le(a, b, x),
+        CNT_GT => cnt_gt(a, b, x),
+        _ => cnt_ge(a, b, x),
+    }
+}
+
 /// A compare (`c` one of the compare steps, `LT`..`NE` of
 /// `program::code`) of `a` with the Q16.16 `b`: 1 or 0.
 #[inline]

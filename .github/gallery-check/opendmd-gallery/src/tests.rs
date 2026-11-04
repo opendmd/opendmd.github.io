@@ -190,9 +190,41 @@ fn hostile_characters() {
 
 #[test]
 fn size_compile_and_cost() {
-    let big = format!("{GOOD}{}", "-- padding\n".repeat(400));
+    let big = format!("{GOOD}{}", "-- padding\n".repeat(3600));
     assert!(big.len() > MAX_FILE);
-    assert!(has(&check_file("x", big.as_bytes()).unwrap_err(), "bytes"));
+    assert!(has(&check_file("x", big.as_bytes()).unwrap_err(), "36864 at most"));
+    // A 12 KB file that compiles small is fine: the source bound is the compiler's.
+    let long = format!("{GOOD}{}", "-- padding padding\n".repeat(600));
+    assert!(long.len() > 11_000 && long.len() < MAX_FILE);
+    let e = check_file("x", long.as_bytes()).unwrap();
+    assert!(e.psb_len < MAX_PSB && e.abi == opendmd_psi::psb::ABI && e.us <= e.vm_us, "{e:?}");
+    // Over the compiler's own bound (32,768 characters), under the file's: its sentence.
+    let over = format!("{GOOD}{}", "-- padding padding\n".repeat(1800));
+    assert!(over.len() > opendmd_psi::MAX_SOURCE && over.len() < MAX_FILE);
+    assert!(has(&problems("x", &over), "too long"), "{:?}", problems("x", &over));
+    // Over 4,500 B compiled: its length, the limit and what to cut.
+    assert!(too_long_prepared(MAX_PSB).is_none());
+    let long = too_long_prepared(5120).unwrap();
+    assert!(long.contains("5120 bytes once prepared, 4500 at most") && long.contains("comments and spaces cost nothing"));
+    // A real one (P0's caps made it possible: 512 steps, a 256-number table,
+    // palettes in a store, 120 paint colours; 4,863 B compiled, 7.7 KB of
+    // source): refused for its length alone. The JIT draws it in 9.4 ms (the
+    // tier, under MAX_US) where the VM would take 53, and the gate counts the tier.
+    let over = include_str!("../../tools/fixtures/gallery-over-4500.psi");
+    let ps = problems("x", over);
+    assert!(ps.len() == 1 && has(&ps, "4863 bytes once prepared, 4500 at most"), "{ps:?}");
+    let src = over.split_once("name ").map(|(_, r)| format!("name {r}")).unwrap();
+    let p = compile(&src).unwrap();
+    assert!(p.jit_takes() && p.tier_us(false) <= MAX_US && p.esp32_us_still() > MAX_US);
+    // The other way: 40 ms on the VM, 7.4 on the JIT, 4,115 B compiled: taken
+    // (the gate counts the tier), and the entry keeps both figures.
+    let jit = include_str!("../../tools/fixtures/gallery-jit-only.psi");
+    let e = check_file("x", jit.as_bytes()).unwrap();
+    assert!(e.us < 8000 && e.vm_us > 4 * MAX_US && e.psb_len < MAX_PSB, "{e:?}");
+    // Trusted examples marked `-- bundle` may be longer (they ship in the firmware).
+    let b = over.replace("-- licence: CC0-1.0\n", "-- licence: CC0-1.0\n-- bundle\n");
+    let e = check_file_as("x", b.as_bytes(), true).unwrap();
+    assert!(e.bundle && e.psb_len > MAX_PSB && e.us <= MAX_US && e.vm_us > MAX_US && e.us < e.vm_us, "{e:?}");
     let broken = GOOD.replace("pal(rainbow, frac(d*1.5 - t/2))", "pal(rainbow, frac(tme))");
     let ps = problems("x", &broken);
     assert!(has(&ps, "line 7: the formula doesn't compile"), "{ps:?}");

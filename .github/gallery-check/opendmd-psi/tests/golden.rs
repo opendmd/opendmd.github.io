@@ -1158,7 +1158,7 @@ fn random_draw_blocks_render_or_refuse() {
 
 #[test]
 fn scalar_cap_is_a_friendly_error() {
-    let body: Vec<String> = (1..=120).map(|k| format!("x*{k}.{k}")).collect();
+    let body: Vec<String> = (1..=250).map(|k| format!("x*{k}.{k}")).collect();
     let src = format!("gray(frac({}))", body.join(" + "));
     let e = compile(&src).unwrap_err();
     assert!(
@@ -1166,18 +1166,30 @@ fn scalar_cap_is_a_friendly_error() {
         "{}",
         e.msg
     );
+    // It tells how many, past the limit, and the steps by section.
+    assert!(
+        e.msg.contains("needs 259 numbers") && e.msg.contains("per pixel 501"),
+        "{}",
+        e.msg
+    );
 }
 
 #[test]
 fn op_cap_is_a_friendly_error() {
-    // 2 steps a line, 150 lines.
+    // 2 steps a line, 450 lines.
     let mut src = String::from("v0 = x\n");
-    for k in 1..=150 {
+    for k in 1..=450 {
         src += &format!("v{k} = sin(v{}) + x\n", k - 1);
     }
-    src += "gray(v150)";
+    src += "gray(v450)";
     let e = compile(&src).unwrap_err();
     assert!(e.msg.contains("too long for the panel"), "{}", e.msg);
+    assert!(
+        e.msg
+            .contains("901 steps (per frame 0, draw 0, per row 0, per pixel 901)"),
+        "{}",
+        e.msg
+    );
 }
 
 /// Division by a constant (2026-10-26): once a frame or a row it is a true
@@ -2567,4 +2579,143 @@ fn random_rate_formulas_hold_the_same_frames() {
         }
     }
     assert!(ok > 100, "only {ok} compiled");
+}
+
+/// `tween` (psi-p0): each entry of the palette `pal` reads is its
+/// palettes' entries mixed channel by channel, `p + ((q − p)·w + ½) >> 16`
+/// with w held to 0..1 — whole, in halves (each half's palettes over 16
+/// entries: 16 colours are its entries), and at the slider's ends.
+#[test]
+fn tweens_mix_entry_by_entry() {
+    use opendmd_psi::Inputs;
+    let col = |k: u32, s: u32| {
+        ((k * 37 + s) % 256) << 16 | ((k * 91 + 2 * s) % 256) << 8 | ((k * 13 + 3 * s) % 256)
+    };
+    let list = |n: u32, s: u32| {
+        (0..n)
+            .map(|k| format!("#{:06x}", col(k, s)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mix = |p: u32, q: u32, w: i32| -> [u8; 3] {
+        let mut o = [0u8; 3];
+        for (k, sh) in [16, 8, 0].into_iter().enumerate() {
+            let (x, y) = (((p >> sh) & 255) as i32, ((q >> sh) & 255) as i32);
+            o[k] = (x + (((y - x) * w + 0x8000) >> 16)) as u8;
+        }
+        o
+    };
+    let whole = format!(
+        "palette p = {}\npalette q = {}\npalette s = tween(p, q, a)\npal(s, floor(px/4)/32)",
+        list(32, 5),
+        list(32, 200)
+    );
+    let halves = format!(
+        "palette p = {}\npalette q = {}\npalette s = tween(p, q, a), tween(q, p, b)\npal(s, floor(px/4)/32)",
+        list(16, 9),
+        list(16, 77)
+    );
+    for (src, halved) in [(whole, false), (halves, true)] {
+        let prog = compile(&src).unwrap_or_else(|e| panic!("{}", e.render(&src)));
+        for (a, b) in [
+            (0, 0),
+            (1 << 16, 1 << 16),
+            (1 << 15, 1 << 14),
+            (-5, 99_999),
+            (12_345, 54_321),
+        ] {
+            let mut inputs = inputs(0);
+            (inputs.a, inputs.b) = (a, b);
+            let inputs = Inputs { ..inputs };
+            let mut out = vec![0u8; W * H * 3];
+            opendmd_psi::render_with::<128>(&prog, &mut Scratch::new(), &inputs, &OWN, &mut out);
+            for e in 0..32u32 {
+                let px = (e * 4) as usize;
+                let want = match (halved, e < 16) {
+                    (false, _) => mix(col(e, 5), col(e, 200), a.clamp(0, 1 << 16)),
+                    (true, true) => mix(col(e, 9), col(e, 77), a.clamp(0, 1 << 16)),
+                    (true, false) => mix(col(e - 16, 77), col(e - 16, 9), b.clamp(0, 1 << 16)),
+                };
+                assert_eq!(
+                    &out[px * 3..px * 3 + 3],
+                    &want,
+                    "{src}\nentry {e} at a={a} b={b}"
+                );
+            }
+        }
+    }
+}
+
+/// The draw stage past step 255 (psi-p0: its jumps' targets are 16 bits):
+/// a loop with an `if … else` and an `if` after it, laid out after 351
+/// steps once a frame, draws what it draws after none.
+#[test]
+fn the_draw_stage_past_step_255_draws_the_same() {
+    let draw = "draw {\n  for j < 40 {\n    if j % 3 == 0 { dot(j*3 + z, 5 + floor(t), 1) } else { line(j*3, 10 + z, j*3 + 2, 24, 0.5, 1) }\n  }\n  if frac(t/2) > 0.5 { line(0, 30, 127, 30 + z) } else { line(0, 1, 127, 1) }\n}\ngray(ink)";
+    let mut long = String::from("loop 8\n");
+    for k in 1..=70 {
+        long += &format!(
+            "k{k} = sin(t*{:.4} + {:.4})\n",
+            1.0 + k as f64 / 997.0,
+            k as f64 / 131.0
+        );
+    }
+    let terms: Vec<String> = (1..=70)
+        .map(|k| format!("k{k}*{:.5}", k as f64 / 7001.0))
+        .collect();
+    // (Every value of `s` is under 1000: z is 0, worked out at 351 steps.)
+    long += &format!(
+        "s = {}\nz = min(s, -1000) + 1000\n{draw}",
+        terms.join(" + ")
+    );
+    let short = format!("loop 8\nz = 0\n{draw}");
+    let (a, b) = (compile(&long).unwrap(), compile(&short).unwrap());
+    assert!(a.counts().0 > 255, "{:?}", a);
+    for ms in [0, 1100, 3300, 7900] {
+        assert!(
+            frame_ink::<128>(&a, ms, None) == frame_ink::<128>(&b, ms, None),
+            "at {ms} ms"
+        );
+        assert!(
+            frame_ink::<64>(&a, ms, None) == frame_ink::<128>(&b, ms, None),
+            "at {ms} ms, 64 lanes"
+        );
+    }
+}
+
+/// `scene NAME when c { … }` (psi-p0, P0b-1): the frames of the formula
+/// written without it, each name it sets `c ? v : 0` after it — whether
+/// `c` is once a frame or once a row, on or off, its values row values or
+/// per pixel, read by the colour or by other values, through the kernel
+/// widths and a psb.
+#[test]
+fn scenes_draw_what_they_stand_for() {
+    let cases = [
+        (
+            "loop 8\non = frac(t/8) > 0.5\nscene a when on * (py < 20) {\n  h = hash(floor(px/6), 3)\n  w = (frac(px/6) > 0.3) * (frac(py/3) > 0.4) * (h > 0.3)\n  lit = w * (hash(floor(px/2), floor(py/3)) > 0.5)\n}\nscene b when 1 - on {\n  wave = sin(x*12 + t*2 + y*6) * 0.5 + 0.5\n}\nrgb(lit, wave*0.3 + lit*0.5, wave + h*0.2*(py < 20))",
+            "loop 8\non = frac(t/8) > 0.5\nca = on * (py < 20)\nh0 = hash(floor(px/6), 3)\nw0 = (frac(px/6) > 0.3) * (frac(py/3) > 0.4) * (h0 > 0.3)\nlit0 = w0 * (hash(floor(px/2), floor(py/3)) > 0.5)\nh = ca ? h0 : 0\nlit = ca ? lit0 : 0\ncb = 1 - on\nwave = cb ? sin(x*12 + t*2 + y*6) * 0.5 + 0.5 : 0\nrgb(lit, wave*0.3 + lit*0.5, wave + h*0.2*(py < 20))",
+        ),
+        (
+            "loop 4\nscene s when py > 10 + 8*sin(t*1.57) {\n  r = y*2\n  k = 3\n  v = x\n  g = sin(x*8 + r)\n}\nrgb(r, v*0.5 + g*0.5, k/3)",
+            "loop 4\nc = py > 10 + 8*sin(t*1.57)\nr = c ? y*2 : 0\nk = c ? 3 : 0\nv = c ? x : 0\ng = c ? sin(x*8 + y*2) : 0\nrgb(r, v*0.5 + g*0.5, k/3)",
+        ),
+        (
+            "loop 2\nscene s when t < 1 {\n  q = x*x + y*y\n}\nq2 = q*0.5\nlayer { gray(q2) }\nlayer add { hsv(x + t, 1, q) }",
+            "loop 2\nc = t < 1\nq = c ? x*x + y*y : 0\nq2 = q*0.5\nlayer { gray(q2) }\nlayer add { hsv(x + t, 1, q) }",
+        ),
+    ];
+    for (with, without) in cases {
+        let a = compile(with).unwrap_or_else(|e| panic!("{}", e.render(with)));
+        let b = compile(without).unwrap_or_else(|e| panic!("{}", e.render(without)));
+        assert!(a.listing().contains("guard("), "{with}\n{}", a.listing());
+        let bytes = opendmd_psi::build(with).unwrap();
+        let mut c = Program::default();
+        opendmd_psi::psb::load_into(&bytes, opendmd_psi::psb::Which::Play, &mut c).expect("loads");
+        for ms in [0, 400, 990, 1500, 1990, 2700, 3999, 5300, 7999] {
+            let want = frame::<128>(&b, ms);
+            assert!(frame::<128>(&a, ms) == want, "{with}\nat {ms} ms\n{}", a.listing());
+            assert!(frame::<64>(&a, ms) == want, "{with}\nat {ms} ms (64 lanes)");
+            assert!(frame::<128>(&c, ms) == want, "{with}\nat {ms} ms (from its psb)");
+        }
+    }
 }

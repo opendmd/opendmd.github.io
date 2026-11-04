@@ -288,10 +288,10 @@ fn levels_run_as_rarely_as_they_can() {
     assert!(p.listing().contains("recip"), "{}", p.listing());
     assert!(!p.listing().contains("div"), "{}", p.listing());
     let plasma = compile(sketches::PLASMA).unwrap();
-    // (its `len(x-0.5, y-0.5)*6` is worked out once: the still cache's
-    // marker is one step more)
-    // and its `sin(x*3 + t/8)` once a column: a column run, one more)
-    assert_eq!(plasma.counts(), (2, 5, 15));
+    // (its `len(x-0.5, y-0.5)*6` is worked out once, and its `sin(x*3 +
+    // t/8)` once a column: the still cache's and the column run's markers
+    // are not counted as steps)
+    assert_eq!(plasma.counts(), (2, 5, 13));
     assert_eq!(plasma.still_lanes(), 1);
     assert_eq!(plasma.column_run().len(), 4, "{}", plasma.listing());
     let ring = compile(sketches::RING_CLOCK).unwrap();
@@ -495,7 +495,7 @@ fn program_is_plain_data() {
     let mut p = Program::default();
     assert!(compile_into("gray(nope)", &mut p).is_err());
     assert_eq!(p, Program::default());
-    assert!(core::mem::size_of::<Program>() <= 2876 + 4 * crate::program::MAX_PAINT);
+    assert!(core::mem::size_of::<Program>() <= 7_600);
 }
 
 /// Names that became functions later stay usable as values in saved
@@ -526,14 +526,52 @@ fn compact_compiles_the_same() {
     );
 }
 
+/// One frame's cost counts each scene by the rows its `when` is on in that
+/// frame, and the draw stage's arm it takes: the docs' environment cycle,
+/// its towers on rows 0-19 while the city is on, the sea all rows while it
+/// is off.
+#[test]
+fn a_frame_costs_the_scenes_and_rows_it_runs() {
+    let src = "loop 8\ncity = frac(t/8) > 0.5\nscene towers when city * (py < 20) {\n  h = hash(floor(px/6), 3)\n  lit = (frac(px/6) > 0.3) * (frac(py/3) > 0.4) * (h > 0.3)\n}\nscene sea when 1 - city {\n  wave = sin(x*12 + t*2 + y*6)*0.5 + 0.5\n}\ndraw {\n  if city { for k < 40 { line(k*3, 0, k*3, 31, 0.5) } } else { dot(1, 1, 0.5) }\n}\nrgb(lit, wave*0.3 + lit*0.5 + ink, wave)";
+    let p = compile(src).unwrap();
+    let mut s = Scratch::<128>::new();
+    let at = |ms: u64, s: &mut Scratch<128>| {
+        let mut inp = Inputs::default();
+        inp.set_ms(&p, ms);
+        scene_rows(&p, s, &inp, &OWN)
+    };
+    let (sea, city) = (at(1000, &mut s), at(5000, &mut s));
+    assert_eq!(&sea.rows[1..3], &[0, 32]);
+    assert_eq!(&city.rows[1..3], &[20, 0]);
+    assert_eq!((sea.known & 1, sea.taken & 1, city.taken & 1), (1, 0, 1));
+    // Each frame no more than the two costliest scenes on every row and
+    // the costlier arm; the city's frame, with its lines, more than the
+    // sea's.
+    let (a, b) = (p.tier_us_frame(false, &sea), p.tier_us_frame(false, &city));
+    assert!(a <= p.tier_us(false) && b <= p.tier_us(false), "{a} {b} {}", p.tier_us(false));
+    assert!(b > a, "{a} {b}");
+}
+
+/// Palettes of 16 colours or fewer that only tweens' halves read take half
+/// a store place each: ten of them fit the store's eight places.
+#[test]
+fn half_palettes_take_half_a_place() {
+    let mut src = String::from("loop 8\nw = frac(t/8)\n");
+    for k in 0..10 {
+        src += &format!("palette h{k} = #{k}00, #0{k}0, #00{k}, #{k}{k}{k}\n");
+    }
+    src += "palette S = tween(tween(tween(h0, h1, w), tween(h2, h3, w), w), tween(h4, h5, w), w), tween(tween(h6, h7, w), tween(h8, h9, w), w)\n";
+    src += "pal(S, floor(x*32)/32)";
+    compile(&src).unwrap_or_else(|e| panic!("{}", e.render(&src)));
+}
+
 #[test]
 fn sizes() {
     // What the docs say (Program, the scratch at 128 and 64 lanes, the
     // draw stage's canvas).
-    assert_eq!(
-        core::mem::size_of::<Program>(),
-        2876 + 4 * crate::program::MAX_PAINT
-    );
+    // (768 steps and the two markers, 241 values, the palette store: 3,388
+    // B before P0, 6,156 at 512 steps.)
+    assert_eq!(core::mem::size_of::<Program>(), 7436);
     // The ink plane and the paint plane's pointer (the plane itself, 4 KB
     // more, only for a formula that paints).
     assert_eq!(
@@ -542,8 +580,9 @@ fn sizes() {
     );
     // (+ racing the beam's order, places and sink: 12 B on the ESP32.)
     let beam = 3 * core::mem::size_of::<usize>();
-    assert_eq!(core::mem::size_of::<Scratch<128>>(), 8192 + beam);
-    assert_eq!(core::mem::size_of::<Scratch<64>>(), 4864 + beam);
+    // (The scalar slots one for every operand byte: 256, 128 before.)
+    assert_eq!(core::mem::size_of::<Scratch<128>>(), 8704 + beam);
+    assert_eq!(core::mem::size_of::<Scratch<64>>(), 5376 + beam);
 }
 
 #[test]
@@ -1181,13 +1220,14 @@ fn pick_is_the_chain_it_replaces() {
     }
     // One pick step a pixel where the chain took ten.
     let px = |s: &str| compile(s).unwrap().counts().2;
-    assert_eq!(px(cases[0].0) + 9, px(cases[0].1));
-    assert_eq!(px(cases[5].0) + 9, px(cases[5].1));
+    // (Some of the chain's compares fused with their selects: P0b-4.)
+    assert_eq!(px(cases[0].0) + 8, px(cases[0].1));
+    assert_eq!(px(cases[5].0) + 7, px(cases[5].1));
     // In a colour expression (read three times) a pick is one step (and
-    // all of it once a column: the column run's marker is one more).
+    // all of it once a column; the column run's marker is not counted).
     assert_eq!(
         px("#f80 * pick(px/32, 0.5, 1)"),
-        5,
+        4,
         "{}",
         compile("#f80 * pick(px/32, 0.5, 1)").unwrap().listing()
     );
@@ -2292,10 +2332,7 @@ fn sprite_error_messages() {
         keys.join(", ")
     ))
     .unwrap_err();
-    if !e
-        .msg
-        .contains("tables, sprites and palettes hold 256 numbers in all")
-    {
+    if !e.msg.contains("tables and sprites hold 256 numbers in all") {
         bad.push(alloc::format!("E917: {}", e.msg));
     }
     assert!(bad.is_empty(), "\n{}", bad.join("\n"));
@@ -2391,9 +2428,9 @@ const PALETTE_ERRORS: &[(&str, &str, usize, usize, &str)] = &[
         "E922",
     ),
     (
-        "palette p1 = #f00\npalette p2 = #0f0\npalette p3 = #00f\npalette p4 = #fff\npal(p4, x)",
-        "3 palettes of its own at most",
-        4,
+        "palette p1 = #111, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010\npalette p2 = #222, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010\npalette p3 = #333, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010\npalette p4 = #444, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010\npalette p5 = #555, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010\npalette p6 = #666, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010\npalette p7 = #777, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010\npalette p8 = #888, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010\npalette p9 = #999, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010\npal(p9, x)",
+        "8 palettes of its own at most",
+        9,
         1,
         "E923",
     ),
@@ -2442,23 +2479,19 @@ fn palette_error_messages() {
     if !e.msg.contains("1 to 32 colours") {
         bad.push(alloc::format!("E922 33: {}", e.msg));
     }
-    // 200 table numbers and two palettes: past 256.
+    // Palettes have a store of their own: 200 table numbers and two
+    // palettes fit; 200 and 60 more table numbers don't.
     let nums: alloc::vec::Vec<alloc::string::String> =
         (0..200).map(|k| alloc::format!("{k}")).collect();
-    let e = compile(&alloc::format!(
+    assert!(compile(&alloc::format!(
         "table T = {}\npalette p = #f00\npalette q = #0f0\npal(q, T[x])",
         nums.join(", ")
     ))
-    .unwrap_err();
-    if !e
-        .msg
-        .contains("tables, sprites and palettes hold 256 numbers")
-    {
-        bad.push(alloc::format!("E924: {}", e.msg));
-    }
+    .is_ok());
     let e = compile(&alloc::format!(
-        "palette p = #f00\npalette q = #0f0\ntable T = {}\npal(q, T[x])",
-        nums.join(", ")
+        "table T = {}\ntable U = -{}\ngray(T[x] + U[x])",
+        nums.join(", "),
+        nums[..60].join(", -")
     ))
     .unwrap_err();
     if !e.msg.contains("256") {
@@ -3231,4 +3264,185 @@ fn the_pair_order_is_the_panels() {
     let order: Vec<usize> = (0..H).map(pair_row).collect();
     assert_eq!(&order[..6], &[0, 16, 1, 17, 2, 18]);
     assert_eq!(&order[30..], &[15, 31]);
+}
+
+/// The fused compares' formulas (P0b-4): every comparison (`<`, `<=`, `>`,
+/// `>=`, `step`) in every pattern the compiler fuses (`cmp * v`, `v *
+/// cmp`, `cmp ? v : 0`, `cmp ? 0 : v`, `cmp + cmp` of one value against
+/// two, the shared value on either side), per pixel (lanes and values for
+/// the lane, ties included: whole numbers against whole numbers), per row
+/// and per frame.
+/// Each with whether it must fuse (two different comparisons of one value
+/// need not count).
+pub(crate) fn fused_compare_cases() -> alloc::vec::Vec<(alloc::string::String, bool)> {
+    use alloc::format;
+    let ops = ["<", "<=", ">", ">="];
+    // (a, b, v): lanes, values for the lane, ties (floor(px/8) against py/2).
+    let sides = [
+        ("floor(px/8)", "py/2", "x*3 - 1"),
+        ("x", "0.5", "y + 0.25"),
+        ("t/4", "frac(px*0.07)", "2"),
+        ("frac(px*y*0.3)", "frac(py*x*0.2)", "x - y"),
+    ];
+    let mut v = alloc::vec::Vec::new();
+    for op in ops {
+        for (a, b, w) in sides {
+            let c = format!("({a} {op} {b})");
+            for e in [
+                format!("{c} * ({w})"),
+                format!("({w}) * {c}"),
+                format!("{c} ? {w} : 0"),
+                format!("{c} ? 0 : {w}"),
+            ] {
+                v.push((format!("loop 8\nk = {e}\ngray(frac(k*0.37 + 0.5))"), true));
+            }
+            for op2 in ops {
+                // The shared value first in both, second in both, and mixed.
+                let flip = |o: &str| match o {
+                    "<" => ">",
+                    "<=" => ">=",
+                    ">" => "<",
+                    _ => "<=",
+                };
+                for (p, q, must) in [
+                    (
+                        format!("({a} {op} {b})"),
+                        format!("({a} {op2} {w})"),
+                        op == op2,
+                    ),
+                    (
+                        format!("({b} {op} {a})"),
+                        format!("({w} {op2} {a})"),
+                        op == op2,
+                    ),
+                    (
+                        format!("({a} {op} {b})"),
+                        format!("({w} {op2} {a})"),
+                        flip(op2) == op,
+                    ),
+                ] {
+                    // (`t/4 op 2` is a frame's comparison: not fused into a
+                    // pixel's count.)
+                    let must = must && w != "2";
+                    v.push((format!("loop 8\nk = {p} + {q}\ngray(k*0.4 + 0.1)"), must));
+                }
+            }
+        }
+        v.push((
+            format!(
+                "loop 8\nf = (t {op} 4) * 3\nr = (py {op} 12) * 2 + (py {op} 20) + (y {op} 0.5)\ngray(frac((f + r)*0.1 + x*(t {op} 2)))"
+            ),
+            true,
+        ));
+    }
+    for (a, b) in [("floor(px/8)", "py/2"), ("x", "y")] {
+        v.push((
+            format!("loop 8\nk = step({a}, {b}) * (x + 1) + step({b}, {a})\ngray(k*0.3)"),
+            true,
+        ));
+        v.push((
+            format!("loop 8\nk = step({a}, {b}) + step({a}, x*0.5)\ngray(k*0.4)"),
+            true,
+        ));
+    }
+    v
+}
+
+#[test]
+fn fused_compares_are_the_steps_they_replace() {
+    use alloc::vec::Vec;
+    let draw = |p: &Program, ms: u32, a: i32| {
+        let mut out = alloc::vec![0u8; W * H * 3];
+        let mut inp = golden::inputs(ms);
+        inp.a = a;
+        render_rows::<128>(
+            p,
+            &mut Scratch::new(),
+            &inp,
+            &OWN,
+            None,
+            u32::MAX,
+            &mut out,
+        );
+        out
+    };
+    let mut kinds = [0usize; 6];
+    let (mut musts, mut fused) = (0, 0);
+    let cases = fused_compare_cases();
+    for (src, must) in &cases {
+        let mut with = Program::default();
+        compile_into(src, &mut with).unwrap_or_else(|e| panic!("{}", e.render(src)));
+        let mut without = Program::default();
+        compile_measured(src, &mut without, true, true, false).unwrap();
+        // The checked steps too (a frame out of range: `t` past the loop).
+        let mut checked = Program::default();
+        compile_with(src, &mut checked, true, false).unwrap();
+        let n: Vec<u8> = with.ops[..with.len()]
+            .iter()
+            .map(|o| o.code)
+            .filter(|&c| (code::CMP_FIRST..=code::CMP_LAST).contains(&c))
+            .collect();
+        for &c in &n {
+            kinds[(c - code::CMP_FIRST) as usize] += 1;
+        }
+        // (One the column run or the still cache would take apart from the
+        // step that reads it stays apart: once a column against a compare
+        // a pixel.)
+        if *must {
+            musts += 1;
+            fused += usize::from(!n.is_empty());
+        }
+        assert!(
+            with.steps() + n.len() <= without.steps(),
+            "{src}: {} steps fused, {} without\n{}",
+            with.steps(),
+            without.steps(),
+            with.listing()
+        );
+        for ms in [0, 1999, 2000, 4000, 7321] {
+            let want = draw(&without, ms, 1 << 15);
+            assert!(
+                draw(&with, ms, 1 << 15) == want,
+                "{src} at {ms} ms\n{}",
+                with.listing()
+            );
+            assert!(
+                draw(&checked, ms, 1 << 15) == want,
+                "{src} at {ms} ms (checked)"
+            );
+        }
+    }
+    assert!(kinds.iter().all(|&k| k > 0), "each kind made: {kinds:?}");
+    assert!(fused * 2 >= musts, "only {fused} of {musts} fused");
+}
+
+/// The fused compares' values are the steps' they stand for, at the ends
+/// of the range and at ties.
+#[test]
+fn fused_compares_are_exact() {
+    let vals = [i32::MIN, -ONE, -1, 0, 1, ONE / 2, ONE, ONE + 1, i32::MAX];
+    for &a in &vals {
+        for &b in &vals {
+            for &c in &vals {
+                assert_eq!(fixed::sel_lt(a, b, c), fixed::mul(fixed::lt(a, b), c));
+                assert_eq!(fixed::sel_le(a, b, c), fixed::mul(fixed::le(a, b), c));
+                assert_eq!(
+                    fixed::cnt_lt(a, b, c),
+                    fixed::add(fixed::lt(a, b), fixed::lt(a, c))
+                );
+                assert_eq!(
+                    fixed::cnt_le(a, b, c),
+                    fixed::add(fixed::le(a, b), fixed::le(a, c))
+                );
+                assert_eq!(
+                    fixed::cnt_gt(a, b, c),
+                    fixed::add(fixed::gt(a, b), fixed::gt(a, c))
+                );
+                assert_eq!(
+                    fixed::cnt_ge(a, b, c),
+                    fixed::add(fixed::ge(a, b), fixed::ge(a, c))
+                );
+            }
+        }
+    }
 }

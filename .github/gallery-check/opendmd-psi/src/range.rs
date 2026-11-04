@@ -213,6 +213,8 @@ fn value(op: &Op, a: Iv, b: Iv, c: Iv, tabs: &[i32; MAX_TABLE]) -> Iv {
             r
         }
         SELECT => b.union(c),
+        SEL_LT | SEL_LE => c.union(Iv::point(0)),
+        CNT_LT..=CNT_GE => Iv(0, 2 * ONE as i64),
         CLAMP => {
             let m = Iv(a.0.max(b.0), a.1.max(b.1));
             Iv(m.0.min(c.0), m.1.min(c.1))
@@ -268,8 +270,13 @@ fn div_iv(a: Iv, b: Iv) -> Iv {
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub(crate) fn narrow(prog: &mut Program) {
     use code::*;
-    let mut sc = alloc::vec![FULL; MAX_SCALARS];
-    for (k, v) in sc.iter_mut().enumerate().skip(S_FIRST_FREE as usize) {
+    let mut sc = alloc::vec![FULL; SC];
+    for (k, v) in sc
+        .iter_mut()
+        .enumerate()
+        .take(MAX_SCALARS)
+        .skip(S_FIRST_FREE as usize)
+    {
         *v = Iv::point(prog.init[k]);
     }
     sc[S_T as usize] = Iv(0, t_max(prog.loop_ms) as i64);
@@ -296,7 +303,7 @@ pub(crate) fn narrow(prog: &mut Program) {
         prog.len().min(MAX_OPS),
     );
     let (ops, tabs) = (&mut prog.ops, &prog.tables);
-    let g = |sc: &[Iv], v: u8| sc[(v & 0x7f) as usize];
+    let g = |sc: &[Iv], v: u8| sc[v as usize];
     // Per frame, the draw stage, then per row (over every row: y and py
     // are ranges). Every slot is written by one step, before any step
     // reads it (`emit`), so one walk in order is exact.
@@ -304,7 +311,7 @@ pub(crate) fn narrow(prog: &mut Program) {
         // (A wide step's own slots are not scalar ones: only those that come
         // back to a Q16.16 write one.)
         if code::writes_scalar(op.code) {
-            sc[(op.d & 0x7f) as usize] = value(&op, g(&sc, op.a), g(&sc, op.b), g(&sc, op.c), tabs);
+            sc[op.d as usize] = value(&op, g(&sc, op.a), g(&sc, op.b), g(&sc, op.c), tabs);
         }
     }
     // The draw stage's slots (its counters and values): anything.
@@ -312,39 +319,72 @@ pub(crate) fn narrow(prog: &mut Program) {
         match op.code {
             // A loop's counter (END counts in `a`); the primitives write
             // nothing (their `d` is 0: `t`'s slot, not theirs).
-            END => sc[(op.a & 0x7f) as usize] = FULL,
+            END => sc[op.a as usize] = FULL,
             LINE_FROM | LINE_TO | DOT => {}
-            _ => sc[(op.d & 0x7f) as usize] = FULL,
+            _ => sc[op.d as usize] = FULL,
         }
     }
-    for &op in &ops[de.min(re)..re] {
+    // (A scene's guarded run: its slots 0 too, while it is off.)
+    let mut off_end = 0usize;
+    let mut off: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+    for (k, &op) in ops.iter().enumerate().take(re).skip(de.min(re)) {
+        if k == off_end {
+            for &d in &off {
+                sc[d as usize] = sc[d as usize].union(Iv::point(0));
+            }
+            off.clear();
+        }
+        if op.code == GUARD {
+            off_end = k + 1 + op.b as usize;
+            continue;
+        }
         // (`cycle`'s turn writes a palette, no slot: its `d` is the palette's.)
         if op.code != TURN {
-            sc[(op.d & 0x7f) as usize] = value(&op, g(&sc, op.a), g(&sc, op.b), g(&sc, op.c), tabs);
+            sc[op.d as usize] = value(&op, g(&sc, op.a), g(&sc, op.b), g(&sc, op.c), tabs);
+            if k < off_end {
+                off.push(op.d);
+            }
         }
+    }
+    for &d in &off {
+        sc[d as usize] = sc[d as usize].union(Iv::point(0));
     }
     let mut regs = [FULL; REGS + 1];
     let lane = |regs: &[Iv; REGS + 1], sc: &[Iv], v: u8| -> Iv {
-        if v & LANE == 0 {
-            return sc[(v & 0x7f) as usize];
+        if !is_lane(v) {
+            return sc[v as usize];
         }
-        match v & !LANE {
+        match lane_no(v) {
             L_X => UNIT,
             L_PX => Iv(0, ((W - 1) * ONE as usize) as i64),
             L_I => Iv(0, ((W * H - 1) * ONE as usize) as i64),
             l => regs[((l - L_I) as usize).min(REGS)],
         }
     };
-    for slot in &mut ops[re.min(pe)..pe] {
+    // (A scene's guarded run: the registers of its mask 0 too after it.)
+    let (mut off_end, mut mask) = (usize::MAX, 0u16);
+    for (k, slot) in ops.iter_mut().enumerate().take(pe).skip(re.min(pe)) {
         let mut op = *slot;
+        if k == off_end {
+            for (r, v) in regs[1..].iter_mut().enumerate() {
+                if mask & (1 << r) != 0 {
+                    *v = v.union(Iv::point(0));
+                }
+            }
+            off_end = usize::MAX;
+        }
+        if op.code == GUARD {
+            (off_end, mask) = (k + 1 + op.b as usize, guard_mask(&op));
+            continue;
+        }
         if code::is_colour(op.code) || matches!(op.code, STILL | COLUMN | FUSE | SLOW) {
             continue;
         }
-        if op.d & LANE == 0 || op.d & !LANE < L_REG0 {
+        if !is_lane(op.d) || lane_no(op.d) < L_REG0 {
             continue;
         }
         let (a, b) = (lane(&regs, &sc, op.a), lane(&regs, &sc, op.b));
-        let lanes = |v: u8| v & LANE != 0;
+        let lanes = is_lane;
         match op.code {
             ADD if add_iv(a, b).fits() => op.code = ADD_W,
             SUB if sub_iv(a, b).fits() => op.code = SUB_W,
@@ -386,7 +426,7 @@ pub(crate) fn narrow(prog: &mut Program) {
             lane(&regs, &sc, op.c),
             tabs,
         );
-        let di = ((op.d & !LANE) - L_I) as usize;
+        let di = (lane_no(op.d) - L_I) as usize;
         regs[di.min(REGS)] = r;
         *slot = op;
     }

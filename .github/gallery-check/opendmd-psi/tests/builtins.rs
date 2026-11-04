@@ -251,8 +251,8 @@ fn spec_limits() -> String {
             format!("{} characters", n(p::MAX_SOURCE)),
         ),
         (
-            "steps (per frame, per row, per pixel, and one per layer)",
-            n(p::MAX_OPS),
+            "steps (per frame, draw, per row, per pixel, and one per layer)",
+            n(p::MAX_STEPS),
         ),
         ("values held a pixel at once", n(p::REGS)),
         (
@@ -263,10 +263,9 @@ fn spec_limits() -> String {
             "nesting of brackets, operators and function calls",
             n(p::MAX_DEPTH),
         ),
-        (
-            "`table`, `sprite` and `palette` numbers, in all",
-            n(p::MAX_TABLE),
-        ),
+        ("`table` and `sprite` numbers, in all", n(p::MAX_TABLE)),
+        ("palettes of your own (of colours)", n(p::MAX_PALETTES)),
+        ("palettes `pal` and `cycle` read", n(p::USER_PALETTES)),
         ("loop turns a frame in `draw { }`", n(p::TURNS as usize)),
         ("lines and dots a frame", n(p::PRIMITIVES as usize)),
         ("line steps a frame", n(p::FRAME_STEPS as usize)),
@@ -464,6 +463,8 @@ fn every_call_in_the_cheat_sheet_is_a_built_in() {
                     || head == "p"
                     // `ink(n)`: the canvas in n levels (a special form)
                     || head == "ink"
+                    // `tween(P, Q, w)`: a palette line's (a special form)
+                    || head == "tween"
                     // a function the row itself defines (`fn ring(cx, r) = …`)
                     || label.starts_with(&format!("fn {head}("));
                 assert!(

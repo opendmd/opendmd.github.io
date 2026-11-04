@@ -29,7 +29,8 @@
 //! pass: the path (one flat `gallery/<slug>.psi`), the size, the text (UTF-8
 //! without control, invisible or direction-changing characters; no `<` or
 //! `>` in the header), the header's fields and limits, the licence, that it
-//! compiles, and its cost on the panel (`Program::esp32_us_still`). The checker
+//! compiles, how long it is once compiled for the panel, and its cost on the
+//! panel (`Program::tier_us`, the JIT's where it takes the formula). The checker
 //! never runs anything but the Psi VM, which has no I/O: a formula is
 //! arithmetic over the pixel and the time.
 //!
@@ -42,18 +43,32 @@ use opendmd_psi::{compile, compile_declared, render_rows_ink, Inputs, Program, S
 
 pub mod png;
 
-/// A gallery file's size limit, bytes.
-pub const MAX_FILE: usize = 4096;
+/// A gallery file's size limit, bytes: a formula as long as the compiler
+/// takes ([`opendmd_psi::MAX_SOURCE`], 16,384 characters, whose own error
+/// says so) and room for the header. This is only the public repo's guard
+/// against a huge file on disk; what the panel minds is the formula's
+/// compiled length ([`MAX_PSB`]) and its cost ([`MAX_US`]).
+pub const MAX_FILE: usize = 36 * 1024;
 
-/// The size limit for a file: [`MAX_FILE`], or for OpenDMD's own examples
-/// (`trusted`) as long as a formula can be, comments and all (the bundled
-/// ones are read on the panel by name, never sent in a link).
-pub const fn max_file(trusted: bool) -> usize {
-    if trusted {
-        opendmd_psi::MAX_SOURCE + 512
-    } else {
-        MAX_FILE
-    }
+/// The most a formula may be once compiled for the panel (the bytes a
+/// `@formula?psb=…` link carries), so that link, with its name and sliders,
+/// stays within the panel's 6,144-byte path.
+pub const MAX_PSB: usize = 4500;
+
+/// The sentence for a formula that is `psb_len` bytes once compiled for the
+/// panel, if that is over [`MAX_PSB`] (site/worker/src/check.ts says the same).
+pub fn too_long_prepared(psb_len: usize) -> Option<String> {
+    (psb_len > MAX_PSB).then(|| {
+        format!(
+            "the formula is too long for the panel to take in a link: {psb_len} bytes once prepared, {MAX_PSB} at most; cut tables or repeated steps (comments and spaces cost nothing)"
+        )
+    })
+}
+
+/// The size limit for a file: [`MAX_FILE`] for every file, OpenDMD's own
+/// examples (`trusted`) included.
+pub const fn max_file(_trusted: bool) -> usize {
+    MAX_FILE
 }
 /// The header's limits, in characters.
 pub const MAX_NAME: usize = 40;
@@ -96,7 +111,18 @@ pub struct Entry {
     pub steps: usize,
     pub loop_ms: u32,
     pub inputs: u8,
+    /// What the panel takes a frame, µs: `Program::tier_us(false)` (with the
+    /// JIT where it takes the formula, with the still cache; the web app's
+    /// number for light / medium / heavy, and what [`MAX_US`] limits).
     pub us: u32,
+    /// The same on the VM alone (`Program::esp32_us_still`): "without the
+    /// JIT". Equal to `us` for a formula the JIT refuses.
+    pub vm_us: u32,
+    /// The formula compiled for the panel, bytes ([`MAX_PSB`] at most unless
+    /// it is `-- bundle`), and the version of the compiled format it needs
+    /// (`opendmd_psi::psb::ABI`; the panel reports the one it plays).
+    pub psb_len: usize,
+    pub abi: u8,
 }
 
 /// The slug of a gallery path, `gallery/<slug>.psi`: lower-case letters and
@@ -411,9 +437,9 @@ pub fn check_file_as(slug: &str, bytes: &[u8], trusted: bool) -> Result<Entry, V
         }
     }
     // As the panel plays it: with its still cache when it has values for
-    // one (a gallery formula is played as itself; a look is checked by the
-    // player when it is chosen).
-    let us = prog.esp32_us_still();
+    // one, and with the JIT where it takes the formula (a gallery formula is
+    // played as itself; a look is checked by the player when it is chosen).
+    let us = prog.tier_us(false);
     if us > MAX_US {
         problems.push(format!(
             "the formula is too heavy for the panel: about {:.1} ms a frame, {:.0} ms at most",
@@ -421,9 +447,21 @@ pub fn check_file_as(slug: &str, bytes: &[u8], trusted: bool) -> Result<Entry, V
             MAX_US as f64 / 1000.0
         ));
     }
+    // The compiled Formula, as the panel plays it (and a link carries it).
+    let (psb_len, abi) = match opendmd_psi::build(src) {
+        Ok(b) if b.len() > 3 => (b.len(), b[3]),
+        _ => {
+            problems.push("the formula could not be prepared for the panel".into());
+            (0, 0)
+        }
+    };
+    if !bundle {
+        problems.extend(too_long_prepared(psb_len));
+    }
     if !problems.is_empty() {
         return Err(problems);
     }
+    let vm_us = prog.esp32_us_still();
     let controls = (0..3)
         .filter(|&k| declared.controls[k].is_some() || prog.sliders() & (1 << k) != 0)
         .map(|k| match declared.controls[k] {
@@ -445,6 +483,9 @@ pub fn check_file_as(slug: &str, bytes: &[u8], trusted: bool) -> Result<Entry, V
         loop_ms: prog.loop_ms(),
         inputs: prog.inputs(),
         us,
+        vm_us,
+        psb_len,
+        abi,
     })
 }
 
@@ -574,7 +615,7 @@ pub fn json(e: &Entry) -> String {
     };
     let controls: Vec<String> = e.controls.iter().map(|c| js(c)).collect();
     format!(
-        "{{\"slug\":{},\"name\":{},\"about\":{},\"author\":{},\"licence\":{},\"bundle\":{},\"look\":{look},\"controls\":[{}],\"src\":{},\"steps\":{},\"loop_ms\":{},\"inputs\":{},\"us\":{}}}",
+        "{{\"slug\":{},\"name\":{},\"about\":{},\"author\":{},\"licence\":{},\"bundle\":{},\"look\":{look},\"controls\":[{}],\"src\":{},\"steps\":{},\"loop_ms\":{},\"inputs\":{},\"us\":{},\"vm_us\":{},\"psb_len\":{},\"abi\":{}}}",
         js(&e.slug),
         js(&e.name),
         js(&e.about),
@@ -586,7 +627,10 @@ pub fn json(e: &Entry) -> String {
         e.steps,
         e.loop_ms,
         e.inputs,
-        e.us
+        e.us,
+        e.vm_us,
+        e.psb_len,
+        e.abi
     )
 }
 

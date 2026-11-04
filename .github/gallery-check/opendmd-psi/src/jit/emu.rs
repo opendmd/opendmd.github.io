@@ -35,6 +35,8 @@ pub(crate) struct Emu {
     pub steps: u64,
     /// Helper calls made.
     pub calls: u64,
+    /// Guard sites patched.
+    pub patches: u64,
 }
 
 fn sext(v: u32, bits: u32) -> i32 {
@@ -50,6 +52,7 @@ impl Emu {
             stack: vec![0; STACK_LEN],
             steps: 0,
             calls: 0,
+            patches: 0,
         }
     }
 
@@ -363,6 +366,17 @@ impl Emu {
 /// The emulator as a kernel's target (the host tests).
 pub(crate) struct EmuTarget {
     pub emu: Emu,
+    /// Which guards the code has on (as emitted, all).
+    pub guards: u32,
+}
+
+impl EmuTarget {
+    pub fn new(code: &[u8]) -> EmuTarget {
+        EmuTarget {
+            emu: Emu::new(code),
+            guards: u32::MAX,
+        }
+    }
 }
 
 impl Target for EmuTarget {
@@ -386,10 +400,17 @@ impl Target for EmuTarget {
 
     fn run_rows(&mut self, at: usize, ctx: &mut [u32], sc: *mut i32) {
         let c = self.emu.map(ctx.as_mut_ptr() as *const u8, ctx.len() * 4);
-        let s = self
-            .emu
-            .map(sc as *const u8, crate::program::MAX_SCALARS * 4);
+        let s = self.emu.map(sc as *const u8, crate::program::SC * 4);
         self.emu.call_at(at, c, s);
+    }
+
+    fn patch(&mut self, at: usize, bytes: &[u8]) {
+        self.emu.code[at..at + bytes.len()].copy_from_slice(bytes);
+        self.emu.patches += 1;
+    }
+
+    fn guards_on(&mut self) -> &mut u32 {
+        &mut self.guards
     }
 }
 

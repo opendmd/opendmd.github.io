@@ -77,15 +77,15 @@ pub fn q16(num: i32, den: i32) -> i32 {
 
 /// The VM's working memory for a lane width `N` (64 or 128): the lane
 /// registers, the `i` lane, the scalar slots, and the `x`/`px` columns
-/// (worked out once, by [`Scratch::new`] or [`Scratch::reset`]): 8,192 B
-/// at 128 lanes, 4,864 B at 64, and racing the beam's 12 B. Plain integers, so a zeroed allocation plus `reset` is a
+/// (worked out once, by [`Scratch::new`] or [`Scratch::reset`]): 8,704 B
+/// at 128 lanes, 5,376 B at 64, and racing the beam's 12 B. Plain integers, so a zeroed allocation plus `reset` is a
 /// valid one. (`repr(C)`: the beam's fields after the VM's, which keep
 /// their offsets.)
 #[repr(C)]
 pub struct Scratch<const N: usize> {
     /// `[0]` is the `i` lane, then the [`REGS`] registers.
     pub(crate) lanes: [[i32; N]; REGS + 1],
-    pub(crate) sc: [i32; MAX_SCALARS],
+    pub(crate) sc: Sc,
     pub(crate) xs: [i32; W],
     pub(crate) pxs: [i32; W],
     /// Racing the beam, while a frame is drawn ([`render_rows_beam`]):
@@ -106,7 +106,7 @@ impl<const N: usize> Scratch<N> {
     pub fn new() -> Self {
         let mut s = Scratch {
             lanes: [[0; N]; REGS + 1],
-            sc: [0; MAX_SCALARS],
+            sc: [0; SC],
             xs: [0; W],
             pxs: [0; W],
             order: 0,
@@ -274,6 +274,52 @@ fn run3<const N: usize, A: Src, B: Src, C: Src>(
         a.step(1);
         b.step(1);
         c.step(1);
+    }
+}
+
+/// A fused compare (`SEL_*`, `CNT_*`) along the lane, its operands read
+/// with a stride (0: a value for the lane): one function in IRAM for the
+/// six and every kind of operand (`tern!`'s seven loops each would be
+/// ~1 KB of IRAM a step), each a loop of its own.
+#[inline(never)]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
+fn cmp_lane<const N: usize>(d: &mut [i32; N], code: u8, args: [Arg; 3]) {
+    let mut one = [0i32; 3];
+    let mut p = [core::ptr::null::<i32>(); 3];
+    let mut st = [0usize; 3];
+    for (k, x) in args.into_iter().enumerate() {
+        match x {
+            Arg::Lane(q) => (p[k], st[k]) = (q, 1),
+            Arg::Sc(v) => one[k] = v,
+        }
+    }
+    for k in 0..3 {
+        if st[k] == 0 {
+            p[k] = &one[k];
+        }
+    }
+    let [(pa, sa), (pb, sb), (pc, sc)] = [(p[0], st[0]), (p[1], st[1]), (p[2], st[2])];
+    macro_rules! each {
+        ($f:expr) => {{
+            let (mut pa, mut pb, mut pc) = (pa, pb, pc);
+            for o in d.iter_mut() {
+                // SAFETY: a lane's pointer is to N values (the destination
+                // is never one of them: the compiler allocates it apart), a
+                // value's is `one`, read with stride 0.
+                *o = unsafe { $f(*pa, *pb, *pc) };
+                pa = pa.wrapping_add(sa);
+                pb = pb.wrapping_add(sb);
+                pc = pc.wrapping_add(sc);
+            }
+        }};
+    }
+    match code {
+        code::SEL_LT => each!(fixed::sel_lt),
+        code::SEL_LE => each!(fixed::sel_le),
+        code::CNT_LT => each!(fixed::cnt_lt),
+        code::CNT_LE => each!(fixed::cnt_le),
+        code::CNT_GT => each!(fixed::cnt_gt),
+        _ => each!(fixed::cnt_ge),
     }
 }
 
@@ -928,12 +974,19 @@ pub(crate) fn frame<const N: usize>(
     if prog.forever() {
         wset(&mut scratch.lanes[REGS], 0, inputs.tw);
     }
-    for op in &prog.ops[..fe] {
+    // (Its tweens, the section's last steps, with its own palettes below.)
+    for op in &prog.ops[..prog.tweens().start.min(fe)] {
         if code::is_wide(op.code) {
             wide_step(&mut scratch.sc, &mut scratch.lanes[REGS], op);
         } else {
             scalar(&mut scratch.sc, op, tables, &prog.tables);
         }
+    }
+    // A formula's own palettes, worked out once for the frame (before the
+    // draw stage, whose values may take the tweens' weights' slots).
+    let mut own: Pals = [[[0; 3]; 32]; USER_PALETTES];
+    if prog.uses & OWNPAL != 0 {
+        own_palettes(prog, &scratch.sc, &mut own);
     }
     let ink: Option<&Ink> = match ink {
         Some(k) if prog.draws() => {
@@ -973,11 +1026,6 @@ pub(crate) fn frame<const N: usize>(
     // without their loops in the download.
     let narrow = !cfg!(target_arch = "wasm32") && crate::range::inputs_in_range(prog, inputs);
     let uses_i = prog.uses & USES_I != 0;
-    // A formula's own palettes, unpacked once for the frame.
-    let mut own: Pals = [[[0; 3]; 32]; USER_PALETTES];
-    if prog.uses & OWNPAL != 0 {
-        unpack_palettes(&prog.tables, &mut own);
-    }
     let backdrop = prog.uses & BACKDROP != 0 || fast;
     // Each row's values and what it changed (`Rows`): the row as it was
     // kept when `changed` asks.
@@ -1047,6 +1095,16 @@ pub(crate) fn frame<const N: usize>(
                             k += 1;
                         }
                         Cache::Off => k += 1,
+                    }
+                    continue;
+                }
+                if op.code == code::GUARD {
+                    // A scene's pixel steps: skipped while its `when` is 0,
+                    // the values read after them 0.
+                    k += 1;
+                    if scratch.sc[op.a as usize] == 0 {
+                        guard_off(scratch, &mut alias, op);
+                        k += op.b as usize;
                     }
                     continue;
                 }
@@ -1127,7 +1185,20 @@ pub(crate) type Alias = [*const i32; REGS + 1];
 /// destination).
 #[inline(always)]
 pub(crate) fn reg_index(v: u8) -> usize {
-    ((v & !LANE).saturating_sub(L_I) as usize).clamp(1, REGS)
+    (lane_no(v).saturating_sub(L_I) as usize).clamp(1, REGS)
+}
+
+/// A scene's guard off (`code::GUARD`): the registers of its mask 0 for
+/// the lane (no longer a still cache's lane). Out of the frame loop's IRAM.
+#[inline(never)]
+pub(crate) fn guard_off<const N: usize>(s: &mut Scratch<N>, al: &mut Alias, op: &Op) {
+    let mask = guard_mask(op);
+    for r in 0..REGS {
+        if mask & (1 << r) != 0 {
+            al[r + 1] = core::ptr::null();
+            s.lanes[r + 1].fill(0);
+        }
+    }
 }
 
 /// Copy the cached registers' lanes (`n` of `regs`) into the kept lanes at
@@ -1159,6 +1230,109 @@ pub(crate) fn fetch<const N: usize>(al: &mut Alias, st: &Still, regs: [u8; 2], n
     }
 }
 
+/// What this frame runs, as the panel draws it: for each scene (`scene NAME
+/// when …`, by its number) how many rows its `when` is on in — the frame's
+/// steps run with these inputs, then each row's, a row-section guard
+/// tested where it stands and a pixel-section guard against the row's
+/// values — and the way each of the draw stage's `if`s outside loops goes
+/// (its values outside loops worked out; its lines not drawn).
+/// [`Program::tier_us_frame`] costs a frame by it.
+pub fn scene_rows<const N: usize>(
+    prog: &Program,
+    scratch: &mut Scratch<N>,
+    inputs: &Inputs,
+    tables: &Tables,
+) -> crate::program::SceneFrame {
+    let mut on = [0u8; 16];
+    let mut out = crate::program::SceneFrame::default();
+    if prog.slow_marker().is_some() {
+        return out;
+    }
+    let ns = prog.n_scalars as usize;
+    scratch.sc[..ns].copy_from_slice(&prog.init[..ns]);
+    let sc = &mut scratch.sc;
+    sc[S_T as usize] = inputs.t;
+    sc[S_HOUR as usize] = (inputs.hour as i32) << 16;
+    sc[S_MINUTE as usize] = (inputs.minute as i32) << 16;
+    sc[S_SECOND as usize] = (inputs.second as i32) << 16;
+    sc[S_A as usize] = inputs.a;
+    sc[S_B as usize] = inputs.b;
+    sc[S_C as usize] = inputs.c;
+    if prog.uses & SEEDED != 0 {
+        sc[S_SEED as usize] = inputs.seed;
+    }
+    let fe = prog.frame_end as usize;
+    if prog.forever() {
+        wset(&mut scratch.lanes[REGS], 0, inputs.tw);
+    }
+    for op in &prog.ops[..prog.tweens().start.min(fe)] {
+        if code::is_wide(op.code) {
+            wide_step(&mut scratch.sc, &mut scratch.lanes[REGS], op);
+        } else {
+            scalar(&mut scratch.sc, op, tables, &prog.tables);
+        }
+    }
+    // The draw stage's `if`s outside loops: its values outside loops worked
+    // out in order (an untaken arm's too: they are its own), each `if`'s
+    // way read where it stands.
+    let (mut depth, mut nth) = (0usize, 0u32);
+    for op in &prog.ops[fe.min(prog.draw_end as usize)..prog.draw_end as usize] {
+        match op.code {
+            code::FOR => depth += 1,
+            code::END => depth = depth.saturating_sub(1),
+            code::IF if depth == 0 => {
+                if nth < 32 {
+                    out.known |= 1 << nth;
+                    if scratch.sc[op.a as usize] != 0 {
+                        out.taken |= 1 << nth;
+                    }
+                }
+                nth += 1;
+            }
+            c if depth == 0 && code::writes_scalar(c) => {
+                scalar(&mut scratch.sc, op, tables, &prog.tables)
+            }
+            _ => {}
+        }
+    }
+    let turns = prog.turns();
+    let (re, pe) = (prog.row_end as usize, prog.len().min(MAX_OPS));
+    for row in 0..H {
+        let py = (row as i32) << 16;
+        scratch.sc[S_PY as usize] = py;
+        scratch.sc[S_Y as usize] = fixed::div(py, ((H - 1) as i32) << 16);
+        let mut seen = 0u16;
+        let mut k = prog.draw_end as usize;
+        while k < turns.start {
+            let op = &prog.ops[k];
+            k += 1;
+            if op.code == code::GUARD {
+                if scratch.sc[op.a as usize] == 0 {
+                    let end = (k + op.b as usize).min(turns.start);
+                    for o in &prog.ops[k..end] {
+                        scratch.sc[o.d as usize] = 0;
+                    }
+                    k = end;
+                } else {
+                    seen |= 1 << (op.c >> 4);
+                }
+                continue;
+            }
+            scalar(&mut scratch.sc, op, tables, &prog.tables);
+        }
+        for op in &prog.ops[re..pe] {
+            if op.code == code::GUARD && scratch.sc[op.a as usize] != 0 {
+                seen |= 1 << (op.c >> 4);
+            }
+        }
+        for (s, n) in on.iter_mut().enumerate() {
+            *n += u8::from(seen & (1 << s) != 0);
+        }
+    }
+    out.rows = on;
+    out
+}
+
 /// The row steps for one row. In flash (consolea-a: as quick as in IRAM,
 /// the road 3,347 µs against main's 3,393; `noise_o` and the other row
 /// helpers they call stay in IRAM), and IRAM is short.
@@ -1174,7 +1348,21 @@ pub(crate) fn row_steps<const N: usize>(
     own: &mut Pals,
 ) {
     let turns = prog.turns();
-    for op in &prog.ops[prog.draw_end as usize..turns.start] {
+    let mut k = prog.draw_end as usize;
+    while k < turns.start {
+        let op = &prog.ops[k];
+        k += 1;
+        if op.code == code::GUARD {
+            // A scene's row steps: while its `when` is 0, each one's slot 0.
+            if scratch.sc[op.a as usize] == 0 {
+                let end = (k + op.b as usize).min(turns.start);
+                for o in &prog.ops[k..end] {
+                    scratch.sc[o.d as usize] = 0;
+                }
+                k = end;
+            }
+            continue;
+        }
         scalar(&mut scratch.sc, op, tables, &prog.tables);
     }
     for op in &prog.ops[turns] {
@@ -1325,21 +1513,16 @@ impl<'a> Rows<'a> {
 }
 
 #[inline(always)]
-pub(crate) fn scalar(sc: &mut [i32; MAX_SCALARS], op: &Op, t: &Tables, tabs: &[i32; MAX_TABLE]) {
+pub(crate) fn scalar(sc: &mut Sc, op: &Op, t: &Tables, tabs: &[i32; MAX_TABLE]) {
     let v = scalar_value(sc, op, t, tabs);
-    sc[(op.d & 0x7f) as usize] = v;
+    sc[op.d as usize] = v;
 }
 
 /// What a scalar step works out (`scalar` stores it in its `d`).
 #[inline(always)]
-pub(crate) fn scalar_value(
-    sc: &[i32; MAX_SCALARS],
-    op: &Op,
-    t: &Tables,
-    tabs: &[i32; MAX_TABLE],
-) -> i32 {
-    // Operands of scalar steps are always scalar slots (< 128).
-    let g = |v: u8| sc[(v & 0x7f) as usize];
+pub(crate) fn scalar_value(sc: &Sc, op: &Op, t: &Tables, tabs: &[i32; MAX_TABLE]) -> i32 {
+    // Operands of scalar steps are always scalar slots (< LANE).
+    let g = |v: u8| sc[v as usize];
     match op.code {
         code::TAB => tab(tabs, op.b, op.c, g(op.a)),
         code::SPR => spr(tabs, op.c, g(op.a), g(op.b)),
@@ -1355,7 +1538,7 @@ pub(crate) fn scalar_value(
 /// Endless road ~1.1 ms a frame on the spare — roadprobe-b, two a row).
 #[inline(never)]
 #[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
-fn noise_o(x: i32, y: i32, z: i32, sc: &[i32; MAX_SCALARS], c: u8) -> i32 {
+fn noise_o(x: i32, y: i32, z: i32, sc: &Sc, c: u8) -> i32 {
     fixed::noise_off(x, y, z, ctx(sc, c))
 }
 
@@ -1369,7 +1552,7 @@ fn spr(tabs: &[i32; MAX_TABLE], at: u8, u: i32, v: i32) -> i32 {
 /// Noise context `c - NOISE_O`'s three lattice offsets: its slots
 /// ([`noise_slot`]; 0 for an axis without one).
 #[inline(always)]
-fn ctx(sc: &[i32; MAX_SCALARS], c: u8) -> [u32; 3] {
+fn ctx(sc: &Sc, c: u8) -> [u32; 3] {
     let k = noise_slot(c.wrapping_sub(code::NOISE_O) as usize % NOISE_CTX, 0);
     [sc[k] as u32, sc[k + 1] as u32, sc[k + 2] as u32]
 }
@@ -1392,9 +1575,9 @@ pub(crate) fn wset(l: &mut [i32], k: usize, v: i64) {
 /// `t` and what is made from it; `w` the lane holding the wide values),
 /// out of line and in flash: the frame loop that calls it is in IRAM.
 #[inline(never)]
-pub(crate) fn wide_step(sc: &mut [i32; MAX_SCALARS], w: &mut [i32], op: &Op) {
+pub(crate) fn wide_step(sc: &mut Sc, w: &mut [i32], op: &Op) {
     use code::*;
-    let s = |v: u8| sc[(v & 0x7f) as usize];
+    let s = |v: u8| sc[v as usize];
     let (a, d) = (wget(w, op.a as usize), op.d);
     let out = match op.code {
         W_ADD => a.wrapping_add(wget(w, op.b as usize)),
@@ -1422,7 +1605,7 @@ pub(crate) fn wide_step(sc: &mut [i32; MAX_SCALARS], w: &mut [i32], op: &Op) {
                 ),
                 _ => fixed::w_reduce(a),
             };
-            sc[(d & 0x7f) as usize] = v;
+            sc[d as usize] = v;
             return;
         }
     };
@@ -1443,10 +1626,10 @@ impl<const N: usize> Scratch<N> {
     /// The operand `v` for the lane at column `base`.
     #[inline(always)]
     fn arg(&self, al: &Alias, v: u8, base: usize) -> Arg {
-        if v & LANE == 0 {
-            return Arg::Sc(self.sc[(v & 0x7f) as usize]);
+        if !is_lane(v) {
+            return Arg::Sc(self.sc[v as usize]);
         }
-        Arg::Lane(match v & !LANE {
+        Arg::Lane(match lane_no(v) {
             L_X => self.xs[base..base + N].as_ptr(),
             L_PX => self.pxs[base..base + N].as_ptr(),
             l => {
@@ -1513,6 +1696,7 @@ pub(crate) fn lane_draw<const N: usize>(
         TAB => tab_lane(d, a, tabs, op),
         SELECT => tern!(fast3, d, a, b, c, fixed::select),
         CLAMP => tern!(fast3, d, a, b, c, fixed::clamp),
+        SEL_LT..=CNT_GE => cmp_lane(d, op.code, [a, b, c]),
         _ => {
             let mut one = [0i32; 3];
             let mut p = [core::ptr::null::<i32>(); 3];
@@ -1546,15 +1730,7 @@ pub(crate) fn lane_draw<const N: usize>(
 /// turn by turn ([`lane_draw`]).
 #[cfg(not(target_arch = "wasm32"))]
 #[inline(never)]
-fn value_of(
-    op: &Op,
-    x: i32,
-    y: i32,
-    z: i32,
-    sc: &[i32; MAX_SCALARS],
-    t: &Tables,
-    tabs: &[i32; MAX_TABLE],
-) -> i32 {
+fn value_of(op: &Op, x: i32, y: i32, z: i32, sc: &Sc, t: &Tables, tabs: &[i32; MAX_TABLE]) -> i32 {
     use code::*;
     match op.code {
         SHR => x >> (op.c & 31),
@@ -1615,7 +1791,7 @@ pub(crate) fn lane_op<const N: usize>(
     // same step (`compile` allocates it that way), so the `&mut` lane does
     // not alias the source pointers.
     let di = reg_index(op.d);
-    debug_assert!(op.d & LANE != 0 && op.d & !LANE >= L_REG0);
+    debug_assert!(is_lane(op.d) && lane_no(op.d) >= L_REG0);
     al[di] = core::ptr::null();
     let d: &mut [i32; N] = &mut s.lanes[di];
     let code = if narrow {
@@ -1683,6 +1859,7 @@ pub(crate) fn lane_op<const N: usize>(
         TAB => tab_lane(d, a, tabs, op),
         SELECT => tern!(fast3, d, a, b, c, fixed::select),
         CLAMP => tern!(fast3, d, a, b, c, fixed::clamp),
+        SEL_LT..=CNT_GE => cmp_lane(d, op.code, [a, b, c]),
         // `mix` from IRAM with its operands as the bundled Formulas have
         // them (scalar/lane: SLS, SSL, LLS; each also lowers to the JIT);
         // the four orders none uses from flash, their 2.7 KB of IRAM the
@@ -1882,7 +2059,7 @@ fn colours(p: &[[u8; 3]; 32], v: [i32; 2], k: i32) -> [[u8; 3]; 2] {
 #[inline(never)]
 #[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
 fn pick_colours(
-    sc: &[i32; MAX_SCALARS],
+    sc: &Sc,
     pk: &Op,
     p: &[[u8; 3]; 32],
     k: i32,

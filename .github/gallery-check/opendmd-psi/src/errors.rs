@@ -366,7 +366,7 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 402,
         title: "too many steps",
-        sentence: "this formula is too long for the panel: … steps, the limit is … (or: … — simplify it)",
+        sentence: "this formula is too long for the panel: … steps (per frame …, draw …, per row …, per pixel …), the limit is … (or: … — simplify it)",
         fix: "Simplify the formula: fewer or simpler steps.",
         matches: &["this formula is too long for the panel"],
     },
@@ -380,8 +380,8 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 404,
         title: "too many numbers",
-        sentence: "this formula needs more than … numbers and once-a-frame values: use fewer",
-        fix: "Use fewer different numbers and steps.",
+        sentence: "this formula needs … numbers and once-a-frame values, more than the … it can hold (steps: per frame …, draw …, per row …, per pixel …): use fewer",
+        fix: "Use fewer different numbers and steps: the section with the most steps is the place to look.",
         matches: &["numbers and once-a-frame values"],
     },
     ErrorDoc {
@@ -864,15 +864,15 @@ pub const ERRORS: &[ErrorDoc] = &[
         code: 923,
         title: "too many palettes",
         sentence: "a formula can have … palettes of its own at most",
-        fix: "Use fewer palettes.",
+        fix: "Use fewer palettes (a palette in a tween's half takes half of one).",
         matches: &["palettes of its own at most"],
     },
     ErrorDoc {
         code: 924,
-        title: "too many numbers in tables, sprites and palettes",
-        sentence: "tables, sprites and palettes hold 256 numbers in all — this would make …",
-        fix: "Make the tables, sprites and palettes smaller.",
-        matches: &["tables, sprites and palettes hold"],
+        title: "too many numbers in tables and sprites",
+        sentence: "tables and sprites hold 256 numbers in all — this would make …",
+        fix: "Make the tables and sprites smaller.",
+        matches: &["tables and sprites hold"],
     },
     ErrorDoc {
         code: 925,
@@ -904,7 +904,7 @@ pub const ERRORS: &[ErrorDoc] = &[
     },
     ErrorDoc {
         code: 932,
-        title: "`cycle` of gray",
+        title: "`cycle` or `tween` of gray",
         sentence: "`cycle` turns a palette of colours, and gray is not one: write your own, `palette g = #000, #fff`",
         fix: "Write your own palette.",
         matches: &["gray is not one"],
@@ -912,9 +912,9 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 933,
         title: "too many palettes with `cycle`",
-        sentence: "a formula holds … palettes: its own (… here) and one more for each turn `cycle` gives (… here)",
-        fix: "Use fewer palettes, or turn fewer by different values.",
-        matches: &["a formula holds ", "palettes: its own"],
+        sentence: "a formula holds … palettes that `pal` and `cycle` read: its own (… here) and one more for each turn `cycle` gives (… here)",
+        fix: "Read fewer palettes with `pal` and `cycle` (tweens may read more), or turn fewer by different values.",
+        matches: &["a formula holds ", "palettes that `pal` and `cycle` read"],
     },
     ErrorDoc {
         code: 934,
@@ -929,6 +929,34 @@ pub const ERRORS: &[ErrorDoc] = &[
         sentence: "`…` takes a palette (and how much of the pixel it covers, 0 to 1, if you like); found …",
         fix: "Give it a palette and a value (`cycle` also takes the picture and the turn).",
         matches: &["takes a palette", "found "],
+    },
+    ErrorDoc {
+        code: 936,
+        title: "a tween mixed by a value that changes across the panel",
+        sentence: "`tween` mixes a palette once a frame (by t or a frame value), but `…` (line …) is per pixel: it reads `…`",
+        fix: "Mix it by t, a value of t, a slider or another once-a-frame value.",
+        matches: &["`tween` mixes a palette once a frame"],
+    },
+    ErrorDoc {
+        code: 937,
+        title: "a palette's half of the wrong palettes",
+        sentence: "a palette's half is a tween of palettes of your own with 16 colours at most: `…` is not one",
+        fix: "In a half, tween palettes of your own of 16 colours or fewer (tweens of them inside are fine).",
+        matches: &["a palette's half is a tween of palettes of your own"],
+    },
+    ErrorDoc {
+        code: 938,
+        title: "a tween painted with",
+        sentence: "`…` is a tween, worked out every frame: paint takes a palette of colours (`palette p = #000, #fff`)",
+        fix: "Paint with a palette of colours, or with `pal(P, v)` of one of the tween's palettes.",
+        matches: &["is a tween, worked out every frame"],
+    },
+    ErrorDoc {
+        code: 939,
+        title: "tweens nested too deeply",
+        sentence: "the tweens need more than … palettes worked out at once: nest them less deeply, or tween fewer palettes that only tweens read",
+        fix: "Nest tweens less deeply (a tween as the first palette costs nothing), or read the palettes they make with `pal`.",
+        matches: &["palettes worked out at once"],
     },
     ErrorDoc {
         code: 941,
@@ -1111,6 +1139,34 @@ pub const ERRORS: &[ErrorDoc] = &[
         sentence: "text in quotes can't have characters that hide or reorder text (zero-width, direction marks, line separators)",
         fix: "Take them out.",
         matches: &["text in quotes can't have characters that hide or reorder text"],
+    },
+    ErrorDoc {
+        code: 970,
+        title: "a scene's `when` that changes along a row",
+        sentence: "a scene's `when` is worked out once a frame or once a row (by t, a frame value or py), but `…` (line …) is per pixel: it reads `…`",
+        fix: "Make `when` a value of t, the clock, the sliders or the row (py, y); choose per pixel inside the scene instead.",
+        matches: &["a scene's `when` is worked out once a frame or once a row"],
+    },
+    ErrorDoc {
+        code: 971,
+        title: "something other than values in a scene",
+        sentence: "a scene holds values: `name = …` lines (its colours, drawing and palettes go outside it)",
+        fix: "Keep `name = …` lines in the scene; put colours, `draw`, `layer`, `palette` and another scene outside it.",
+        matches: &["a scene holds values: `name = …` lines"],
+    },
+    ErrorDoc {
+        code: 972,
+        title: "too many scenes",
+        sentence: "a formula can have … scenes at most",
+        fix: "Join scenes that share a condition, or pick inside one.",
+        matches: &["scenes at most"],
+    },
+    ErrorDoc {
+        code: 973,
+        title: "a `rate` layer reading a scene",
+        sentence: "a `rate` layer can't read a scene's per-pixel values: work them out outside the scene, or leave `rate` out",
+        fix: "Work the value out outside the scene, or leave `rate` out.",
+        matches: &["a `rate` layer can't read a scene's per-pixel values"],
     },
 ];
 
