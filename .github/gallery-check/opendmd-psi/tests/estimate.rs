@@ -28,7 +28,18 @@ fn compile(src: &str) -> Result<opendmd_psi::Program, opendmd_psi::Error> {
     opendmd_psi::compile_with(src, &mut p, false, false)?;
     Ok(p)
 }
-use opendmd_psi::look::compose;
+/// `src` as a look, `blend` at `k` %, compiled as measured.
+fn compose(src: &str, blend: &str, k: u8) -> opendmd_psi::Program {
+    let mut p = opendmd_psi::Program::default();
+    opendmd_psi::compile_look_with(
+        &opendmd_psi::look::set(src, blend, k).unwrap(),
+        &mut p,
+        false,
+        false,
+    )
+    .unwrap();
+    p
+}
 
 #[test]
 fn the_estimate_is_within_15_percent_of_the_device() {
@@ -47,7 +58,7 @@ fn the_estimate_is_within_15_percent_of_the_device() {
         }
     }
     for &(name, src, blend, k, us) in measured::LOOKS {
-        let p = compile(&compose(src, blend, k).unwrap()).unwrap();
+        let p = compose(src, blend, k);
         let est = p.esp32_us();
         let r = est as f64 / (us as f64 * 1.15);
         rows.push(format!(
@@ -139,7 +150,8 @@ fn the_jit_estimate_is_never_above_the_vms() {
                 continue;
             }
             let mut prog = opendmd_psi::Program::default();
-            if opendmd_psi::compile_into(&std::fs::read_to_string(&p).unwrap(), &mut prog).is_err() {
+            if opendmd_psi::compile_into(&std::fs::read_to_string(&p).unwrap(), &mut prog).is_err()
+            {
                 continue;
             }
             assert!(prog.esp32_us_jit() <= prog.esp32_us(), "{p:?}");
@@ -159,7 +171,10 @@ fn the_jit_estimate_is_within_20_percent_of_the_device() {
     let mut bad = Vec::new();
     let mut check = |name: String, est: u32, us: u32| {
         let r = est as f64 / us as f64;
-        rows.push(format!("{name:<30} measured {us:>5} est {est:>5} ({:+.0} %)", (r - 1.0) * 100.0));
+        rows.push(format!(
+            "{name:<30} measured {us:>5} est {est:>5} ({:+.0} %)",
+            (r - 1.0) * 100.0
+        ));
         if !(0.8..=1.2).contains(&r) {
             bad.push(name);
         }
@@ -170,10 +185,77 @@ fn the_jit_estimate_is_within_20_percent_of_the_device() {
         check(name.to_string(), p.esp32_us_jit_still(), us);
     }
     for &(name, src, blend, k, us) in measured::JIT_LOOKS {
-        let mut p = opendmd_psi::Program::default();
-        opendmd_psi::compile_into(&compose(src, blend, k).unwrap(), &mut p).unwrap();
+        let p = opendmd_psi::look::compose(src, blend, k).unwrap();
         check(format!("look {name} {blend} {k}"), p.esp32_us_jit(), us);
     }
     println!("{}", rows.join("\n"));
     assert!(bad.is_empty(), "{bad:?}\n{}", rows.join("\n"));
+}
+
+/// `cycle` and `layer rate N` (console-b): the estimate the editor and the
+/// governor start from against the spare's frames, within ±20 %.
+#[test]
+fn the_cycled_and_slow_formulas_estimate_their_frames() {
+    let mut rows = Vec::new();
+    let mut bad = Vec::new();
+    for &(name, src, us) in measured::CONSOLEB {
+        let mut p = opendmd_psi::Program::default();
+        opendmd_psi::compile_into(src, &mut p).unwrap();
+        let est = p.esp32_us_jit_still();
+        let r = est as f64 / us as f64;
+        rows.push(format!(
+            "{name:<34} measured {us:>5} est {est:>5} ({:+.0} %)",
+            (r - 1.0) * 100.0
+        ));
+        if !(0.8..=1.2).contains(&r) {
+            bad.push(name);
+        }
+    }
+    println!("{}", rows.join("\n"));
+    assert!(bad.is_empty(), "{bad:?}\n{}", rows.join("\n"));
+}
+
+/// The paint primitives' draw stage, the overlay, `under(x, y)` and the
+/// Formulas that use them against paint-probe's rows on the spare
+/// (2026-11-04): each primitive's draw stage within 15 % of `draw_us`
+/// (the fit set, three sizes a kind), the `UAT` looks and the Formulas
+/// within 15 % (the VM; the JIT's within 20 %).
+#[test]
+fn the_paint_and_under_estimates_fit_the_spare() {
+    // (Compiled as the player has them: with the runs and the narrowed
+    // steps, as `psi build` made the probe's cases.)
+    let mut bad = Vec::new();
+    let mut rows = Vec::new();
+    let mut row = |what: String, us: u32, est: u32, tol: f64| {
+        let r = est as f64 / us as f64;
+        rows.push(format!("{what:<30} measured {us:>6} est {est:>6} ({:+.0} %)", (r - 1.0) * 100.0));
+        if !(1.0 - tol..=1.0 + tol).contains(&r) {
+            bad.push(what);
+        }
+    };
+    for &(name, body, us) in measured::PAINT {
+        let src = format!("{}draw {{\n  for k < 16 {{\n    {body}\n  }}\n}}\ngray(x)\n", measured::PAINT_SPRITE);
+        let p = opendmd_psi::compile(&src).unwrap();
+        row(format!("paint {name}"), us, p.draw_us(), 0.15);
+    }
+    // The overlay: what the plane adds to the rows, empty and full.
+    let [none, empty, full] = measured::OVERLAY_ROWS;
+    let painter = opendmd_psi::compile("draw {\n  pset(-9, -9, #f00)\n}\ngray(x)\n").unwrap();
+    let clearer = opendmd_psi::compile("draw {\n  cls(#f00)\n}\ngray(x)\n").unwrap();
+    // (Half-way for a painter without `cls`: its plane is partly painted.)
+    row("overlay, a painter".into(), (empty + full) / 2 - none, painter.overlay_us(), 0.15);
+    row("overlay, cls".into(), full - none, clearer.overlay_us(), 0.15);
+    for &(name, src, us) in measured::UNDER {
+        let p = opendmd_psi::compile(src).unwrap();
+        // (Measured directly: a look's real path adds ~5 %, as pixelate's
+        // and under-shake's rows show.)
+        row(format!("under {name}"), us * 105 / 100, p.esp32_us(), 0.15);
+    }
+    for &(name, src, vm, jit) in measured::PAINT_FORMULAS {
+        let p = opendmd_psi::compile(src).unwrap();
+        row(format!("formula {name} (vm)"), vm, p.esp32_us(), 0.15);
+        row(format!("formula {name} (jit)"), jit, p.esp32_us_jit(), 0.20);
+    }
+    println!("{}", rows.join("\n"));
+    assert!(bad.is_empty(), "outside: {bad:?}\n{}", rows.join("\n"));
 }

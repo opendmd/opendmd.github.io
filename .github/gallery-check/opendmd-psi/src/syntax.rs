@@ -10,8 +10,11 @@
 //! the player: the calls are compiled out.
 
 use crate::compile::{lex_tokens, Error, Info};
+
+mod fmt;
 use crate::Program;
 use alloc::vec::Vec;
+pub use fmt::format;
 
 /// What a token is ([`tokens`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,7 +51,8 @@ pub enum Defined {
     Value,
     /// A draw stage's `for k < n`.
     Counter,
-    Part,
+    /// `fn name(…)`.
+    Function,
     Table,
     Sprite,
     Palette,
@@ -73,7 +77,8 @@ pub trait Sink {
     /// A name the formula defines, the name's place, what it is, its scope
     /// (0 the formula's own lines; parts and layers have scopes of their
     /// own), how often it is worked out.
-    fn defined(&mut self, name: &str, at: (usize, usize), what: Defined, scope: u16, level: Level) {}
+    fn defined(&mut self, name: &str, at: (usize, usize), what: Defined, scope: u16, level: Level) {
+    }
     /// A name read at `at`, and the place of its definition when the
     /// formula defined it (`None`: a built-in, or unknown).
     fn read(&mut self, at: (usize, usize), defined: Option<(usize, usize)>) {}
@@ -84,6 +89,16 @@ pub trait Sink {
     fn op(&mut self, at: (usize, usize), level: Level, code: u8, cost_ns: u32) {}
     /// A declaration (`psi`, `name`, `about`, `control`, `look`): its word.
     fn declaration(&mut self, word: &str, at: (usize, usize)) {}
+    /// Why the value defined at `at` (told after [`defined`](Self::defined))
+    /// varies as much as it does: the nearest of the formula's own values
+    /// on the way (`via`, its definition's place), else the built-in it
+    /// reads (`input`, as `px`). Not told for constants.
+    fn why(&mut self, at: (usize, usize), via: Option<(usize, usize)>, input: &str) {}
+    /// A note about the cost (`psi check` prints them): a `pick` worked out
+    /// per pixel, a sum or product that could be bracketed, what the still
+    /// cache and the column run took or left, a draw loop run as lanes.
+    /// Told once the program is laid out (not after an error).
+    fn note(&mut self, at: (usize, usize), text: &str) {}
 }
 
 /// [`crate::compile_into`], telling `sink` what it saw.

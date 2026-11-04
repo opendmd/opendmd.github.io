@@ -22,8 +22,8 @@
 //! shift, 16 for `mul_w`) is set again after a call.
 
 use super::enc::*;
-use crate::fuse::{F_PICKPAL, F_SELPAL, F_SELPAL_K, PICK_MAX};
 use crate::fixed;
+use crate::fuse::{F_PICKPAL, F_SELPAL, F_SELPAL_K, PICK_MAX};
 use crate::program::*;
 use alloc::vec::Vec;
 
@@ -69,6 +69,13 @@ pub enum Word {
     /// The picture under the formula at the row's first pixel (a row of
     /// zeros without one: `ur ug ub ul` read 0).
     Under,
+    /// The whole picture under the formula, at its first pixel (`UAT`:
+    /// `under(x, y)` reads anywhere in it); a row of zeros without one.
+    Picture,
+    /// What a `UAT` index is masked with: all ones over a picture, 0
+    /// without one (then every read is the zeros' first bytes: 0, as the
+    /// VM's `under_at` gives).
+    PictureMask,
     /// A layer's coverage, scalar slot `k`'s value clamped to 0..1 (as
     /// `fixed::cover` clamps it).
     Cover(u8),
@@ -127,6 +134,10 @@ pub struct Lowered {
     /// Where the row stage's function starts in `code` (4-byte aligned),
     /// if the row steps lowered ([`lower_rows`]): it shares `words`.
     pub rows_at: Option<usize>,
+    /// A `rate` formula's (`layer rate N`): the kernel is its fast part (the
+    /// slow layers' steps are the VM's), each row drawn over the picture
+    /// under (the held slow layers), or over what the row holds without one.
+    pub rate: bool,
 }
 
 // The register map.
@@ -162,6 +173,7 @@ const fn cold_slot_end() -> i32 {
 }
 
 /// Where a5..a15's value is kept across a memo's cold call.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn cold_slot(r: Reg) -> i32 {
     32 + (i32::from(r) - 5) * 4
 }
@@ -187,17 +199,20 @@ enum Item {
 }
 
 #[inline]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn is_lane(v: u8) -> bool {
     v & LANE != 0
 }
 
 /// The Psi register (0-based) an operand names, if it is one.
 #[inline]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn reg_of(v: u8) -> Option<usize> {
     let l = v & !LANE;
     (is_lane(v) && l >= L_REG0).then(|| (l - L_REG0) as usize)
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn reads(it: &Item) -> ([u8; 4], usize) {
     match *it {
         Item::Step(op) => code::operands(&op),
@@ -212,6 +227,7 @@ fn reads(it: &Item) -> ([u8; 4], usize) {
     }
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn writes(it: &Item) -> Option<usize> {
     match *it {
         Item::Step(op) if !code::is_colour(op.code) => reg_of(op.d),
@@ -222,11 +238,13 @@ fn writes(it: &Item) -> Option<usize> {
 /// Where the kernel starts: after the column run and the still cache's run
 /// (with the values laid out before the still marker): the driver runs
 /// those as lanes, the VM's way.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn main_start(prog: &Program) -> usize {
     prog.kernel_start()
 }
 
 /// Lower `prog`'s pixel stage, or say why the VM must draw it.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn lower(prog: &Program) -> Result<Lowered, Refusal> {
     let (pe, start) = (prog.len(), main_start(prog));
     if start >= pe {
@@ -237,7 +255,7 @@ pub fn lower(prog: &Program) -> Result<Lowered, Refusal> {
     // of the position and the frame, so none does).
     if prog.ops[prog.row_end as usize..start]
         .iter()
-        .any(|op| (code::U_R..=code::INK).contains(&op.code))
+        .any(|op| (code::U_R..=code::INKN).contains(&op.code))
     {
         return Err("an unexpected layout");
     }
@@ -292,6 +310,13 @@ pub fn lower(prog: &Program) -> Result<Lowered, Refusal> {
         }
     }
     let rs = |k: u8| k != NONE && row_slot[(k & 0x7f) as usize];
+    // The palettes `cycle` turns: turned each row (`TURN`), so a colour of
+    // one is a row's.
+    let turned = |pal: u8| {
+        prog.ops[prog.draw_end as usize..prog.row_end as usize]
+            .iter()
+            .any(|o| o.code == code::TURN && 5 + o.d == pal & code::PAL_MASK)
+    };
     let per_row = words
         .iter()
         .map(|w| match *w {
@@ -299,16 +324,19 @@ pub fn lower(prog: &Program) -> Result<Lowered, Refusal> {
             Word::Lane(l) => l >= L_REG0,
             Word::Ink | Word::Under => true,
             Word::Scalar(k) | Word::Cover(k) => rs(k),
-            Word::Colour { v, k, .. } => rs(v) || rs(k),
-            Word::Entry { v, .. } => rs(v),
+            Word::Colour { pal, v, k, .. } => rs(v) || rs(k) || turned(pal),
+            Word::Entry { pal, v } => rs(v) || turned(pal),
             // (A memo starts again each row, as the VM's each lane.)
             Word::Init(_) => true,
             // (Its choice's slot, from the pick's table of slots: a row's
             // only if a row step writes it; outside the choices, 0.)
-            Word::Pick { b, n, i, k, .. } => {
+            Word::Pick {
+                pal, b, n, i, k, ..
+            } => {
                 let m = (n as usize).min(PICK_MAX);
-                let choice = (i as usize) < m && rs((prog.init[(b as usize + i as usize) & (MAX_SCALARS - 1)] & 0x7f) as u8);
-                choice || rs(k)
+                let choice = (i as usize) < m
+                    && rs((prog.init[(b as usize + i as usize) & (MAX_SCALARS - 1)] & 0x7f) as u8);
+                choice || rs(k) || turned(pal)
             }
             _ => false,
         })
@@ -320,6 +348,7 @@ pub fn lower(prog: &Program) -> Result<Lowered, Refusal> {
         main_start: start,
         calls: e.calls,
         rows_at,
+        rate: prog.slow_marker().is_some(),
     })
 }
 
@@ -337,12 +366,14 @@ pub struct LoweredRows {
 const SC: Reg = 3;
 
 /// Lower `prog`'s row steps, or say why the VM runs them.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn lower_rows(prog: &Program) -> Result<LoweredRows, Refusal> {
     lower_rows_from(prog, Vec::new())
 }
 
 /// [`lower_rows`] with `words` (the pixel kernel's) first: the two share
 /// one `ctx`.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn lower_rows_from(prog: &Program, words: Vec<Word>) -> Result<LoweredRows, Refusal> {
     let (de, re) = (prog.draw_end as usize, prog.row_end as usize);
     if re <= de {
@@ -352,7 +383,11 @@ fn lower_rows_from(prog: &Program, words: Vec<Word>) -> Result<LoweredRows, Refu
     e.words = words;
     e.c.entry(FRAME);
     for op in &prog.ops[de..re] {
-        e.row_step(*op)?;
+        // (`cycle`'s turns, the section's last steps: the driver's, after
+        // the function: `program::turn_rows`.)
+        if op.code != code::TURN {
+            e.row_step(*op)?;
+        }
     }
     e.c.retw_n();
     if e.c.bad {
@@ -368,6 +403,7 @@ fn lower_rows_from(prog: &Program, words: Vec<Word>) -> Result<LoweredRows, Refu
 }
 
 /// Is `code` a step the kernel has (a template or a helper)?
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn supported(c: u8) -> Result<(), Refusal> {
     use code::*;
     match c {
@@ -378,7 +414,7 @@ fn supported(c: u8) -> Result<(), Refusal> {
         | NOISE | MULR => Ok(()),
         DIGIT..=DIGIT_B | NOISE_O..=NOISE_O_LAST => Ok(()),
         OUT_RGB | OUT_HSV | OUT_PAL | OUT_GRAY => Ok(()),
-        U_R..=U_L | INK => Ok(()),
+        U_R..=U_L | INK | INKN | UAT => Ok(()),
         c if (OUT_LAYER..OUT_LAYER + 4 * crate::fixed::BLENDS as u8).contains(&c) => Ok(()),
         STILL | COLUMN => Err("an unexpected layout"),
         _ => Err("a step the kernel has no template for"),
@@ -386,12 +422,18 @@ fn supported(c: u8) -> Result<(), Refusal> {
 }
 
 /// The kernel's units, from `ops[start..pe]`.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn items(prog: &Program, start: usize, pe: usize) -> Result<Vec<Item>, Refusal> {
     let ops = &prog.ops[..pe];
     let mut out = Vec::new();
     let mut k = start;
     while k < pe {
         let op = ops[k];
+        if op.code == code::SLOW {
+            // The slow layers: the VM's (`crate::rate`).
+            k += 1 + op.a as usize;
+            continue;
+        }
         if op.code == code::FUSE {
             let n = op.a as usize;
             let run = &ops[(k + 1).min(pe)..(k + 1 + n).min(pe)];
@@ -418,6 +460,7 @@ fn items(prog: &Program, start: usize, pe: usize) -> Result<Vec<Item>, Refusal> 
 
 /// A fused colour the kernel draws in one piece, when its operands are of
 /// the kinds the VM's kernel takes too (else `None`: the steps).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn fused(kind: u8, run: &[Op]) -> Option<Item> {
     match (kind, run) {
         (F_SELPAL | F_SELPAL_K, [sel, col])
@@ -515,6 +558,7 @@ struct Emitter<'a> {
 
 /// The values of `items` (each with its interval) and which value each
 /// register reads first, and each item writes.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn values(hsv_call: bool, items: &[Item]) -> (Vec<Val>, [Option<usize>; REGS], Vec<Option<usize>>) {
     let mut vals: Vec<Val> = Vec::new();
     let mut cur: [Option<usize>; REGS] = [None; REGS];
@@ -566,6 +610,7 @@ fn values(hsv_call: bool, items: &[Item]) -> (Vec<Val>, [Option<usize>; REGS], V
 }
 
 /// The most values alive at once.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn pressure(vals: &[Val], n: usize) -> usize {
     (0..n)
         .map(|k| vals.iter().filter(|v| v.start <= k && k <= v.end).count())
@@ -576,6 +621,7 @@ fn pressure(vals: &[Val], n: usize) -> usize {
 /// Give each value a register from `pool` (a linear scan over the items:
 /// a value's register is free again after the item that reads it last),
 /// those alive across a call preferring a5..a7 and the rest the others.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn allocate(vals: &mut [Val], n: usize, pool: &[Reg]) -> Result<(), Refusal> {
     let mut free: Vec<Reg> = pool.to_vec();
     for k in 0..n {
@@ -606,7 +652,13 @@ impl<'a> Emitter<'a> {
     /// The emitter with `t` temporaries (a kernel without calls: values,
     /// hoists and temporaries share a5..a15; with calls: values in a5..a12,
     /// hoists in what a5..a7 the values leave, temporaries a13..a15).
-    fn new(prog: &'a Program, items: &'a [Item], t: usize, hsv_call: bool) -> Result<Emitter<'a>, Refusal> {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    fn new(
+        prog: &'a Program,
+        items: &'a [Item],
+        t: usize,
+        hsv_call: bool,
+    ) -> Result<Emitter<'a>, Refusal> {
         let calls = items.iter().any(|it| needs_call(hsv_call, it));
         let hot = items.iter().any(|it| hot_call(hsv_call, it));
         let uses_src = items
@@ -664,12 +716,17 @@ impl<'a> Emitter<'a> {
             // temporaries too (a call item takes none: it writes a10..
             // itself), but never a hoist's.
             let hoisted: Vec<Reg> = e.hoist.iter().map(|&(_, r)| r).collect();
-            e.pool = POOL.iter().copied().filter(|r| !hoisted.contains(r)).collect();
+            e.pool = POOL
+                .iter()
+                .copied()
+                .filter(|r| !hoisted.contains(r))
+                .collect();
         }
         Ok(e)
     }
 
     /// An emitter with no items, values or hoists (the row stage's).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn bare(prog: &'a Program) -> Emitter<'a> {
         Emitter {
             prog,
@@ -696,6 +753,7 @@ impl<'a> Emitter<'a> {
 
     /// A row step: its operands loaded from their slots, its template or
     /// its helper, its value stored in its slot.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn row_step(&mut self, op: Op) -> Result<(), Refusal> {
         use code::*;
         let slot = |v: u8| i32::from(v & 0x7f) * 4;
@@ -753,7 +811,10 @@ impl<'a> Emitter<'a> {
                     Arg::Val(op.c),
                     Arg::Word(Word::Glyphs(code)),
                 ],
-                _ => [op.a, op.b, op.c][..n].iter().map(|&v| Arg::Val(v)).collect(),
+                _ => [op.a, op.b, op.c][..n]
+                    .iter()
+                    .map(|&v| Arg::Val(v))
+                    .collect(),
             };
             for (j, a) in args.into_iter().enumerate() {
                 let t = 10 + j as Reg;
@@ -790,6 +851,7 @@ impl<'a> Emitter<'a> {
     }
 
     /// Hoist the most used loop-invariant words into `spare`.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn choose_hoists(&mut self, spare: &[Reg]) {
         let mut counts: Vec<(Word, u32)> = Vec::new();
         let mut note = |w: Word| match counts.iter_mut().find(|(x, _)| *x == w) {
@@ -822,8 +884,12 @@ impl<'a> Emitter<'a> {
                     }
                 }
                 match op.code {
-                    code::INK => note(Word::Ink),
+                    code::INK | code::INKN => note(Word::Ink),
                     code::U_R..=code::U_L => note(Word::Under),
+                    code::UAT => {
+                        note(Word::Picture);
+                        note(Word::PictureMask);
+                    }
                     _ => {}
                 }
                 for _ in 0..chans {
@@ -857,6 +923,7 @@ impl<'a> Emitter<'a> {
     }
 
     /// The `ctx` offset of `w` (its word added the first time).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn word(&mut self, w: Word) -> i32 {
         let k = match self.words.iter().position(|&x| x == w) {
             Some(k) => k,
@@ -869,16 +936,19 @@ impl<'a> Emitter<'a> {
     }
 
     /// `n` words in a row, each new: the offset of the first.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn words_run(&mut self, ws: &[Word]) -> i32 {
         let k = self.words.len();
         self.words.extend_from_slice(ws);
         (k * 4) as i32
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn hoisted(&self, w: Word) -> Option<Reg> {
         self.hoist.iter().find(|(x, _)| *x == w).map(|&(_, r)| r)
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn tmp(&mut self) -> Result<Reg, Refusal> {
         let r = self.free.pop().ok_or(TEMPS_OUT)?;
         self.taken.push(r);
@@ -888,13 +958,20 @@ impl<'a> Emitter<'a> {
     /// A memo miss writes a8 and a10..a12 itself: none of them a
     /// temporary of this item.
     /// The registers taken out, to give back once the miss is past.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn keep_call_regs(&mut self) -> Vec<Reg> {
         // (This item's only: `reset_temps` starts the next from the pool.)
-        let out = self.free.iter().copied().filter(|&r| r == 8 || (10..=12).contains(&r)).collect();
+        let out = self
+            .free
+            .iter()
+            .copied()
+            .filter(|&r| r == 8 || (10..=12).contains(&r))
+            .collect();
         self.free.retain(|&r| r != 8 && !(10..=12).contains(&r));
         out
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn release(&mut self, r: Reg) {
         // Only what `tmp` gave this item: an operand's register may be a
         // live value's (Fable's review: `release` once freed one).
@@ -905,6 +982,7 @@ impl<'a> Emitter<'a> {
 
     /// Item `k`'s temporaries: the fixed ones, and the registers of the
     /// values not alive at `k` (ended, or not begun).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn reset_temps(&mut self, k: usize) {
         let mut free: Vec<Reg> = self.temps.iter().rev().copied().collect();
         for g in self.pool.clone() {
@@ -922,6 +1000,7 @@ impl<'a> Emitter<'a> {
     }
 
     /// `w` (a word) into `r`.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn load_word(&mut self, r: Reg, w: Word) {
         match self.hoisted(w) {
             Some(h) => self.c.mov(r, h),
@@ -933,6 +1012,7 @@ impl<'a> Emitter<'a> {
     }
 
     /// A register holding `w` (its hoist, or `r` loaded).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn word_in(&mut self, r: Reg, w: Word) -> Reg {
         match self.hoisted(w) {
             Some(h) => h,
@@ -945,6 +1025,7 @@ impl<'a> Emitter<'a> {
     }
 
     /// The pixel's value of lane `l` (`L_X`, `L_I`, a register's) into `r`.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn lane_into(&mut self, r: Reg, l: u8) {
         let w = Word::Lane(l);
         let p = self.word_in(r, w);
@@ -953,6 +1034,7 @@ impl<'a> Emitter<'a> {
     }
 
     /// A register holding operand `v` for this pixel.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn val(&mut self, v: u8) -> Result<Reg, Refusal> {
         if !is_lane(v) {
             let w = Word::Scalar(v);
@@ -992,12 +1074,14 @@ impl<'a> Emitter<'a> {
     }
 
     /// Item `k`'s result: its value and register.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn dst(&self, k: usize) -> Result<(usize, Reg), Refusal> {
         let id = self.wv[k].ok_or("a step without a register")?;
         Ok((id, self.vals[id].gpr))
     }
 
     /// Item `k`'s result `id` is in its register now.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn wrote(&mut self, k: usize, id: usize) {
         self.valid[id] = true;
         if let Item::Step(op) = self.items[k] {
@@ -1007,6 +1091,7 @@ impl<'a> Emitter<'a> {
         }
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn sar(&mut self) {
         if !self.sar16 {
             self.c.ssai(16);
@@ -1015,17 +1100,20 @@ impl<'a> Emitter<'a> {
     }
 
     /// `d = (1 << 16)`.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn one(&mut self, d: Reg) {
         self.c.movi(d, 1);
         self.c.slli(d, d, 16);
     }
 
     /// `d = i32::MAX`.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn max_i32(&mut self, d: Reg) {
         self.c.movi(d, -1);
         self.c.srli(d, d, 1);
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn emit(&mut self) -> Result<(), Refusal> {
         let uses_src = self.uses_src;
         self.c.entry(if self.calls { FRAME } else { 32 });
@@ -1071,6 +1159,7 @@ impl<'a> Emitter<'a> {
 
     // --- Steps -----------------------------------------------------------
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn step(&mut self, k: usize, op: Op) -> Result<(), Refusal> {
         use code::*;
         match op.code {
@@ -1154,6 +1243,8 @@ impl<'a> Emitter<'a> {
                 return self.call(k, hid::SPR, &args, Some(op.d));
             }
             INK | U_R..=U_L => return self.read_pixel(k, op.code),
+            UAT => return self.under_at(k, op),
+            INKN => return self.ink_levels(k, op.a),
             DIGIT..=DIGIT_B => {
                 let args = [
                     Arg::Val(op.a),
@@ -1180,6 +1271,7 @@ impl<'a> Emitter<'a> {
 
     /// `d = op(a, b, cc)` for a step with an inline template (`fixed`'s
     /// operation in its order), its operands in registers (none `d`).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn template(&mut self, op: Op, d: Reg, a: Reg, b: Reg, cc: Reg) -> Result<(), Refusal> {
         use code::*;
         let c = &mut self.c;
@@ -1374,6 +1466,7 @@ impl<'a> Emitter<'a> {
     /// `ink` (the canvas's byte at the pixel) or `ur ug ub ul` (the
     /// picture's), as 0..1: `fixed::byte` (`b·257 + b/128`), the luminance
     /// as `fixed::luma`.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn read_pixel(&mut self, k: usize, code: u8) -> Result<(), Refusal> {
         let (id, d) = self.dst(k)?;
         let t = self.tmp()?;
@@ -1418,8 +1511,82 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
+    /// `under(x, y)`'s channel `op.c`: the picture's byte at the pixel
+    /// nearest (x, y) held to the panel, as 0..1 — `vm::under_at`'s
+    /// `(fixed::add(v, ½) >> 16).clamp(..)` for each (the saturating add as
+    /// `max(v + ½, v)`: where `v + ½` wraps, `v` is within ½ of the top and
+    /// clamps the same), the index masked by [`Word::PictureMask`] (no
+    /// picture: 0), then `fixed::byte`.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    fn under_at(&mut self, k: usize, op: Op) -> Result<(), Refusal> {
+        let a = self.val(op.a)?;
+        let b = self.val(op.b)?;
+        let (id, d) = self.dst(k)?;
+        if a == d || b == d {
+            return Err("a step reads its own register");
+        }
+        let t = self.tmp()?;
+        let u = self.tmp()?;
+        let c = &mut self.c;
+        for (r, v, top) in [(t, a, W as i32 - 1), (d, b, H as i32 - 1)] {
+            c.addmi(r, v, 0x4000);
+            c.addmi(r, r, 0x4000);
+            c.max(r, r, v);
+            c.srai(r, r, 16);
+            c.movi(u, 0);
+            c.max(r, r, u);
+            c.movi(u, top);
+            c.min(r, r, u);
+        }
+        self.release(a);
+        self.release(b);
+        let c = &mut self.c;
+        c.slli(d, d, 7);
+        c.add(t, t, d);
+        c.addx2(t, t, t);
+        let m = self.word_in(u, Word::PictureMask);
+        self.c.and(t, t, m);
+        let p = self.word_in(u, Word::Picture);
+        let c = &mut self.c;
+        c.add(t, t, p);
+        c.l8ui(t, t, i32::from(op.c.min(2)));
+        c.slli(d, t, 8);
+        c.add(d, d, t);
+        c.srli(t, t, 7);
+        c.add(d, d, t);
+        self.wrote(k, id);
+        Ok(())
+    }
+
+    /// `ink(n)`: the canvas's byte `b` at the pixel in `n` levels, as
+    /// `fixed::ink_levels` (`n` the scalar operand `nv`, n << 16):
+    /// u = b·n + 127, ((u + 1 + (u >> 8)) >> 8) << 16.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    fn ink_levels(&mut self, k: usize, nv: u8) -> Result<(), Refusal> {
+        let n = self.val(nv)?;
+        let (id, d) = self.dst(k)?;
+        let t = self.tmp()?;
+        let u = self.tmp()?;
+        let p = self.word_in(t, Word::Ink);
+        self.c.add(t, p, PIX);
+        self.c.l8ui(t, t, 0);
+        self.c.extui(u, n, 16, 8);
+        self.release(n);
+        let c = &mut self.c;
+        c.mull(t, t, u);
+        c.addi(t, t, 127);
+        c.srli(u, t, 8);
+        c.add(t, t, u);
+        c.addi(t, t, 1);
+        c.srli(t, t, 8);
+        c.slli(d, t, 16);
+        self.wrote(k, id);
+        Ok(())
+    }
+
     /// `d = sin(a)` as `fixed::sin`: the table at the turn's top byte,
     /// interpolated by the next.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn sin(&mut self, d: Reg, a: Reg) -> Result<(), Refusal> {
         let i = self.tmp()?;
         self.c.extui(d, a, 0, 8); // f
@@ -1445,6 +1612,7 @@ impl<'a> Emitter<'a> {
 
     // --- Helper calls --------------------------------------------------------
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn call(&mut self, k: usize, h: u8, args: &[Arg], dst: Option<u8>) -> Result<(), Refusal> {
         if args.len() > 6 {
             return Err("a helper with too many arguments");
@@ -1522,6 +1690,7 @@ impl<'a> Emitter<'a> {
     /// black, s = 1 the bytes, 0 < s < 1 inline, s > 1 the helper (a call:
     /// `keep`, saved by [`keep_save`](Self::keep_save) before the miss
     /// touched a10, loaded back at the end). a11, a12 scratch.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn scale_miss(&mut self, s: Reg, x: Reg, keep: &[Reg]) -> Result<(), Refusal> {
         let (e, y, b) = (10, 11, 12);
         let c = &mut self.c;
@@ -1604,10 +1773,12 @@ impl<'a> Emitter<'a> {
     /// values alive at item `k` held there (and `extra`) are kept in the
     /// frame meanwhile (`scale_miss` loads them back). Before the miss
     /// writes a10.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn keep_save(&mut self, k: usize, extra: &[Reg]) -> Vec<Reg> {
         let mut keep: Vec<Reg> = extra.to_vec();
         for (id, v) in self.vals.iter().enumerate() {
-            if v.start <= k && k <= v.end && v.gpr >= 8 && self.valid[id] && !keep.contains(&v.gpr) {
+            if v.start <= k && k <= v.end && v.gpr >= 8 && self.valid[id] && !keep.contains(&v.gpr)
+            {
                 keep.push(v.gpr);
             }
         }
@@ -1619,6 +1790,7 @@ impl<'a> Emitter<'a> {
 
     /// After a memo miss's call: the hoists it clobbered (a8..a15) and SAR,
     /// as the loop's top expects them.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn after_cold_call(&mut self) {
         if self.hot {
             return;
@@ -1638,6 +1810,7 @@ impl<'a> Emitter<'a> {
     // --- Colours ---------------------------------------------------------------
 
     /// Store a packed colour (`r | g << 8 | b << 16`) at the pixel.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn store_packed(&mut self, x: Reg) -> Result<(), Refusal> {
         let y = self.tmp()?;
         let c = &mut self.c;
@@ -1650,6 +1823,7 @@ impl<'a> Emitter<'a> {
     }
 
     /// A register holding the constant `c`: its hoist, or `r` made.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn konst(&mut self, r: Reg, c: i32) -> Reg {
         if let Some(h) = self.hoisted(Word::Const(c)) {
             return h;
@@ -1666,6 +1840,7 @@ impl<'a> Emitter<'a> {
     }
 
     /// `fixed::chan(v)` into a temporary.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn chan(&mut self, v: Reg) -> Result<Reg, Refusal> {
         let t = self.tmp()?;
         let u = self.tmp()?;
@@ -1684,6 +1859,7 @@ impl<'a> Emitter<'a> {
     }
 
     /// `fixed::pal_index(k)` into a temporary.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn pal_index(&mut self, k: Reg) -> Result<Reg, Refusal> {
         let t = self.tmp()?;
         self.c.movi(t, 0);
@@ -1698,6 +1874,7 @@ impl<'a> Emitter<'a> {
         Ok(t)
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn colour(&mut self, k: usize, op: Op) -> Result<(), Refusal> {
         use code::*;
         match op.code {
@@ -1754,6 +1931,7 @@ impl<'a> Emitter<'a> {
     /// (red, green, blue). The same operations in its order: s and v
     /// clamped to 0..65,535, the hue's sixth, p q t as u32 products >> 16,
     /// each channel `(x·255 + 0x8000) >> 16`, chosen by the sector.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn hsv(&mut self, h: u8, s: u8, v: u8) -> Result<[Reg; 3], Refusal> {
         // 0..65,535 of a value (clamp(x, 0, 0xffff)).
         fn clamp16(e: &mut Emitter, x: Reg) -> Result<Reg, Refusal> {
@@ -1816,7 +1994,14 @@ impl<'a> Emitter<'a> {
         // (r, g, b) by sector: 0 (v t p), 1 (q v p), 2 (p v t), 3 (p q v),
         // 4 (t p v), 5 (v p q).
         let (r, g, b) = (s, w, self.tmp()?);
-        let ways = [[v, t, p], [q, v, p], [p, v, t], [p, q, v], [t, p, v], [v, p, q]];
+        let ways = [
+            [v, t, p],
+            [q, v, p],
+            [p, v, t],
+            [p, q, v],
+            [t, p, v],
+            [v, p, q],
+        ];
         let mut done = Vec::new();
         for (k, way) in ways.iter().enumerate() {
             let next = match k {
@@ -1844,6 +2029,7 @@ impl<'a> Emitter<'a> {
     /// A layer's coverage operand `v` clamped to 0..1 in a register, or
     /// `None` when it is a constant ≥ 1 (then `fixed::cover` is the blend
     /// itself).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn coverage(&mut self, v: u8) -> Result<Option<Reg>, Refusal> {
         if !is_lane(v) {
             let at = self.prog.len();
@@ -1868,6 +2054,7 @@ impl<'a> Emitter<'a> {
     /// Channel `o` of a layer's colour (`s`, a byte, left as it is)
     /// blended onto the pixel's byte by `mode` (`fixed::blend`) and moved
     /// towards it by the coverage `cov` (`fixed::cover`), stored.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn put(&mut self, o: i32, s: Reg, mode: u8, cov: Option<Reg>) -> Result<(), Refusal> {
         if mode == fixed::BLEND_OVER && cov.is_none() {
             self.c.s8i(s, OUT, o);
@@ -1925,12 +2112,17 @@ impl<'a> Emitter<'a> {
 
     /// A layer: its colour worked out as the bottom layer's is, then each
     /// channel blended onto the pixel (`vm::colour_step`).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn layer(&mut self, k: usize, op: Op) -> Result<(), Refusal> {
         use code::*;
         let (kind, Some(mode)) = colour_parts(op.code) else {
             return Err("a colour the kernel has no template for");
         };
-        let cv = if kind == OUT_RGB || kind == OUT_HSV { op.d } else { op.b };
+        let cv = if kind == OUT_RGB || kind == OUT_HSV {
+            op.d
+        } else {
+            op.b
+        };
         match kind {
             OUT_GRAY => {
                 let v = self.val(op.a)?;
@@ -1965,7 +2157,12 @@ impl<'a> Emitter<'a> {
                 self.call(
                     k,
                     hid::HSV,
-                    &[Arg::Val(op.a), Arg::Val(op.b), Arg::Val(op.c), Arg::Stack(SLOT_HSV)],
+                    &[
+                        Arg::Val(op.a),
+                        Arg::Val(op.b),
+                        Arg::Val(op.c),
+                        Arg::Stack(SLOT_HSV),
+                    ],
                     None,
                 )?;
                 let cov = match cov {
@@ -2018,12 +2215,14 @@ impl<'a> Emitter<'a> {
 
     /// `pal(P, k) * s` with the last index and scale's colour kept in `ctx`
     /// (the VM's `pal_lit_lane`): a new one from `scale_rgb` (a call).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn pal_lit(&mut self, k: usize, op: Op) -> Result<(), Refusal> {
         let x = self.pal_lit_x(k, op)?;
         self.store_packed(x)
     }
 
     /// [`pal_lit`](Self::pal_lit)'s colour, packed, in a temporary.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn pal_lit_x(&mut self, k: usize, op: Op) -> Result<Reg, Refusal> {
         let shift = u32::from((op.d & !PAL_SCALED) >> PAL_SHIFT);
         let memo = self.words_run(&[Word::Init(-1), Word::Init(0), Word::Init(0)]);
@@ -2064,6 +2263,7 @@ impl<'a> Emitter<'a> {
     }
 
     /// `pal(P, select(c, A, B)) [* k]`.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn sel_pal(&mut self, k: usize, cv: u8, a: u8, b: u8, col: Op) -> Result<(), Refusal> {
         let pal = col.d & code::PAL_MASK;
         let shift = (col.d & !PAL_SCALED) >> PAL_SHIFT;
@@ -2141,6 +2341,7 @@ impl<'a> Emitter<'a> {
     }
 
     /// `pal(P, pick(m, …)) [* k]`: the choices' colours a row.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn pick_pal(&mut self, m: u8, pk: Op, col: Op) -> Result<(), Refusal> {
         let pal = col.d & code::PAL_MASK;
         let shift = (col.d & !PAL_SCALED) >> PAL_SHIFT;
@@ -2176,6 +2377,7 @@ impl<'a> Emitter<'a> {
 }
 
 /// The frame slot of a8..a12's home `h`.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn slot(h: Reg) -> i32 {
     (i32::from(h) - 8) * 4
 }
@@ -2183,6 +2385,7 @@ fn slot(h: Reg) -> i32 {
 /// Whether an item calls a helper on every pixel (a colour's memo misses
 /// call one now and then: "cold", after which the hoists are loaded again;
 /// they do not make the kernel one with calls for its registers).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn hot_call(hsv_call: bool, it: &Item) -> bool {
     needs_call(hsv_call, it)
         && !matches!(*it, Item::Step(op)
@@ -2191,6 +2394,7 @@ fn hot_call(hsv_call: bool, it: &Item) -> bool {
 }
 
 /// Whether an item calls a helper.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn needs_call(hsv_call: bool, it: &Item) -> bool {
     use code::*;
     match *it {
@@ -2225,6 +2429,7 @@ fn needs_call(hsv_call: bool, it: &Item) -> bool {
 
 /// A fixed order among hoist candidates used as often, so the unstable
 /// sort gives a formula the same kernel every time.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn word_rank(w: Word) -> u32 {
     match w {
         Word::Lane(l) => 0x100 | u32::from(l),
@@ -2234,6 +2439,8 @@ fn word_rank(w: Word) -> u32 {
         Word::Const(c) => 0x500 | (c as u32 >> 12 & 0xff) | (c as u32 & 0xfff) << 8,
         Word::Ink => 0x600,
         Word::Under => 0x601,
+        Word::Picture => 0x602,
+        Word::PictureMask => 0x603,
         Word::Cover(k) => 0x700 | u32::from(k),
         _ => 0xfff,
     }

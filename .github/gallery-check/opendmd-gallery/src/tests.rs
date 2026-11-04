@@ -256,7 +256,7 @@ fn the_examples_pass() {
         bundled += usize::from(e.bundle);
         n += 1;
     }
-    assert_eq!((n, bundled), (33, 10));
+    assert_eq!((n, bundled), (39, 10));
     assert!(over >= 8, "the examples that draw over a GIF: {over}");
 }
 

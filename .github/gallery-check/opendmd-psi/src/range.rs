@@ -40,30 +40,37 @@ const UNIT: Iv = Iv(0, ONE as i64);
 const SIGNED: Iv = Iv(-(ONE as i64), ONE as i64);
 
 impl Iv {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn point(v: i32) -> Iv {
         Iv(v as i64, v as i64)
     }
 
     /// Clamped into i32, as saturation does.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn sat(self) -> Iv {
         Iv(self.0.clamp(LO, HI), self.1.clamp(LO, HI))
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn fits(self) -> bool {
         self.0 >= LO && self.1 <= HI
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn union(self, o: Iv) -> Iv {
         Iv(self.0.min(o.0), self.1.max(o.1))
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn konst(self) -> Option<i32> {
         (self.0 == self.1).then_some(self.0 as i32)
     }
 }
 
 /// The highest `t` a frame of a loop of `loop_ms` is drawn at: every player
-/// draws `t` = `Inputs::at_ms(ms)` for an `ms` under the loop.
+/// draws `t` = `Inputs::at_ms(ms)` for an `ms` under the loop. (Not
+/// optimised for size: `inputs_in_range` runs it every frame.)
+#[inline]
 fn t_max(loop_ms: u32) -> i32 {
     Inputs::at_ms(loop_ms)
 }
@@ -101,21 +108,25 @@ pub(crate) fn checked(c: u8) -> u8 {
     }
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn mul_corners(a: Iv, b: Iv) -> Iv {
     let c = [a.0 * b.0, a.0 * b.1, a.1 * b.0, a.1 * b.1];
     Iv(*c.iter().min().unwrap_or(&0), *c.iter().max().unwrap_or(&0))
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn add_iv(a: Iv, b: Iv) -> Iv {
     Iv(a.0 + b.0, a.1 + b.1)
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn sub_iv(a: Iv, b: Iv) -> Iv {
     Iv(a.0 - b.1, a.1 - b.0)
 }
 
 /// `mul`'s exact result (before saturation): the corners' products, each
 /// shifted down (floor, monotonic).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn mul_iv(a: Iv, b: Iv) -> Iv {
     let p = mul_corners(a, b);
     Iv(p.0 >> 16, p.1 >> 16)
@@ -123,6 +134,7 @@ fn mul_iv(a: Iv, b: Iv) -> Iv {
 
 /// What a step's value can be, from its operands'. `tabs` for `tab`.
 #[inline(never)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn value(op: &Op, a: Iv, b: Iv, c: Iv, tabs: &[i32; MAX_TABLE]) -> Iv {
     use code::*;
     match op.code {
@@ -144,6 +156,7 @@ fn value(op: &Op, a: Iv, b: Iv, c: Iv, tabs: &[i32; MAX_TABLE]) -> Iv {
         }
         LT | LE | GT | GE | EQ | NE | AND | OR | STEP | NOT | BIT => UNIT,
         DIGIT..=DIGIT_B | U_R..=INK | SMOOTH => UNIT,
+        INKN => Iv(0, a.1),
         MIN => Iv(a.0.min(b.0), a.1.min(b.1)),
         MAX => Iv(a.0.max(b.0), a.1.max(b.1)),
         ATAN2 => Iv(-(ONE as i64) / 2, ONE as i64 / 2),
@@ -211,6 +224,7 @@ fn value(op: &Op, a: Iv, b: Iv, c: Iv, tabs: &[i32; MAX_TABLE]) -> Iv {
 
 /// A floored remainder by a divisor in `b`: the divisor's sign, within it
 /// (0 by 0).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn mod_iv(b: Iv) -> Iv {
     if b.0 > 0 {
         Iv(0, b.1 - 1)
@@ -224,6 +238,7 @@ fn mod_iv(b: Iv) -> Iv {
 /// `div`: `sat((a << 16) / b)` truncated; over a `b` of one sign the
 /// quotient is monotonic in each operand, so the corners bound it. A `b`
 /// that can be 0: anything.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn div_iv(a: Iv, b: Iv) -> Iv {
     if b.0 <= 0 && b.1 >= 0 {
         // Over a `b` of one sign and 0 (a division by 0 is the end of the
@@ -250,6 +265,7 @@ fn div_iv(a: Iv, b: Iv) -> Iv {
 /// working memory): the compiler runs on a 12 KB stack of its own on the
 /// ESP32.
 #[inline(never)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub(crate) fn narrow(prog: &mut Program) {
     use code::*;
     let mut sc = alloc::vec![FULL; MAX_SCALARS];
@@ -302,7 +318,10 @@ pub(crate) fn narrow(prog: &mut Program) {
         }
     }
     for &op in &ops[de.min(re)..re] {
-        sc[(op.d & 0x7f) as usize] = value(&op, g(&sc, op.a), g(&sc, op.b), g(&sc, op.c), tabs);
+        // (`cycle`'s turn writes a palette, no slot: its `d` is the palette's.)
+        if op.code != TURN {
+            sc[(op.d & 0x7f) as usize] = value(&op, g(&sc, op.a), g(&sc, op.b), g(&sc, op.c), tabs);
+        }
     }
     let mut regs = [FULL; REGS + 1];
     let lane = |regs: &[Iv; REGS + 1], sc: &[Iv], v: u8| -> Iv {
@@ -318,7 +337,7 @@ pub(crate) fn narrow(prog: &mut Program) {
     };
     for slot in &mut ops[re.min(pe)..pe] {
         let mut op = *slot;
-        if code::is_colour(op.code) || matches!(op.code, STILL | COLUMN | FUSE) {
+        if code::is_colour(op.code) || matches!(op.code, STILL | COLUMN | FUSE | SLOW) {
             continue;
         }
         if op.d & LANE == 0 || op.d & !LANE < L_REG0 {

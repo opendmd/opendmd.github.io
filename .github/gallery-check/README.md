@@ -94,8 +94,8 @@ every field as escaped text.
 `gallery/README.md` and `dev/api/` are pushed to `main` by the main
 repository's release workflow with a deploy key, which bypasses the
 ruleset. Anyone who can run that workflow (or read its secrets) can rewrite
-this repository, `gallery/` included, and so what the next site build
-reads. So: keep the deploy key only in the main repository's secrets, put
+this repository, `gallery/` included, and so what the site reads (its
+Worker syncs `gallery/` every few minutes and checks every file again). So: keep the deploy key only in the main repository's secrets, put
 the publish step behind a GitHub Environment with a required reviewer,
 restrict who can push `v*` tags there, and if the main repository's secrets
 ever leak, remove and replace the deploy key here (Settings › Deploy keys)
@@ -135,6 +135,7 @@ the release workflow's "Update the public gallery repo" step.
 **Reviewing a contribution:** the check passed; only `gallery/*.psi`
 changed; the preview looks right on a 128 × 32 panel; the name and
 description are fine for everyone; the author owns it (or it is credited
-properly); not a duplicate. Squash and merge; it is on the site from the
-next site build (a release, or the main repository's Site workflow; the
-build's log names any file the re-check left out).
+properly); not a duplicate. Squash and merge; it is on the site within
+about five minutes: the site's Worker syncs `gallery/` from `main` every
+five minutes and checks each file again, and
+`https://opendmd.dev/api/gallery` lists any file it refused, and why.

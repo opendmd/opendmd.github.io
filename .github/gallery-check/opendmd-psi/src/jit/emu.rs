@@ -386,7 +386,9 @@ impl Target for EmuTarget {
 
     fn run_rows(&mut self, at: usize, ctx: &mut [u32], sc: *mut i32) {
         let c = self.emu.map(ctx.as_mut_ptr() as *const u8, ctx.len() * 4);
-        let s = self.emu.map(sc as *const u8, crate::program::MAX_SCALARS * 4);
+        let s = self
+            .emu
+            .map(sc as *const u8, crate::program::MAX_SCALARS * 4);
         self.emu.call_at(at, c, s);
     }
 }

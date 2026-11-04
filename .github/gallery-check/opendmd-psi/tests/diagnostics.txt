@@ -1,0 +1,905 @@
+# The error index's golden cases (tests/diagnostics.rs): a source, then the place and message it fails with.
+# PSI_BLESS=1 cargo test --features docs --test diagnostics rewrites the `---` lines.
+
+=== E001
+gray(x ^ 2)
+--- 1:8 I don't understand `^` (there is no power operator: multiply, e.g. `x * x`)
+
+=== E001
+gray("x")
+--- 1:6 I don't understand `"` (there are no strings but on `name`, `about` and `control` lines: for a character's code write it in single quotes, 'A')
+
+=== E001
+loop 4 "x"
+gray(x)
+--- 1:8 I don't understand `"` (there are no strings but on `name`, `about` and `control` lines: for a character's code write it in single quotes, 'A')
+
+=== E002
+gray(1.2.3)
+--- 1:6 `1.2.3` is not a number
+
+=== E003
+gray(#12)
+--- 1:6 a colour is # and 3 or 6 hex digits (0-9, a-f), as #f80 or #ff8800
+
+=== E004
+gray(40000)
+--- 1:6 numbers must be between -32768 and 32767
+
+=== E005
+gray(2x)
+--- 1:6 `2x` is not a number or a name (to multiply, write `2 * x`)
+
+=== E006
+gray('AB')
+--- 1:6 a character goes in quotes, one at a time: 'A', '7' or ':' (there are no strings)
+
+=== E101
+v = x y
+gray(v)
+--- 1:7 expected the end of the line, found `y` (missing an operator?)
+
+=== E101
+gray(x y)
+--- 1:8 expected `,` or `)` in `gray(…)`, found `y`
+
+=== E101
+gray(x +)
+--- 1:9 expected a value, found `)`
+
+=== E101
+layer add 3 { gray(x) }
+--- 1:11 expected `{` here (as in `layer add { … }`), found `3`
+
+=== E102
+v = (x + 1
+gray(v)
+--- 1:5 this `(` is never closed — add `)`
+
+=== E103
+layer {
+gray(x)
+--- 1:1 this `layer {` is never closed — add `}`
+
+=== E104
+gray(x)
+v = 1
+--- 1:1 the colour has to be the last line (move this to the end)
+
+=== E105
+layer {
+loop 4
+gray(x)
+}
+--- 2:1 `loop` is the whole formula's: put it on a line of its own, outside the layers
+
+=== E106
+v =
+gray(v)
+--- 1:3 a value is missing after `=` (`v = …`)
+
+=== E106
+v = x *
+--- 1:8 a value is missing here
+
+=== E107
+table T = 1, 2
+gray(T[0
+)
+--- 2:7 this `[` is never closed — add `]`
+
+=== E108
+x + 1
+gray(x)
+--- 1:1 only the last line can be a bare value (the colour) — did you mean `name = …`?
+
+=== E109
+loop 4
+loop 5
+gray(x)
+--- 2:1 `loop` is already set
+
+=== E110
+loop fast
+gray(x)
+--- 1:6 `loop` takes a number of seconds, e.g. `loop 8`, or `forever` for one that goes on without repeating
+
+=== E111
+use foo
+gray(x)
+--- 1:1 `use` puts a formula in by its name, as a function `fn p(x, y) { … }`, when you leave the line
+
+=== E112
+--- 1:1 empty: write a colour, e.g. `hsv(x + t/4, 1, 1)`
+
+=== E113
+v = 1
+--- 1:6 the last line should be the colour, e.g. `rgb(r, g, b)`, `hsv(h, s, v)` or `pal(fire, k)`
+
+=== E114
+gray(x, 2, 3)
+--- 1:1 `gray` takes 1 value (or 2: the last is how much of the pixel it covers, 0 to 1), but got 3
+
+=== E114
+gray(sin(x, 2))
+--- 1:6 `sin` takes 1 value, but got 2
+
+=== E115
+gray(digit(1))
+--- 1:6 `digit` takes 3 values (the digit, a column and a row; and a font, normal, small or bold, if you like), but got 1
+
+=== E116
+gray(pick(x))
+--- 1:6 `pick` takes a number, then the values to pick from: `pick(k, a, b, …)`
+
+=== E117
+gray(glyph(65, 3, 3, bold))
+--- 1:22 the bold font has digits only: use `digit(n, x, y, bold)`
+
+=== E118
+gray(digit(1, 2, 3, 4))
+--- 1:21 the last value of `digit` is a font: normal (the default), small or bold, found `4`
+
+=== E119
+rgb(#f00, 0.5, 1)
+--- 1:14 `rgb` of a colour takes the colour and, if you like, how much of the pixel it covers (0 to 1)
+
+=== E120
+rgb(rgb(#f00, 0.5), 0.5)
+--- 1:13 how much a colour covers goes on the whole line: `rgb(mix(…), k)`, not on an `rgb(…)` inside it
+
+=== E201
+gray(foo)
+--- 1:6 unknown name `foo`
+
+=== E201
+gray(xx)
+--- 1:6 unknown name `xx` — did you mean `x`?
+
+=== E202
+gray(foo(1))
+--- 1:6 unknown function `foo` — did you mean `cos`?
+
+=== E203
+table T = 1, 2
+T = 3
+gray(T)
+--- 2:1 `T` is already the name of a table (line 1) — pick another name
+
+=== E205
+gray(sin)
+--- 1:6 `sin` is a function: write `sin(…)`
+
+=== E206
+gray(fire)
+--- 1:6 `fire` is a palette: use it as `pal(fire, k)` on the last line
+
+=== E207
+gray(bold)
+--- 1:6 `bold` is a font: use it as `digit(n, x, y, bold)`
+
+=== E208
+fire = 1
+gray(fire)
+--- 1:1 `fire` is a palette's name; pick another name
+
+=== E209
+v = 1
+gray(v(2))
+--- 2:6 `v` is a value, not a function
+
+=== E210
+gray(loop)
+--- 1:6 `loop` can only start a line
+
+=== E211
+pal(nope, x)
+--- 1:5 unknown palette `nope` (there are fire, ocean, ice, chrono, amber, rainbow and gray)
+
+=== E212
+pal(1, x)
+--- 1:5 the first value of `pal` is a palette: fire, ocean, ice, chrono, amber, rainbow or gray
+
+=== E213
+layer nope { gray(x) }
+--- 1:7 unknown blend `nope` (a layer goes over, add, multiply, screen, max or min)
+
+=== E214
+draw { dot(1, 1) }
+gray(ink(1.5))
+--- 2:10 `ink(n)` takes a whole number from 1 to 255: `ink(16)` is the canvas in 16 levels
+
+=== E302
+v = #f80
+gray(v)
+--- 1:5 `#…` is a colour, not a number: use it on the last line, as `#f80 * k` or `mix(#000, #f80, k)`
+
+=== E303
+layer { gray(x) }
+gray(y)
+--- 2:1 with layers, every colour goes inside one: put this line in `layer { … }`
+
+=== E304
+#f00 + gray(x)
+--- 1:8 `gray(…)` is a whole colour: it can't be added to others (only `#…` and `rgb(r, g, b)` can)
+
+=== E305
+cycle(fire, x, t) + 1
+--- 1:19 `cycle(…)` is a whole colour: it can't go into a sum, only be scaled, `cycle(fire, v, s) * k`
+
+=== E305
+pal(fire, x) + #fff
+--- 1:14 `pal(…)` is a whole colour: it can't go into a sum, only be scaled, `pal(fire, v) * k`
+
+=== E306
+v = gray(x)
+gray(v)
+--- 1:5 `gray(…)` is a whole colour: it can only be the last line (of the formula or a layer)
+
+=== E307
+rgb(0.5, #f00, 1)
+--- 1:10 `rgb(r, g, b)` takes three numbers, not colours: write a colour alone, as `#f80 * k`
+
+=== E401
+<<8200*x >>
+--- 1:16385 too long: a formula can be 16384 characters at most
+
+=== E402
+gray(<<200; + ;sin(x * {k})>>)
+--- 1:1 this formula is too long for the panel: 599 steps, the limit is 256
+
+=== E403
+<<14;\n;w{k} = sin(x * {k})>>
+gray(<<14; + ;w{k}>>)
+--- 15:1 this formula holds more than 12 values at once (the panel's registers): use each sooner
+
+=== E404
+gray(x<<140;; + {k}.37>>)
+--- 1:1 this formula needs more than 128 numbers and once-a-frame values: use fewer
+
+=== E405
+v = <<200*(>>x<<200*)>>
+gray(v)
+--- 1:53 this is nested too deeply — split it into named steps
+
+=== E406
+loop 4000
+gray(x)
+--- 1:6 the loop must be between 0.1 and 3600 seconds
+
+=== E509
+layer {
+layer { gray(x) }
+}
+--- 2:1 a layer can't go inside another — close this one with `}` first
+
+=== E510
+layer {
+v = 1
+}
+layer add { gray(x) }
+--- 3:1 this layer ends without a colour: its last line is `rgb(…)`, `hsv(…)`, `pal(…)` or `gray(…)`
+
+=== E601
+psi 2
+gray(x)
+--- 1:5 this formula needs a newer OpenDMD: it is written for Psi 2, this one has Psi 1
+
+=== E603
+psi 0
+gray(x)
+--- 1:1 `psi` takes the language's version, a whole number: `psi 1`
+
+=== E604
+loop 4
+psi 1
+gray(x)
+--- 2:1 `psi 1` goes on the formula's first line
+
+=== E701
+layer {
+draw { dot(1, 1) }
+gray(ink)
+}
+--- 2:1 `draw { }` goes at the top of the formula, not inside a layer
+
+=== E701
+layer { table T = 1
+gray(1) }
+--- 1:9 a table goes at the top of the formula, not inside a layer
+
+=== E702
+draw { dot(1, 1) }
+draw { dot(2, 2) }
+gray(ink)
+--- 2:1 there can be one `draw { }` block (functions that draw are called inside it)
+
+=== E703
+draw { for k 12 { dot(k, 1) } }
+gray(ink)
+--- 1:8 `for` takes a name and a count, e.g. `for k < 12 { … }` (a whole number from 1 to 1024)
+
+=== E703
+draw { for k < 0 { dot(k, 1) } }
+gray(ink)
+--- 1:8 `for` takes a name and a count, e.g. `for k < 12 { … }` (a whole number from 1 to 1024)
+
+=== E704
+draw { for k < 32 { for j < 64 { dot(j, k) } } }
+gray(ink)
+--- 1:21 this formula draws too much a frame (2080 loop turns in all; the limit is 2048) — fewer or shorter loops
+
+=== E705
+draw { for a1 < 2 { for b1 < 2 { for c1 < 2 { dot(a1, b1) } } } }
+gray(ink)
+--- 1:34 `for` loops go two deep at most
+
+=== E706
+line(0, 0, 9, 9)
+gray(1)
+--- 1:1 `line(…)` draws: it goes on a line of its own inside `draw { }`
+
+=== E714
+gray(ink)
+--- 1:6 `ink` needs a `draw { }` block to read from
+
+=== E706
+draw { v = dot(1, 2) }
+gray(ink)
+--- 1:12 `dot(…)` draws: it goes on a line of its own inside `draw { }`
+
+=== E715
+layer {
+for k < 3 { }
+gray(1)
+}
+--- 2:1 `for` goes inside `draw { }`: `draw { for k < 12 { … } }`
+
+=== E707
+table T = 1, x
+gray(T[0])
+--- 1:14 a table holds numbers only, up to 256 in all, as in `table T = 1, -2, 0.5`
+
+=== E708
+draw { dot(x, 1) }
+gray(ink)
+--- 1:12 `draw { }` runs once a frame, before any pixel, but this uses `x` (the pixel's position across, 0 at the left to 1 at the right)
+
+=== E708
+k = py/31
+draw { dot(k, 1) }
+gray(ink)
+--- 2:12 `draw { }` runs once a frame, before any pixel, but `k` (line 1) is per row: it reads `py`
+
+=== E709
+draw { for k < 3 { k = 2
+dot(k, 1) } }
+gray(ink)
+--- 1:20 `k` is a loop counter: it can't be set
+
+=== E709
+draw { for k < 3 { for k < 2 { dot(k, 1) } } }
+gray(ink)
+--- 1:24 `k` is already a loop counter here
+
+=== E710
+v = 1
+gray(v[0])
+--- 2:6 `v[…]` reads a table, and `v` is not one
+
+=== E716
+table T = 1, 2
+gray(T)
+--- 2:6 `T` is a table: read one of its numbers, `T[k]` (k from 0)
+
+=== E711
+table
+gray(1)
+--- 1:6 a table needs a name, as in `table T = 1, 2, 3`
+
+=== E712
+draw { line(0, 0, 9) }
+gray(ink)
+--- 1:8 `line` takes x0, y0, x1, y1 (pixels from the top left) and 1 or 2 inks: 3 given
+
+=== E713
+draw { gray(1) }
+gray(ink)
+--- 1:8 inside draw { } go `name = value`, `for k < N { … }`, `if c { … }` and drawing: `line`, `dot`, `pset`, `rect`, `rectfill`, `circ`, `circfill`, `trifill`, `cls`, `spr`, `print`
+
+=== E801
+fps 60
+gray(x)
+--- 1:5 `fps` is 25, 50 or 100 frames a second
+
+=== E801
+fps
+gray(x)
+--- 1:1 `fps` takes 25, 50 or 100 frames a second, e.g. `fps 100`
+
+=== E802
+layer {
+fps 50
+gray(x)
+}
+--- 2:1 `fps` is the whole formula's: put it on a line of its own, outside the layers
+
+=== E803
+fps 25
+fps 50
+gray(x)
+--- 2:1 `fps` is already set
+
+=== E901
+loop forever
+gray(t*x)
+--- 2:7 `t` grows without end in `loop forever`, and this can't take it: use frac(t*k), t % n, sin(t*k), noise(t*k, y, z), a comparison, min or max
+
+=== E907
+loop forever
+gray(frac((t + x)/3))
+--- 2:18 a growing value plus a per-pixel or per-row part only goes into frac, the waves, noise, % or a multiply: as frac(t*k) + x or sin(t*k + x)
+
+=== E902
+loop forever
+gray(noise(t + x, 0, 0) + noise(t*2 + x, 0, 0) + noise(t*3 + x, 0, 0) + noise(t*4 + x, 0, 0) + noise(t*5 + x, 0, 0))
+--- 2:96 noise of values that grow without end: four different ones at most — share one, as noise(u + k, …)
+
+=== E903
+gray(seed)
+--- 1:6 `seed` is for formulas that go on without repeating (`loop forever`): a new one each time it plays
+
+=== E904
+loop forever
+<<16;\n;w{k} = t*{k}.5>>
+gray(<<16; + ;frac(w{k})>>)
+--- 18:1 too many values that grow without end (more than 15): share one, as frac(u*k) of one `u`
+
+=== E905
+loop forever
+v = t + x
+gray(v)
+--- 2:1 a colour can't take a value that grows without end and changes across the panel, as `v` (line 2) does: use frac(v) or min(v/k, 1)
+
+=== E906
+loop forever
+draw { dot(t, 3) }
+gray(ink)
+--- 2:12 a value that grows without end can't be drawn at: use frac(t*k)*128, t % n or min(t, k)
+
+=== E910
+sprite s {
+key A 0, B 0, C 0, D 0, E 0, F 0, G 0, H 0, I 0, J 0, K 0, L 0, M 0, N 0, O 0, P 0, Q 0
+.
+}
+gray(s[0, 0])
+--- 2:1 a sprite's key has 16 characters at most
+
+=== E911
+layer {
+sprite s {
+key . 0
+.
+}
+gray(1)
+}
+--- 2:1 a sprite goes at the top of the formula, not inside a layer
+
+=== E912
+sprite s {
+}
+gray(s[0, 0])
+--- 1:1 a sprite starts with its key: `key . 0, R 1, D 2` (each character, then the number it reads as)
+
+=== E913
+sprite s {
+key .0, X 1
+.X.
+}
+gray(s[0, 0])
+--- 2:5 a key entry is a character (not ; { } , - / or a space) and its number, `R 1`, after a comma
+
+=== E914
+sprite s {
+key . 0, X 1
+.Y.
+}
+gray(s[0, 0])
+--- 3:2 `Y` is not in the sprite's key
+
+=== E915
+sprite s {
+key . 0, X 1
+.X.
+.X
+}
+gray(s[0, 0])
+--- 4:1 a sprite's rows are as wide as its first (3 characters), at most 64
+
+=== E916
+sprite s {
+key . 0, X 1
+}
+gray(s[0, 0])
+--- 1:1 a sprite has 1 to 32 rows of characters, after its key
+
+=== E918
+sprite s {
+key . 0, X 1
+.X.
+}
+gray(s[0])
+--- 5:9 a sprite is read at a column and a row: `s[u, v]`
+
+=== E917
+sprite s {
+key . 0, X 1
+.X.
+}
+gray(s)
+--- 5:6 `s` is a sprite: read its pixels, `s[u, v]`
+
+=== E919
+sprite s {
+key . 0, X 1
+.X.
+gray(s[0, 0])
+--- 1:1 this `sprite {` is never closed — add `}` on a line of its own
+
+=== E920
+sprite s {
+key . 0, . 1
+...
+}
+gray(s[0, 0])
+--- 2:10 `.` is in the key twice
+
+=== E921
+layer {
+palette p = #fff
+pal(p, x)
+}
+--- 2:1 a palette goes at the top of the formula, not inside a layer
+
+=== E922
+palette p = #fff, 3
+pal(p, x)
+--- 1:19 a palette is 1 to 32 colours: `palette sea = #003, #06c, #fff`
+
+=== E923
+palette p1 = #f00
+palette p2 = #0f0
+palette p3 = #00f
+palette p4 = #fff
+pal(p4, x)
+--- 4:1 a formula can have 3 palettes of its own at most
+
+=== E924
+table T = <<200;, ;{k}>>
+palette p = #f00
+palette q = #0f0
+pal(q, T[x])
+--- 3:1 tables, sprites and palettes hold 256 numbers in all — this would make 264
+
+=== E925
+palette sea = deep #003, deep #06c
+pal(sea, x)
+--- 1:26 `deep` already names a colour of `sea`: give this one another name
+
+=== E926
+palette sea = n #003, #06c
+pal(sea, x)
+--- 1:15 `n` and `step` are every palette's own (`sea.n`, `sea.step`): name this colour another way
+
+=== E927
+palette sea = deep #003, #06c
+pal(sea, sea.foam)
+--- 2:14 palette `sea` has no colour named `foam`: name it in its line, as `foam #f80`
+
+=== E931
+cycle(fire, x, x)
+--- 1:16 `cycle` turns a whole row at once (by t, a frame value or py), but this uses `x` (the pixel's position across, 0 at the left to 1 at the right)
+
+=== E931
+s = x*2
+cycle(fire, y, s)
+--- 2:16 `cycle` turns a whole row at once (by t, a frame value or py), but `s` (line 1) is per pixel: it reads `x`
+
+=== E932
+cycle(gray, x, t)
+--- 1:7 `cycle` turns a palette of colours, and gray is not one: write your own, `palette g = #000, #fff`
+
+=== E933
+palette pa = #f00
+palette pb = #0f0
+layer { cycle(pa, x, t) }
+layer add { cycle(pb, x, t/2) }
+--- 4:13 a formula holds 3 palettes: its own (2 here) and one more for each turn `cycle` gives (2 here)
+
+=== E934
+cycle(fire, x)
+--- 1:14 expected `,` and the turn (as in `cycle(fire, v, t/4)`) here, found `)`
+
+=== E935
+pal(fire, x, 0.5, 2)
+--- 1:17 `pal` takes a palette and one value (and how much of the pixel it covers, 0 to 1, if you like); found `,`
+
+=== E935
+cycle(fire, x, t, 0.5, 2)
+--- 1:22 `cycle` takes a palette, the picture and the turn (and how much of the pixel it covers, 0 to 1, if you like); found `,`
+
+=== E941
+layer { gray(x) }
+layer add rate 4 { gray(y) }
+--- 2:20 `rate` goes on the bottom layers only: the first layer, or the first few one after another
+
+=== E942
+layer rate 1 { gray(x) }
+layer add { gray(y) }
+--- 1:12 `rate` takes a whole number of frames, 2 to 200: `layer rate 4 { … }` is redrawn every 4th frame
+
+=== E943
+layer rate 4 { gray(x) }
+layer multiply rate 5 { gray(y) }
+layer add { gray(t) }
+--- 3:13 the slow layers share one `rate`: give each the same number
+
+=== E944
+layer rate 4 { gray(ul) }
+layer add { gray(y) }
+--- 2:13 a `rate` layer is drawn on its own: it can't read `ink`, `ur`, `ug`, `ub` or `ul`
+
+=== E944
+layer rate 4 { gray(x) }
+layer add { gray(ur) }
+--- 2:13 a formula with `rate` draws its own picture: it can't read `ur`, `ug`, `ub` or `ul`
+
+=== E946
+layer rate 4 add { gray(x) }
+--- 1:14 write the blend first: `layer add rate 4 { … }`
+
+=== E947
+layer rate 4 { gray(x) }
+--- 1:16 a `rate` layer is the slow one under a layer that moves: add a layer above it, or leave `rate` out
+
+=== E948
+layer rate 4 { gray(x, 0.5) }
+layer add { gray(y) }
+--- 2:13 the bottom `rate` layer must cover the whole panel: `layer rate N { … }`, no blend, no coverage
+
+=== E951
+loop 4
+name "Late"
+gray(x)
+--- 2:1 `name` goes at the top of the formula, before its other lines
+
+=== E952
+name "a"
+name "b"
+gray(x)
+--- 2:1 `name` is already set on line 1
+
+=== E953
+name "Unclosed
+gray(x)
+--- 1:6 text in quotes ends with `"` on the same line
+
+=== E954
+name "a<b>"
+gray(x)
+--- 1:8 text in quotes can't have `<`, `>`, `\` or a control character (a tab too) in it
+
+=== E954
+name "a\u{9}b"
+gray(x)
+--- 1:8 text in quotes can't have `<`, `>`, `\` or a control character (a tab too) in it
+
+=== E955
+name "<<61*0>>"
+gray(x)
+--- 1:6 too long: this text can be 60 characters at most
+
+=== E956
+name
+gray(x)
+--- 1:5 this takes its text in quotes, e.g. `name "Sunrise"`
+
+=== E957
+control k 1 = 2
+gray(k)
+--- 1:11 a control is `control NAME lo..hi = default "Label"` or `control NAME = word, word, …`
+
+=== E958
+control p = 0
+control q = 0
+control r = 0
+control s = 0
+gray(p)
+--- 4:1 a formula has three controls at most (a, b and c)
+
+=== E959
+control k 4..1
+gray(k)
+--- 1:11 a range goes from the lower number to the higher, e.g. `0..1`
+
+=== E960
+control k 1..4 = 5
+gray(k)
+--- 1:9 the default is outside the control's range
+
+=== E961
+control k = calm
+gray(k)
+--- 1:13 a choice has 2 to 6 words
+
+=== E962
+control k = calm, wild, calm
+gray(k)
+--- 1:25 `calm` is a choice already
+
+=== E963
+control b = 0.5
+gray(b)
+--- 1:9 `b` is the second control's letter: give this one another name (controls take a, b, c in order)
+
+=== E964
+look shiny
+gray(x)
+--- 1:6 `look` takes a blend (over, screen, add, multiply, max or min) and an amount from 0 to 100
+
+=== E965
+look screen 40
+layer { gray(x) }
+layer add { gray(y) }
+--- 1:1 a formula with layers goes over the GIF as a look: write `look` or `look over N`
+
+=== E966
+control k = calm, 3
+gray(k)
+--- 1:19 a choice is words (names) between commas: `control NAME = word, word, …`
+
+=== E967
+name "x" "y"
+gray(x)
+--- 1:10 expected the end of the `name` line, found `"y"` (one declaration a line)
+
+=== E967
+psi 1 2
+gray(x)
+--- 1:7 expected the end of the `psi` line, found `2` (one declaration a line)
+
+=== E969
+name "a\u{200b}b"
+gray(x)
+--- 1:8 text in quotes can't have characters that hide or reorder text (zero-width, direction marks, line separators)
+
+=== E969
+name "a\u{202e}b"
+gray(x)
+--- 1:8 text in quotes can't have characters that hide or reorder text (zero-width, direction marks, line separators)
+
+=== E204
+layer = 1
+gray(x)
+--- 1:1 `layer` is a word of the language; pick another name
+
+=== E301
+frame {
+k = t
+}
+gray(k)
+--- 1:1 there are no `frame { }` blocks: a value is worked out once a frame by itself when it reads only the time, the clock and the controls; write its lines without the block
+
+=== E720
+draw { pset(1, 1, pal(fire, 0)); pset(1, 1, pal(ice, 0)); pset(1, 1, pal(chrono, 0)); pset(1, 1, pal(amber, 0)) }
+--- 1:98 a formula paints with 127 colours at most (each of a palette's 32 counts)
+
+=== E721
+draw { pset(1, 1, 3) }
+--- 1:19 a colour to paint with is `#…` (as #f80), `pal(palette, v)` or `gray(v)`
+
+=== E722
+draw { spr(q, 1, 1) }
+--- 1:12 `spr` draws a sprite: `spr(name, x, y)`, its name a `sprite name { … }`'s
+
+=== E723
+sprite s {
+  key . 0
+  .
+}
+draw { spr(s) }
+--- 5:8 `spr(sprite, x, y)` or `spr(sprite, x, y, flip)` (1 across, 2 down, 3 both) takes a sprite and its place
+
+=== E724
+draw { print("0123456789012345678901234567890123", 1, 1, #fff) }
+--- 1:14 `print` writes 32 characters at most
+
+=== E725
+table T = <<253;, ;{k}>>
+draw { print("HELLO", 1, 1, #fff) }
+gray(T[0])
+--- 2:14 this text doesn't fit: tables, sprites and texts hold 256 numbers in all
+
+=== E726
+draw { print("A", 1, 1, #fff, huge) }
+--- 1:31 `print`'s font is `normal`, `small` or (for a value) `bold`
+
+=== E727
+draw { pset(1, 1, #fff 2) }
+--- 1:24 `pset(x, y, colour)` (or `dot`): expected `)` here
+
+=== E740
+fn 2(a) = a
+gray(x)
+--- 1:1 a function is `fn name(a, b) = value`, or `fn name(a, b) { … }` for lines that draw
+
+=== E742
+fn f(2) = 1
+gray(x)
+--- 1:6 a function's values are names: `fn name(a, b) = …`
+
+=== E743
+fn f(a) a
+gray(x)
+--- 1:9 after a function's values: `= value`, or `{ … }` for lines that draw
+
+=== E744
+fn f(a) =
+gray(x)
+--- 1:1 function `f` has nothing in it
+
+=== E745
+fn f(a) = f(a)
+gray(f(x))
+--- 1:11 `f` calls itself: a function can't (there are no loops of calls)
+
+=== E746
+fn p(a) { pset(a, 1, #fff) }
+gray(p(x))
+--- 2:6 `p` draws: call it on a line of its own inside `draw { }`
+
+=== E747
+fn f(a) = a b
+gray(f(x))
+--- 2:6 function `f`'s last line is one value: `fn f(…) = value`
+
+=== E748
+fn f(a) = a
+draw { f(1) }
+gray(x)
+--- 2:8 `f` is a value, not lines that draw: use it in one, `v = f(…)`
+
+=== E749
+fn f0(a) = a
+fn f1(a) = max(f0(a), f0(a)) + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0
+fn f2(a) = max(f1(a), f1(a))
+fn f3(a) = max(f2(a), f2(a))
+fn f4(a) = max(f3(a), f3(a))
+fn f5(a) = max(f4(a), f4(a))
+fn f6(a) = max(f5(a), f5(a))
+fn f7(a) = max(f6(a), f6(a))
+fn f8(a) = max(f7(a), f7(a))
+fn f9(a) = max(f8(a), f8(a))
+fn f10(a) = max(f9(a), f9(a))
+fn f11(a) = max(f10(a), f10(a))
+fn f12(a) = max(f11(a), f11(a))
+gray(f12(x))
+--- 3:16 this formula calls its functions too many times over — simplify it
+
+=== E750
+part p { gray(x) }
+p
+--- 1:1 there are no parts: write a function, `fn p(x, y) { … }`, and call it, `p(x*2, y)`
+
+=== E751
+fn f(a) {
+  gray(a)
+  v = 1
+}
+f(x)
+--- 2:3 only a function's last line is its value: set a name here (`v = …`), or move it last
+
+=== E752
+fn p(v) = hsv(v, 1, 1)
+gray(p(x))
+--- 2:6 `p(…)` is a whole colour: use it alone on the colour line (only `#…` and `rgb(r, g, b)` go into sums)

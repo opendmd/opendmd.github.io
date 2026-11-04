@@ -762,6 +762,16 @@ pub fn byte(b: u8) -> i32 {
     (b as i32) * 257 + (b as i32 >> 7)
 }
 
+/// `ink(n)`: a canvas byte in `n` levels (1..=255), round(b·n/255), a whole
+/// number: exact (`b·n/255` is never a half), and `chan(k/n)` read back is
+/// `k` for every k ≤ n. `floor(u/255)` as `(u + 1 + (u >> 8)) >> 8`, exact
+/// below 65,535 (u ≤ 255·255 + 127).
+#[inline(always)]
+pub fn ink_levels(b: u8, n: i32) -> i32 {
+    let u = b as u32 * (n as u32 & 0xff) + 127;
+    (((u + 1 + (u >> 8)) >> 8) as i32) << 16
+}
+
 /// Rec. 601 luminance of an RGB888 pixel, as the panel's tint works it out
 /// (`opendmd_core::look::luma`: `(77 R + 150 G + 29 B + 128) / 256`).
 #[inline(always)]

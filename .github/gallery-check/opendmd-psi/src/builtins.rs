@@ -37,23 +37,34 @@ pub enum Input {
     Seed,
 }
 
+/// The values a formula reads by name. Any of them may also be set as a
+/// formula's own name (then that name is the formula's: `t = 3` is a value
+/// called `t`, `c = 0.5` no longer the third control).
 pub const INPUTS: [(&str, Input, &str); 17] = [
-    ("x", Input::X, "the pixel's position across, 0 to 1"),
+    (
+        "x",
+        Input::X,
+        "the pixel's position across, 0 at the left to 1 at the right",
+    ),
     (
         "y",
         Input::Y,
-        "the pixel's height, 0 at the bottom to 1 at the top",
+        "the pixel's position down, 0 at the top to 1 at the bottom",
     ),
-    ("px", Input::Px, "the pixel's column, 0 to 127"),
-    ("py", Input::Py, "the pixel's row from the bottom, 0 to 31"),
-    ("i", Input::I, "the pixel's number, 0 to 4095"),
+    (
+        "px",
+        Input::Px,
+        "the pixel's column, 0 to 127 from the left",
+    ),
+    ("py", Input::Py, "the pixel's row, 0 to 31 from the top"),
+    ("i", Input::I, "the pixel's number, 0 to 4095 (py*128 + px)"),
     ("t", Input::T, "seconds into the loop"),
     ("hour", Input::Hour, "the hour, 0 to 23"),
     ("minute", Input::Minute, "the minute"),
     ("second", Input::Second, "the second"),
-    ("a", Input::A, "slider a"),
-    ("b", Input::B, "slider b"),
-    ("c", Input::C, "slider c"),
+    ("a", Input::A, "the first control"),
+    ("b", Input::B, "the second control"),
+    ("c", Input::C, "the third control"),
     (
         "ur",
         Input::Ur,
@@ -87,9 +98,9 @@ pub const INPUTS: [(&str, Input, &str); 17] = [
 /// written out ([`Parser::centred`]). A name set with one of these is that
 /// name ([`Parser::lookup_value`] finds the formula's names first), so a
 /// saved `r = …` means what it meant.
-pub const LATER: [&str; 5] = ["cx", "cy", "ty", "r", "angle"];
+pub const LATER: [&str; 4] = ["cx", "cy", "r", "angle"];
 
-/// `w` and `h`: constants.
+/// The panel's size: constants.
 pub const CONSTS: [(&str, i32); 2] = [("w", (W as i32) << 16), ("h", (H as i32) << 16)];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -134,7 +145,8 @@ pub const FUNCS: [(&str, usize, F); 25] = [
 
 /// Functions added once people had saved formulas (2026-10-26): a name
 /// set with one of these still works as a value (`glyph = …; gray(glyph)`).
-pub const LATER_FUNCS: [&str; 4] = ["bit", "digit", "glyph", "pick"];
+/// (`cycle`, a colour, since console-b 2026-10-29.)
+pub const LATER_FUNCS: [&str; 5] = ["bit", "digit", "glyph", "pick", "cycle"];
 
 /// The fonts `digit` and `glyph` take as a last value: core's 5x7 (the
 /// panel's text and clock; 4 × 6 digits; the default), 4x6 (3 × 5 digits)
@@ -145,11 +157,13 @@ pub const FONTS: [(&str, u8); 3] = [
     ("bold", tables::BOLD),
 ];
 
-pub const COLOURS: [(&str, usize, u8); 4] = [
+pub const COLOURS: [(&str, usize, u8); 5] = [
     ("rgb", 3, code::OUT_RGB),
     ("hsv", 3, code::OUT_HSV),
     ("pal", 2, code::OUT_PAL),
     ("gray", 1, code::OUT_GRAY),
+    // `cycle(P, v, s)`: palette P turned by s (`code::TURN`), at v.
+    ("cycle", 3, code::OUT_PAL),
 ];
 
 /// Palette names: core's order (fire, ice, chrono, amber, rainbow); `gray`
@@ -164,13 +178,24 @@ pub const PALETTES: [(&str, u8); 7] = [
     ("gray", 255),
 ];
 
-pub const KEYWORDS: [&str; 8] = [
-    "loop", "frame", "layer", "part", "use", "draw", "for", "table",
-];
+pub const KEYWORDS: [&str; 8] = ["loop", "layer", "part", "use", "draw", "for", "table", "fn"];
 
 /// The draw stage's primitives: statements inside `draw { }`, and names a
 /// formula may still set (`line = …`), as `ink` is a value it may.
-pub const PRIMITIVES: [&str; 2] = ["line", "dot"];
+pub const PRIMITIVES: [&str; 11] = [
+    "line", "dot", "pset", "rect", "rectfill", "circ", "circfill", "trifill", "cls", "spr", "print",
+];
+
+/// The ink primitives: `line` and `dot` with a number (a brightness) last
+/// draw ink; with a colour last they paint.
+pub const INK_CALLS: [&str; 2] = ["line", "dot"];
+
+/// The paint primitives: statements inside `draw { }` that draw in colour
+/// onto the paint canvas (the last drawn wins). `line` and `dot` paint too
+/// when their last value is a colour.
+pub const PAINT_CALLS: [&str; 9] = [
+    "pset", "rect", "rectfill", "circ", "circfill", "trifill", "cls", "spr", "print",
+];
 
 /// How a layer goes onto what is below it (`layer add { … }`; `over` when
 /// none is named).
@@ -182,7 +207,6 @@ pub const BLENDS: [(&str, u8); fixed::BLENDS] = [
     ("max", fixed::BLEND_MAX),
     ("min", fixed::BLEND_MIN),
 ];
-
 
 /// The declarations (formula-apps.md §2.1): statements at the top of a
 /// formula that say what it is rather than draw. None is a keyword: each is
@@ -197,8 +221,8 @@ pub const VERSION: usize = 1;
 
 /// Words that are keywords only in one place: `fps` before a number,
 /// `forever` after `loop`, `sprite NAME {`, `palette NAME =`, a sprite's
-/// `key` line.
-pub const CONTEXT_WORDS: [&str; 5] = ["fps", "forever", "sprite", "palette", "key"];
+/// `key` line, `rate N` after `layer` (and its blend).
+pub const CONTEXT_WORDS: [&str; 6] = ["fps", "forever", "sprite", "palette", "key", "rate"];
 
 /// The editor's cheat sheet (`js/formulas.js` `VARS FUNCS DRAW COLS
 /// DECLS`, generated from these): what to write, what it does, and what a
@@ -209,18 +233,18 @@ pub mod cheat {
     pub type Row = (&'static str, &'static str, &'static str);
 
     pub const VARS: &[Row] = &[
-        ("x, y", "where the pixel is: 0 to 1 across, and up from the bottom", ""),
-        ("px, py", "the pixel’s column 0–127 and row 0–31 from the bottom", ""),
+        ("x, y", "where the pixel is: 0 to 1 across from the left, and down from the top", ""),
+        ("px, py", "the pixel’s column 0–127 from the left and row 0–31 from the top", ""),
         ("t", "seconds into the loop", ""),
         ("hour, minute, second", "the time of day", ""),
-        ("a, b, c", "the controls, in the order the control lines declare them (0 to 1 when undeclared)", ""),
+        ("a, b, c", "the controls, in the order the control lines declare them (0 to 1 when undeclared); any built-in name may be set as your own", ""),
         ("w, h", "128 and 32", ""),
         ("i", "the pixel’s number, 0–4095", ""),
-        ("cx, cy", "from the middle: −2 to 2 across, −0.5 to 0.5 up", ""),
-        ("r, angle", "distance and angle (turns) from the middle", ""),
-        ("ty", "row 0–31 from the top", ""),
+        ("cx, cy", "from the middle: −2 to 2 across, −0.5 to 0.5 down", ""),
+        ("r, angle", "distance and angle (turns, clockwise from the right) from the middle", ""),
         ("ur, ug, ub", "the colour under the formula: the GIF it is drawn over, 0 to 1", ""),
         ("ul", "how bright that is", ""),
+        ("under(x, y)", "the picture under at pixel x, y (the nearest, held to the panel): a colour, as #…: under(px + 2, py) shifts it, under(floor(px/4)*4, floor(py/4)*4) pixelates it; under alone is this pixel's", ""),
     ];
 
     pub const FUNCS: &[Row] = &[
@@ -246,19 +270,29 @@ pub mod cheat {
         ("loop 8", "the loop’s length in seconds (first line)", ""),
         ("loop forever", "goes on without repeating: t grows from when it starts (use frac, %, sin, noise of it); seed is 0 to 1, new each time it plays", ""),
         ("fps 100", "frames a second: 25, 50 (else) or 100, for fast motion; a light formula only", ""),
-        ("frame { … }", "values worked out once a frame", ""),
         ("layer add { … }", "a layer with its own names and colour, on what is below: over, add, multiply, screen, max or min", ""),
-        ("use Plasma as p", "puts in one of your formulas or an example, as part p { … }", "use Plasma as p\n"),
-        ("p.v", "a value part p sets", ""),
-        ("p(x, y, k)", "part p as a colour, drawn at another place; k: how much it covers", ""),
+        ("layer rate 4 { … }", "a slow bottom layer: redrawn every 4th frame, a band of rows a frame (or when the clock or a control it reads changes); the layers above draw over it every frame", "layer rate 4 {\n  \n}\n"),
+        ("fn ring(cx, r) = abs(len(px - cx, py - 16) - r) < 1", "a function: a value worked out from its values, used as ring(64, 8); with { … } instead of = …, lines that draw, called on a line of their own in draw", "fn f(a) = "),
+        ("fn p(x, y) { … }", "a function whose values are x and y: px, py, r, angle … inside follow them; its last line a colour, p(1 - x, y) draws it mirrored", "fn p(x, y) {\n  \n}\n"),
+        ("use Plasma as p", "puts in one of your formulas or an example, as a function fn p(x, y) { … }", "use Plasma as p\n"),
     ];
 
     pub const DRAW: &[Row] = &[
         ("draw { … }", "once a frame, before the pixels: values, loops, lines and dots into ink", "draw {\n  \n}\n"),
         ("for k < 12 { … }", "inside draw: k = 0, 1, … 11; two deep at most, 2048 turns a frame", "for k < 12 {\n  \n}"),
-        ("line(x0, y0, x1, y1, v0, v1)", "a line, in pixels up from the bottom left; v0, v1 its ink at each end, 0 to 1 (else 1)", ""),
+        ("line(x0, y0, x1, y1, v0, v1)", "a line, in pixels from the top left; v0, v1 its ink at each end, 0 to 1 (else 1)", ""),
         ("dot(x, y, v)", "one pixel of ink v", ""),
+        ("cls(#102)", "paint: the whole panel one colour (paint is drawn over the colour line; the last painted wins)", ""),
+        ("pset(x, y, #f80)", "paint one pixel; line(x0, y0, x1, y1, c) and dot(x, y, c) paint too when their last value is a colour", ""),
+        ("rect(x0, y0, x1, y1, c) rectfill(…)", "paint a box (its corners included), or a filled one", ""),
+        ("circ(x, y, r, c) circfill(…)", "paint a circle, or a filled one", ""),
+        ("trifill(x0, y0, x1, y1, x2, y2, c)", "paint a filled triangle", ""),
+        ("print(\"TEXT\", x, y, c)", "paint text in the panel's font (add small); or a number: print(minute, x, y, c, small, 2) with at least 2 digits", ""),
+        ("spr(s, x, y, flip)", "paint sprite s with its top left at x, y (its key gives colours: key . 0, R #f00); flip 1 across, 2 down, 3 both", ""),
+        ("pal(fire, v), gray(v)", "colours to paint with besides #…: a palette's or a gray, v 0 to 1", ""),
+        ("if c { … } else { … }", "inside draw: only when c is not 0", "if  {\n  \n}"),
         ("ink", "what draw put at the pixel, 0 to 1: pal(ice, ink), #40c0ff * ink", ""),
+        ("ink(16)", "the same in 16 levels, a whole number: what was drawn with ink k/16 reads k, exactly (pick(ink(16), …)); 1 to 255 levels", ""),
         ("table T = 1, -2, 0.5", "numbers, 256 in all", "table T = "),
         ("T[k]", "number k of table T, from 0 (0 outside it)", ""),
         ("sprite s { … }", "a small picture in characters: first its key, key . 0, X 1 (each character and the number it reads as, up to 16), then rows up to 64 wide and 32 tall", "sprite s {\n  key . 0, X 1\n  .X.\n}\n"),
@@ -270,7 +304,9 @@ pub mod cheat {
         ("rgb(r, g, b)", "red, green, blue: 0 to 1", ""),
         ("pal(fire, v)", "a palette: fire, ice, ocean, chrono, amber, rainbow, gray", ""),
         ("palette sea = #024, #08c, #fff", "your own palette, up to 32 colours (3 palettes): pal(sea, 0) the first, pal(sea, 1) the last, pal(sea, 0.5) the middle one", "palette p = #000, #f80, #fff\n"),
+        ("palette sea = deep #024, foam #fff", "a colour may have a name: sea.foam is where pal finds it (sea.step from one colour to the next, sea.n how many)", ""),
         ("pal(fire, v) * k", "a palette colour, dimmed (or lit) by k", ""),
+        ("cycle(fire, v, s)", "palette cycling: the palette turned by s (one turn per 1: t/4 turns it every 4 s), at v; wraps where pal stops; s may change by row; cheap when v is the same every frame", ""),
         ("gray(v)", "white, 0 to 1", ""),
         ("#ff8800", "a colour: alone, or #f80 * v, mix(#000, #f80, v)", ""),
         ("rgb(r, g, b, k)", "a last value: how much it covers, 0 to 1 (what is under shows through); rgb(#f80, k)", ""),

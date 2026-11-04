@@ -61,7 +61,7 @@ A check runs on your pull request and says on its page what, if anything,
 to fix (push a fix to the same branch and it runs again). Then a
 maintainer looks at it: that it plays well on the display, that it is
 suitable for everyone, and that it isn't a copy of one already here. Once
-merged, it appears on the gallery when the site is next updated.
+merged, it appears on the gallery within a few minutes.
 
 Maintainers may decline or remove a formula without giving a reason. The
 rest of this repository is written from OpenDMD's main repository: pull

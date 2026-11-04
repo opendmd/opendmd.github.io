@@ -18,9 +18,13 @@ pub enum Control {
     Choice { n: u8 },
 }
 
-const NONE: u8 = 0;
-const SLIDER: u8 = 1;
-const CHOICE: u8 = 2;
+/// The blends a look may use, as `layer` names them (`max` and `min` are
+/// the web app's Lighten and Darken).
+pub const BLENDS: [&str; 6] = ["over", "screen", "add", "multiply", "max", "min"];
+
+pub(crate) const NONE: u8 = 0;
+pub(crate) const SLIDER: u8 = 1;
+pub(crate) const CHOICE: u8 = 2;
 
 /// A compiled formula's declarations (44 bytes in [`Program`]).
 ///
@@ -28,21 +32,22 @@ const CHOICE: u8 = 2;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Meta {
     /// Each slot's (`a b c`) kind: none, a slider, a choice.
-    kind: [u8; 3],
-    /// `look`: 0 none, else 1 + the blend's place in [`crate::look::BLENDS`].
-    look: u8,
+    pub(crate) kind: [u8; 3],
+    /// `look`: 0 none, else 1 + the blend's place in [`BLENDS`].
+    pub(crate) look: u8,
     /// `look`'s amount, 0 to 100.
-    amount: u8,
+    pub(crate) amount: u8,
     /// Each slot's range and default (Q16.16; a choice's: 0, n − 1, 0).
-    lo: [i32; 3],
-    hi: [i32; 3],
-    def: [i32; 3],
+    pub(crate) lo: [i32; 3],
+    pub(crate) hi: [i32; 3],
+    pub(crate) def: [i32; 3],
 }
 
 impl Meta {
     /// Slot `k`'s control (0 `a`, 1 `b`, 2 `c`), `None` when undeclared (a
     /// formula that reads `a` without a `control` line: a slider 0 to 1,
     /// default 0, as before the declarations).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn control(&self, k: usize) -> Option<Control> {
         match *self.kind.get(k)? {
             SLIDER => Some(Control::Slider {
@@ -57,12 +62,17 @@ impl Meta {
         }
     }
 
-    /// Bit `k` set for each declared slot.
+    /// Bit `k` set for each declared slot. (Every frame, through
+    /// `range::inputs_in_range`: not optimised for size.)
+    #[inline]
     pub fn declared(&self) -> u8 {
-        (0..3).filter(|&k| self.kind[k] != NONE).fold(0, |m, k| m | 1 << k)
+        (0..3)
+            .filter(|&k| self.kind[k] != NONE)
+            .fold(0, |m, k| m | 1 << k)
     }
 
     /// Slot `k`'s default (Q16.16): the declared one, else 0.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn default_value(&self, k: usize) -> i32 {
         self.def.get(k).copied().unwrap_or(0)
     }
@@ -70,11 +80,13 @@ impl Meta {
     /// The value a slot plays at: the one given (a path's `&a=`, a
     /// slider's), else the declared default. The formula clamps it to the
     /// declared range itself; nothing here needs to.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn value(&self, k: usize, given: Option<i32>) -> i32 {
         given.unwrap_or_else(|| self.default_value(k))
     }
 
     /// [`value`](Self::value) for the three slots.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn values(&self, given: [Option<i32>; 3]) -> [i32; 3] {
         [
             self.value(0, given[0]),
@@ -83,23 +95,27 @@ impl Meta {
         ]
     }
 
-    /// `look [blend] [amount]`: the blend (one of [`crate::look::BLENDS`])
+    /// `look [blend] [amount]`: the blend (one of [`BLENDS`])
     /// and the amount (0 to 100), when the formula says it may be a look.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn look(&self) -> Option<(&'static str, u8)> {
-        let b = crate::look::BLENDS.get(usize::from(self.look).checked_sub(1)?)?;
+        let b = BLENDS.get(usize::from(self.look).checked_sub(1)?)?;
         Some((b, self.amount))
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub(crate) fn set_slider(&mut self, k: usize, lo: i32, hi: i32, default: i32) {
         self.kind[k] = SLIDER;
         (self.lo[k], self.hi[k], self.def[k]) = (lo, hi, default);
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub(crate) fn set_choice(&mut self, k: usize, n: usize) {
         self.kind[k] = CHOICE;
         (self.lo[k], self.hi[k], self.def[k]) = (0, ((n as i32) - 1) << 16, 0);
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub(crate) fn set_look(&mut self, blend: usize, amount: u8) {
         self.look = blend as u8 + 1;
         self.amount = amount;

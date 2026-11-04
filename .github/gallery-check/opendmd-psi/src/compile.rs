@@ -11,14 +11,22 @@
 //! [`MAX_NODES`] and nesting at [`MAX_DEPTH`], so compile time and stack
 //! are bounded for any input.
 
+use crate::builtins::*;
+pub use crate::error::{Error, NO_MEMORY};
 use crate::fixed::{self, ONE};
 use crate::meta::Meta;
+use crate::number;
 use crate::program::{code, *};
-use crate::builtins::*;
 use crate::tables;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+
+// The language service's notes (`syntax::Sink::note`): not errors, so out
+// of this file (whose sentences tests/diagnostics.rs reads as errors).
+#[cfg(feature = "syntax")]
+#[path = "notes.rs"]
+mod notes;
 
 /// The longest source accepted (bytes): comments and indentation count, so
 /// it is roomy (4,096 until Formulas were played by reference, 2026-10-29:
@@ -28,67 +36,13 @@ use alloc::vec::Vec;
 pub const MAX_SOURCE: usize = 16 * 1024;
 /// Expression nodes (before dead ones are dropped): bounds compile time.
 pub const MAX_NODES: usize = 1024;
-/// Brackets and operators nested this deep: bounds the parser's stack.
-/// 18 since 2026-10-26: at 24 the deepest formula used 11,808 B of the
-/// ESP32's 12 KB compile stack (`psi-probe` on the spare; beta.10's
-/// compiler, by its frame sizes, more), ~430 B a level; at 18 ~9.2 KB.
-/// Every known formula needs at most 12 (the examples' parts 3 a level).
-pub const MAX_DEPTH: usize = 18;
-
-/// A compile error: a byte range of the source and a sentence.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Error {
-    pub start: usize,
-    pub end: usize,
-    pub msg: String,
-}
-
-impl Error {
-    #[inline(never)]
-    fn new(start: usize, end: usize, msg: impl Into<String>) -> Error {
-        Error {
-            start,
-            end,
-            msg: msg.into(),
-        }
-    }
-
-    /// 1-based line and column of the start.
-    pub fn line_col(&self, src: &str) -> (usize, usize) {
-        let upto = sub(src, 0, self.start.min(src.len()));
-        let line = upto.matches('\n').count() + 1;
-        let col = upto.rsplit('\n').next().map_or(0, |l| l.chars().count()) + 1;
-        (line, col)
-    }
-
-    /// "line 2: msg", the line, and carets under the range.
-    pub fn render(&self, src: &str) -> String {
-        let (line, col) = self.line_col(src);
-        let text = src.lines().nth(line - 1).unwrap_or("");
-        let width = sub(src, self.start, self.end.min(src.len()))
-            .chars()
-            .take_while(|&c| c != '\n')
-            .count()
-            .max(1);
-        format!(
-            "line {line}: {}\n  {text}\n  {}{}",
-            self.msg,
-            " ".repeat(col - 1),
-            "^".repeat(width)
-        )
-    }
-}
-
-impl core::fmt::Display for Error {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str(&self.msg)
-    }
-}
-
-/// The sentence for a compile the heap can't hold just now (a list the
-/// compiler couldn't grow): the player refuses the Formula and goes on,
-/// as with any other compile error, instead of aborting.
-pub const NO_MEMORY: &str = "not enough memory for this Formula right now";
+/// Brackets, operators and function calls nested this deep: bounds the
+/// parser's stack. The compiler runs off the device now (the browser's
+/// wasm, 1 MB of stack; the CLI and the simulator): 48 levels at the
+/// ESP32's ~430 B a level is ~21 KB (18 until psi-rebuild, for the
+/// device's 12 KB compile stack; psi-probe builds, which still compile on
+/// the device, compile only the bundled Formulas, ≤ 12 deep).
+pub const MAX_DEPTH: usize = 48;
 
 // (Unused in the wasm build: it grows infallibly.)
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -193,7 +147,7 @@ fn sub(s: &str, a: usize, b: usize) -> &str {
 // --- the lexer ----------------------------------------------------------------
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Tok {
+pub(crate) enum Tok {
     Num(i32),
     /// `#rrggbb` (`#rgb` widened): a colour, 0xRRGGBB.
     Hex(u32),
@@ -236,10 +190,10 @@ enum Tok {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct Token {
-    tok: Tok,
-    start: usize,
-    end: usize,
+pub(crate) struct Token {
+    pub(crate) tok: Tok,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
 }
 
 /// A [`Token`] as the lexer's list keeps it: 12 B instead of 16 on the
@@ -248,7 +202,7 @@ struct Token {
 /// [`lex`]), so its places fit in 16 bits.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy)]
-struct Packed {
+pub(crate) struct Packed {
     tok: Tok,
     start: u16,
     end: u16,
@@ -257,12 +211,12 @@ struct Packed {
 /// (The browser keeps the tokens as they are: no heap to spare there, and
 /// a smaller download.)
 #[cfg(target_arch = "wasm32")]
-type Packed = Token;
+pub(crate) type Packed = Token;
 
 #[cfg(target_arch = "wasm32")]
 impl Token {
     #[inline]
-    fn get(self) -> Token {
+    pub(crate) fn get(self) -> Token {
         self
     }
 }
@@ -270,7 +224,7 @@ impl Token {
 #[cfg(not(target_arch = "wasm32"))]
 impl Packed {
     #[inline]
-    fn get(self) -> Token {
+    pub(crate) fn get(self) -> Token {
         Token {
             tok: self.tok,
             start: self.start as usize,
@@ -304,39 +258,8 @@ fn describe(t: Tok) -> &'static str {
     }
 }
 
-/// A decimal number (digits, an optional `.` and more digits; no sign) as
-/// Q16.16, rounded to the nearest 1/65,536: how the compiler reads numbers,
-/// for the sliders' `a=` options too.
-pub fn number(s: &str) -> Option<i32> {
-    if s.is_empty()
-        || s == "."
-        || s.matches('.').count() > 1
-        || !s.bytes().all(|b| b.is_ascii_digit() || b == b'.')
-    {
-        return None;
-    }
-    let (int, frac) = s.split_once('.').unwrap_or((s, ""));
-    let mut v: i64 = 0;
-    for b in int.bytes() {
-        v = v * 10 + (b - b'0') as i64;
-        if v > 32767 {
-            return None;
-        }
-    }
-    // The fraction to 9 digits, rounded once.
-    let mut num: i64 = 0;
-    let mut den: i64 = 1;
-    for b in frac.bytes().take(9) {
-        num = num * 10 + (b - b'0') as i64;
-        den *= 10;
-    }
-    let f = (num * 65536 + den / 2) / den;
-    let r = (v << 16) + f;
-    (r <= i32::MAX as i64).then_some(r as i32)
-}
-
 #[inline(never)]
-fn lex(src: &str) -> Result<Vec<Packed>, Error> {
+pub(crate) fn lex(src: &str) -> Result<Vec<Packed>, Error> {
     if src.len() > u16::MAX as usize {
         return Err(Error::new(0, 0, "too long"));
     }
@@ -555,7 +478,7 @@ fn lex_into(src: &str, out: &mut Toks) -> Result<(), Error> {
                 "or" => Tok::Or,
                 "not" => Tok::Not,
                 w => {
-                    text |= first && text_line(w);
+                    text |= (first && text_line(w)) || w == "print";
                     Tok::Name
                 }
             };
@@ -698,7 +621,8 @@ fn quoted(src: &str, i: usize, out: &mut Toks) -> Result<usize, Error> {
             if matches!(ch, '\u{80}'..='\u{9f}') {
                 return Err(Error::new(j, j + n, "text in quotes can't have `<`, `>`, `\\` or a control character (a tab too) in it"));
             }
-            if matches!(ch, '\u{200b}'..='\u{200f}' | '\u{2028}' | '\u{2029}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}') {
+            if matches!(ch, '\u{200b}'..='\u{200f}' | '\u{2028}' | '\u{2029}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}')
+            {
                 // E969.
                 return Err(Error::new(
                     j,
@@ -836,6 +760,9 @@ fn sprite_rows(src: &str, i: usize, brace: usize, out: &mut Toks) -> usize {
 /// `name = …`, an assignment): where text in quotes may be. The first word,
 /// past anything but letters and digits, then anything but `=`.
 pub(crate) fn declaration_line(line: &str) -> bool {
+    if line.contains("print") {
+        return true;
+    }
     let b = line.as_bytes();
     let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
     let Some(a) = b.iter().position(|&c| word(c)) else {
@@ -865,7 +792,10 @@ pub fn compact(src: &str) -> String {
             let c = b[i];
             // `'"'`, `'-'`: a character in quotes is one token, as the lexer
             // reads it (before a comment or a quote).
-            if c == b'\'' && b.get(i + 2) == Some(&b'\'') && b.get(i + 1).is_some_and(|&x| (32..=126).contains(&x)) {
+            if c == b'\''
+                && b.get(i + 2) == Some(&b'\'')
+                && b.get(i + 1).is_some_and(|&x| (32..=126).contains(&x))
+            {
                 if space && !code.is_empty() {
                     code.push(' ');
                 }
@@ -1000,6 +930,19 @@ const CENTRED: [(u8, u8, u8); 6] = [
     (code::ATAN2, 8, 7), // 11: angle
 ];
 
+/// `f80` or `ff8800` as 0xRRGGBB.
+fn hex_colour(h: &str) -> Option<u32> {
+    let mut v = 0u32;
+    for c in h.chars() {
+        v = v << 4 | c.to_digit(16)?;
+    }
+    match h.len() {
+        3 => Some(((v >> 8) & 15) * 0x11_0000 + ((v >> 4) & 15) * 0x1100 + (v & 15) * 0x11),
+        6 => Some(v),
+        _ => None,
+    }
+}
+
 /// Optimal string alignment distance (edits, adjacent swaps count one),
 /// in three rolling rows of bytes (it runs at the deepest point of an
 /// error: a 25 × 25 table of words was 5 KB of stack there).
@@ -1013,19 +956,19 @@ fn distance(a: &str, b: &str) -> usize {
     for (j, v) in r[0].iter_mut().enumerate().take(b.len() + 1) {
         *v = j as u8;
     }
+    // Row i is written over row i-3 in place, read from the other two (no
+    // copies of rows: they were half this frame, at the deepest point).
     for i in 1..=a.len() {
-        let (prev2, prev) = (r[(i + 1) % 3], r[(i - 1) % 3]);
-        let mut cur = [0u8; 25];
-        cur[0] = i as u8;
+        let (p2, p, c) = ((i + 1) % 3, (i - 1) % 3, i % 3);
+        r[c][0] = i as u8;
         for j in 1..=b.len() {
             let cost = u8::from(a[i - 1] != b[j - 1]);
-            let mut v = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
+            let mut v = (r[p][j] + 1).min(r[c][j - 1] + 1).min(r[p][j - 1] + cost);
             if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
-                v = v.min(prev2[j - 2] + 1);
+                v = v.min(r[p2][j - 2] + 1);
             }
-            cur[j] = v;
+            r[c][j] = v;
         }
-        r[i % 3] = cur;
     }
     r[a.len() % 3][b.len()] as usize
 }
@@ -1083,9 +1026,14 @@ const K_SPLIT: u8 = 203;
 /// A `K_INPUT`'s `val` for `t` in a `loop forever` formula: wide slot 0.
 const WIDE_T: i32 = 0x100;
 
+/// E301, E708, E931, each followed by what makes the value vary
+/// (`Parser::varies_err`).
+const DRAW_ONLY: &str = "`draw { }` runs once a frame, before any pixel, but ";
+const CYCLE_ROW: &str = "`cycle` turns a whole row at once (by t, a frame value or py), but ";
+
 /// E901: a value that grows without end where it can't go.
-const GROWS: &str = "a value that grows without end (`t` in `loop forever`) can't go in here: \
-use frac(t*k), t % n, sin(t*k), noise(t*k, y, z), a comparison, min, max or smoothstep";
+const GROWS: &str = "`t` grows without end in `loop forever`, and this can't take it: \
+use frac(t*k), t % n, sin(t*k), noise(t*k, y, z), a comparison, min or max";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Node {
@@ -1184,7 +1132,9 @@ impl Dag {
         if self.nodes.len() == self.nodes.capacity() {
             let cap = self.nodes.capacity();
             let more = (cap / 2).max(16).min(MAX_NODES - cap);
-            self.nodes.try_reserve_exact(more).map_err(|_| no_memory())?;
+            self.nodes
+                .try_reserve_exact(more)
+                .map_err(|_| no_memory())?;
         }
         try_push(&mut self.nodes, n)?;
         let id = (self.nodes.len() - 1) as Id;
@@ -1458,6 +1408,49 @@ impl Dag {
             at,
         )
     }
+}
+
+/// What makes `id` vary as much as it does: the nearest value on the way
+/// down (breadth first, through the operands at `id`'s level) that `named`
+/// knows (a local's index), else the input there. For the errors that name
+/// the formula's own value and for the language service, never per frame.
+#[cold]
+#[inline(never)]
+fn cause(dag: &Dag, id: Id, named: &dyn Fn(Id) -> Option<usize>) -> (Option<usize>, Id) {
+    let lv = dag.level(id);
+    let mut q: Vec<Id> = Vec::new();
+    q.push(id);
+    let mut k = 0;
+    while k < q.len() && k < 256 {
+        let m = q[k];
+        k += 1;
+        if m != id {
+            if let Some(j) = named(m) {
+                return (Some(j), m);
+            }
+        }
+        let n = &dag.nodes[m as usize];
+        if n.code == K_INPUT || (code::U_R..=code::INKN).contains(&n.code) {
+            return (None, m);
+        }
+        let split = [n.a, n.b];
+        let more: &[Id] = if n.code == K_SPLIT { &split } else { &[] };
+        for x in reads(dag, m as usize).chain(more.iter().copied()) {
+            if dag.level(x) == lv && !q.contains(&x) {
+                q.push(x);
+            }
+        }
+    }
+    (None, id)
+}
+
+/// An input node's word and what it means (`seed` is not in [`INPUTS`]).
+fn input_word(n: &Node) -> (&'static str, &'static str) {
+    if n.code == K_INPUT && n.val == S_SEED as i32 {
+        return ("seed", "a new number each play");
+    }
+    let e = INPUTS[n.why as usize];
+    (e.0, e.2)
 }
 
 /// The compares the other way round (`a < b` is `b > a`).
@@ -1916,15 +1909,80 @@ impl Dag {
     }
 }
 
+/// Names from other languages (GLSL, Shadertoy, PICO-8) and what Psi has
+/// instead: an unknown name or function among them says so.
+const HABITS: &[(&str, &str)] = &[
+    ("pow", "Psi has no `pow`: multiply (`x*x*x`), or `sqrt(v)`"),
+    ("exp", "Psi has no `exp`: try `smoothstep(e0, e1, v)` or a palette for a curve"),
+    ("log", "Psi has no `log`: try `sqrt(v)` or `smoothstep(e0, e1, v)` for a curve"),
+    ("mod", "`a % b` is the remainder (floored: `-1 % 3` is 2)"),
+    ("fmod", "`a % b` is the remainder (floored: `-1 % 3` is 2)"),
+    ("atan", "`atan2(dy, dx)` is the angle, in turns (0 to 1)"),
+    ("lerp", "`mix(a, b, k)` goes from a to b as k goes from 0 to 1"),
+    ("saturate", "`clamp(v, 0, 1)` holds it to 0..1"),
+    ("length", "`len(dx, dy)` is the distance"),
+    ("distance", "`len(x1 - x0, y1 - y0)` is the distance"),
+    ("vec2", "Psi has no vectors: work out each value on its own and end with `rgb(r, g, b)`"),
+    ("vec3", "Psi has no vectors: work out each value on its own and end with `rgb(r, g, b)` or `#rrggbb`"),
+    ("vec4", "Psi has no vectors: work out each value on its own and end with `rgb(r, g, b)`"),
+    ("texture", "the picture under the formula is `under(x, y)` (a colour), or `ur ug ub ul` at the pixel"),
+    ("random", "`hash(a, b)` is random 0 to 1 (the same for the same a, b), `noise(x, y, z)` smooth random hills"),
+    ("rand", "`hash(a, b)` is random 0 to 1 (the same for the same a, b), `noise(x, y, z)` smooth random hills"),
+    ("rnd", "`hash(a, b)` is random 0 to 1 (the same for the same a, b): the frame's `t` in it changes it each frame"),
+    ("iTime", "`t` is the time, in seconds into the loop"),
+    ("time", "`t` is the time, in seconds into the loop"),
+    ("u_time", "`t` is the time, in seconds into the loop"),
+    ("fragCoord", "`px`, `py` are the pixel (0..127 across, 0..31 down from the top); `x`, `y` the same from 0 to 1"),
+    ("gl_FragCoord", "`px`, `py` are the pixel (0..127 across, 0..31 down from the top); `x`, `y` the same from 0 to 1"),
+    ("uv", "`x`, `y` go from 0 to 1 across and down the panel; `cx`, `cy` are centred"),
+    ("iResolution", "the panel is 128 × 32: `px` 0..127, `py` 0..31, `w` and `h` its size"),
+    ("resolution", "the panel is 128 × 32: `px` 0..127, `py` 0..31, `w` and `h` its size"),
+    ("PI", "angles are turns: `sin(v)` goes round once as v goes from 0 to 1, so there is no pi"),
+    ("pi", "angles are turns: `sin(v)` goes round once as v goes from 0 to 1, so there is no pi"),
+    ("TAU", "angles are turns: `sin(v)` goes round once as v goes from 0 to 1, so there is no tau"),
+    ("tau", "angles are turns: `sin(v)` goes round once as v goes from 0 to 1, so there is no tau"),
+    ("color", "a colour is `#rrggbb`, `rgb(r, g, b)`, `hsv(h, s, v)`, `pal(P, v)` or `gray(v)`, on the last line"),
+    ("colour", "a colour is `#rrggbb`, `rgb(r, g, b)`, `hsv(h, s, v)`, `pal(P, v)` or `gray(v)`, on the last line"),
+    ("if", "`if c { … }` is for lines that draw, inside `draw { }`; for a value write `c ? a : b`"),
+    ("else", "`if c { … } else { … }` is for lines that draw; for a value write `c ? a : b`"),
+    ("true", "a comparison is 1 or 0: write 1"),
+    ("false", "a comparison is 1 or 0: write 0"),
+];
+
 // --- the parser -------------------------------------------------------------------
 
-/// Tokens read again for parts drawn at other places (`p(x', y')`, each
-/// reading all the part's text, parts in it included), in all: bounds
-/// compile time whatever the nesting.
-const MAX_WORK: usize = 1536;
-/// What a part's level of nesting counts against [`MAX_DEPTH`] (with the
-/// brackets and operators around it): bounds the parser's stack.
-const PART_DEPTH: usize = 3;
+/// Tokens read again for function calls (each reading the function's
+/// text, the calls in it included), in all: bounds the compile's time
+/// whatever the nesting (64 Ki tokens read again take ~10 ms in the
+/// browser).
+const MAX_WORK: usize = 65536;
+
+/// `fn NAME(a, b) = value` or `fn NAME(a, b) { … }`: a function, read
+/// again (its tokens `body..end`) with its values bound at each call.
+#[derive(Clone)]
+struct Func<'s> {
+    name: &'s str,
+    /// Where its name is.
+    at: usize,
+    /// Its values' names, and where each is written.
+    params: Vec<(&'s str, usize)>,
+    body: usize,
+    end: usize,
+    /// `{ … }`: lines (names set, then its value; or lines that draw,
+    /// called on a line of their own in draw).
+    block: bool,
+    /// Where its last line starts, and what it is: [`F_VALUE`], a colour
+    /// read by channel (`#…`, `rgb(…)`, `under`: [`F_CHANNELS`]) or a whole
+    /// colour (`hsv(…)`, `pal(…)`, `gray(…)`: [`F_WHOLE`]).
+    last: usize,
+    colour: u8,
+}
+
+const F_VALUE: u8 = 0;
+const F_CHANNELS: u8 = 1;
+const F_WHOLE: u8 = 2;
+/// Its last line draws (`pset(…)`, `for`, `if`): called only in draw.
+const F_DRAWS: u8 = 3;
 
 struct Local<'s> {
     name: &'s str,
@@ -1935,6 +1993,8 @@ struct Local<'s> {
     in_frame: bool,
     /// A `for` loop's counter (it can't be set).
     counter: bool,
+    /// A `control` line's name (it keeps it: E203).
+    control: bool,
     /// The scope it was set in ([`Parser::scopes`]).
     scope: u16,
 }
@@ -1954,6 +2014,12 @@ struct Palette<'s> {
     at: usize,
     scope: u16,
     j: usize,
+    /// Its colours, and where its entries are written (tokens `from..to`:
+    /// a name may come before a colour, `kerb #806`; `NAME.kerb` finds it
+    /// there).
+    n: u16,
+    from: u32,
+    to: u32,
 }
 
 /// `sprite NAME { … }`: its header is `Parser::tables[start]`.
@@ -1979,38 +2045,16 @@ enum DItem {
     End,
     Line([Id; 6]),
     Dot([Id; 3]),
+    /// A paint primitive (`program::paint`): its values, how many.
+    Paint(u8, [Id; 9], u8),
+    If(Id),
+    Else,
+    EndIf,
 }
 
-/// `part name { … }`: another formula inside this one, pasted in, with
-/// names of its own. Its tokens (`body`, just after `{`, to `end`, its `}`)
-/// are read where it is written and again for each place it is drawn at.
-struct Part<'s> {
-    name: &'s str,
-    at: usize,
-    scope: u16,
-    body: usize,
-    end: usize,
-    /// Its own loop (Q16 seconds; 8 when it sets none, as alone).
-    loop_v: i32,
-    insts: Vec<Inst>,
-}
-
-/// A part read at one place (`None`: where the pixel is): its scope (the
-/// values it sets, `p.v`, are the locals set there), its colours and
-/// whether they are layers.
-struct Inst {
-    at: Option<(Id, Id)>,
-    scope: u16,
-    colours: Vec<Colour>,
-    layered: bool,
-}
-
-/// What `x y px py i t` mean where the parser is: inside a part drawn
-/// elsewhere, the place it is drawn at, and its own time.
+/// Where the parser is: the formula's loop, and the channel being read.
 #[derive(Clone, Copy)]
 struct Env {
-    at: Option<(Id, Id)>,
-    t: Option<Id>,
     loop_v: i32,
     /// In a colour expression, the channel being read (0 red, 1 green, 2
     /// blue: `#f80` is that channel's value, `rgb(r, g, b)` that value);
@@ -2021,6 +2065,18 @@ struct Env {
 const NO_CH: u8 = 3;
 /// Inside `rgb(r, g, b)`'s values (for the error a colour there gets).
 const IN_RGB: u8 = 4;
+
+/// What a name is being set as ([`Parser::new_name`]): a value (set
+/// again, or shadowing one from outside, as often as you like), a loop
+/// counter (may shadow a value), a control, or a part, table, sprite or
+/// palette (a name of their own).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Naming {
+    Value,
+    Counter,
+    Control,
+    Thing,
+}
 
 struct Parser<'s> {
     src: &'s str,
@@ -2034,7 +2090,6 @@ struct Parser<'s> {
     /// layer's sees the names around it.
     scope: u16,
     scopes: Vec<(u16, bool)>,
-    parts: Vec<Part<'s>>,
     env: Env,
     work: usize,
     /// `table` entries (Q16.16; the same run of numbers is stored once) and
@@ -2053,6 +2108,14 @@ struct Parser<'s> {
     /// in loops), the loops' counts around it, loops numbered so far, and
     /// loop turns a frame.
     draw: Vec<DItem>,
+    /// The formula's functions, and the ones being read (a function can't
+    /// call itself).
+    funcs: Vec<Func<'s>>,
+    calling: Vec<usize>,
+    /// The paint palette (0x00RRGGBB; entry 0 none) and where a palette's
+    /// 32 entries start in it (palette id, start).
+    paint: Vec<u32>,
+    paint_pals: Vec<(u8, u8)>,
     drawn: Option<Token>,
     record: bool,
     in_draw: u8,
@@ -2072,6 +2135,12 @@ struct Parser<'s> {
     decls_seen: Vec<(usize, usize)>,
     #[cfg(feature = "syntax")]
     sink: Option<&'s mut (dyn crate::syntax::Sink + 's)>,
+    /// The language service's notes (`Sink::note`: place, text) and each
+    /// recorded draw loop's place (`for` to its count).
+    #[cfg(feature = "syntax")]
+    notes: Vec<(usize, usize, String, Id)>,
+    #[cfg(feature = "syntax")]
+    loop_at: Vec<(usize, usize)>,
 }
 
 /// What the declarations said, while compiling: the program's [`Meta`],
@@ -2126,6 +2195,12 @@ struct Colour {
     scale: Option<Id>,
 }
 
+/// A colour's palette flag: `cycle(P, v, s)`, its turn (a `code::TURN`
+/// node) in `args[1]` (`pal` is P | this until `finish` gives the turned
+/// palette its slot). In the colour itself, so a colour stays its size
+/// (parts hold many: the compile's heap).
+const TURNED: u8 = 0x40;
+
 /// What a formula's or a part's lines come to: its colours, bottom to top
 /// (the last line's, or its layers'), the line that made the top one,
 /// whether they are layers, `layer` blocks written, and its `loop`.
@@ -2137,6 +2212,8 @@ struct Body {
     loop_v: Option<i32>,
     /// `fps N`: the frame time it asks for, ms (10, 20 or 40).
     fps: Option<u8>,
+    /// `layer rate N { }`: each such layer's colour (its index) and N.
+    rates: Vec<(usize, u8)>,
 }
 
 const BP_TERNARY: u8 = 1;
@@ -2295,15 +2372,7 @@ impl<'s> Parser<'s> {
     #[inline(never)]
     fn too_deep(&self) -> Error {
         let t = self.peek();
-        // Inside parts, their nesting counts too.
-        self.fail(
-            t,
-            if self.scopes.iter().any(|s| s.1) {
-                "parts go too deep here — take one out of another"
-            } else {
-                "this is nested too deeply — split it into named steps"
-            },
-        )
+        self.fail(t, "this is nested too deeply — split it into named steps")
     }
 
     #[cold]
@@ -2345,6 +2414,9 @@ impl<'s> Parser<'s> {
                 Tok::Name if self.peek().tok == Tok::LParen && self.text(t) == "pick" => {
                     self.pick(t)?
                 }
+                Tok::Name if self.env.ch < NO_CH && self.text(t) == "under" && self.lookup_local("under").is_none() && self.func_named("under").is_none() => {
+                    self.under_atom(t)?
+                }
                 Tok::Name => self.name(t)?,
                 Tok::Hex(v) if self.env.ch < NO_CH => self.dag.constant(
                     fixed::byte((v >> (16 - 8 * self.env.ch as u32)) as u8),
@@ -2353,18 +2425,24 @@ impl<'s> Parser<'s> {
                 Tok::Hex(_) => return self.err(
                     t,
                     if self.env.ch == IN_RGB {
-                        "inside `rgb(r, g, b)` the three are values, not colours: \
-                         write the colour on its own (`#f80`, `#f80 * k`)"
+                        "`rgb(r, g, b)` takes three numbers, not colours: write a colour alone, as `#f80 * k`"
                     } else {
-                        "a colour can't be a value: use it in the colour itself (the last line), \
-                         as `#f80`, `#f80 * k`, `mix(#000, #f80, k)` or `rgb(#f80, k)`"
+                        "`#…` is a colour, not a number: use it on the last line, as `#f80 * k` or `mix(#000, #f80, k)`"
                     },
                 ),
                 _ => return Err(self.no_value(t)),
             };
+        // (The language service's: the operator before and its right-hand
+        // side's place, for the split note.)
+        #[cfg(feature = "syntax")]
+        let mut prev: Option<(Token, (usize, usize), Id, Id)> = None;
         loop {
             let op = self.peek();
             if op.tok == Tok::Question {
+                #[cfg(feature = "syntax")]
+                {
+                    prev = None;
+                }
                 if BP_TERNARY < min_bp {
                     break;
                 }
@@ -2383,14 +2461,31 @@ impl<'s> Parser<'s> {
                 break;
             }
             self.next();
+            #[cfg(feature = "syntax")]
+            let rs = self.peek().start;
             let rhs = self.expr(rbp)?;
+            #[cfg(feature = "syntax")]
+            let span = (rs, self.toks[self.pos - 1].get().end);
+            #[cfg(feature = "syntax")]
+            let note = prev
+                .take()
+                .and_then(|p| self.split_note(t.start, p, (op, span, lhs, rhs)));
+            #[cfg(feature = "syntax")]
+            let before = lhs;
             lhs = self.dag.op(c, [lhs, rhs, 0], (op.start, op.end))?;
+            #[cfg(feature = "syntax")]
+            {
+                if let Some((a, b, text)) = note {
+                    self.notes.push((a, b, text, lhs));
+                }
+                prev = Some((op, span, before, rhs));
+            }
         }
         Ok(lhs)
     }
 
     /// Whether names set in `scope` can be seen here: this scope's and its
-    /// parents', up to the part it is in (a part sees nothing outside it).
+    /// parents'.
     fn visible(&self, scope: u16) -> bool {
         let mut s = self.scope;
         loop {
@@ -2403,13 +2498,6 @@ impl<'s> Parser<'s> {
             }
             s = parent;
         }
-    }
-
-    #[inline(never)]
-    fn part_named(&self, name: &str) -> Option<usize> {
-        self.parts
-            .iter()
-            .rposition(|p| p.name == name && self.visible(p.scope))
     }
 
     /// The candidates for a misspelt value name.
@@ -2427,18 +2515,33 @@ impl<'s> Parser<'s> {
             )
     }
 
+    /// [`Self::name`] as a call of its own, for `pick`'s rare part (inlined
+    /// there it made `pick`'s frame, on the recursive path too, bigger).
+    #[inline(never)]
+    fn name_out_of_line(&mut self, t: Token) -> Result<Id, Error> {
+        self.name(t)
+    }
+
+    /// A name where a value goes: a part's value, a special form, a table,
+    /// a function call or a value. Inlined into `expr` (its one caller on
+    /// the recursive path): a frame of its own between `expr` and `args` was
+    /// ~100 B of the compile stack per level of nesting, ×[`MAX_DEPTH`].
+    #[inline(always)]
     fn name(&mut self, t: Token) -> Result<Id, Error> {
         let name = self.text(t);
         let at = (t.start, t.end);
         #[cfg(feature = "syntax")]
         self.note_read(t);
-        if let Some(k) = self.part_named(name) {
-            return self.part_value(t, k);
+        if let Some(r) = self.special(t, name) {
+            return r;
         }
         if self.reads_table(name) {
             return self.table_read(t);
         }
         if self.peek().tok == Tok::LParen {
+            if let Some(k) = self.func_named(name) {
+                return self.call_value(t, k);
+            }
             if name == "rgb" && self.env.ch < NO_CH {
                 return self.rgb_channel();
             }
@@ -2496,18 +2599,18 @@ impl<'s> Parser<'s> {
         let msg = if self.peek().tok == Tok::LParen {
             if self.env.ch < NO_CH && COLOURS.iter().any(|e| e.0 == name) {
                 format!(
-                    "in a sum with colours only `#…` and `rgb(r, g, b)` are colours: \
-                     `{name}(…)` can only be a whole line of its own"
+                    "`{name}(…)` is a whole colour: it can't be added to others (only `#…` and `rgb(r, g, b)` can)"
                 )
             } else if COLOURS.iter().any(|e| e.0 == name) {
                 format!(
-                    "`{name}(…)` makes the colour, so it can only be the whole last line \
-                     (of the formula, or of a layer)"
+                    "`{name}(…)` is a whole colour: it can only be the last line (of the formula or a layer)"
                 )
             } else if PRIMITIVES.contains(&name) {
                 format!("`{name}(…)` draws: it goes on a line of its own inside `draw {{ }}`")
             } else if self.lookup_value(name).is_some() {
                 format!("`{name}` is a value, not a function")
+            } else if let Some(&(_, hint)) = HABITS.iter().find(|e| e.0 == name) {
+                format!("unknown function `{name}` — {hint}")
             } else {
                 let s = suggest(
                     name,
@@ -2523,6 +2626,8 @@ impl<'s> Parser<'s> {
             format!("`{name}` is a palette: use it as `pal({name}, k)` on the last line")
         } else if FONTS.iter().any(|e| e.0 == name) {
             format!("`{name}` is a font: use it as `digit(n, x, y, {name})`")
+        } else if let Some(&(_, hint)) = HABITS.iter().find(|e| e.0 == name) {
+            format!("unknown name `{name}` — {hint}")
         } else {
             let s = suggest(name, self.value_names());
             format!("unknown name `{name}`{}", did_you_mean(s))
@@ -2530,13 +2635,66 @@ impl<'s> Parser<'s> {
         self.fail_at(t, msg)
     }
 
+    /// The special forms read where a name is: `ink(n)` (unless the
+    /// formula set `ink`) and a palette's `NAME.colour`. Out of line: `name`
+    /// is on the parser's deepest path (the firmware's compile stack).
+    #[inline(never)]
+    fn special(&mut self, t: Token, name: &str) -> Option<Result<Id, Error>> {
+        match self.peek().tok {
+            Tok::LParen if name == "ink" && self.lookup_local(name).is_none() => {
+                Some(self.ink_levels(t))
+            }
+            Tok::Dot => {
+                let k = self.palette_named(name)?;
+                Some(self.palette_entry(t, k))
+            }
+            _ => None,
+        }
+    }
+
+    /// `ink(n)` at `t` (`ink`): the canvas in `n` levels, 1..=255, a
+    /// whole number (`INKN`, never folded: it reads the canvas).
+    #[inline(never)]
+    fn ink_levels(&mut self, t: Token) -> Result<Id, Error> {
+        // E214.
+        const HOW: &str =
+            "`ink(n)` takes a whole number from 1 to 255: `ink(16)` is the canvas in 16 levels";
+        self.next();
+        let num = self.next();
+        let close = self.next();
+        let n = match (num.tok, close.tok) {
+            (Tok::Num(v), Tok::RParen) if v & 0xffff == 0 && (ONE..=255 * ONE).contains(&v) => v,
+            _ => return self.err(num, HOW),
+        };
+        let at = (t.start, close.end);
+        let c = self.dag.constant(n, at)?;
+        let why = INPUTS.iter().position(|e| e.1 == Input::Ink).unwrap_or(0) as u8;
+        self.dag.push(
+            Node {
+                code: code::INKN,
+                a: c,
+                b: 0,
+                c: 0,
+                val: 0,
+                level: LV_PIXEL,
+                why,
+            },
+            at,
+        )
+    }
+
+    /// The formula's own value `name` seen here (the latest set).
+    fn lookup_local(&self, name: &str) -> Option<&Local<'s>> {
+        self.locals
+            .iter()
+            .rev()
+            .find(|l| l.name == name && self.visible(l.scope))
+    }
+
     #[inline(never)]
     fn lookup_value(&mut self, name: &str) -> Option<Result<Id, Error>> {
-        if let Some(l) = self
-            .locals
-            .iter()
-            .find(|l| l.name == name && self.visible(l.scope))
-        {
+        // (The latest: a name may be set again, or shadow one from outside.)
+        if let Some(l) = self.lookup_local(name) {
             return Some(Ok(l.id));
         }
         if let Some(&(_, inp, _)) = INPUTS.iter().find(|e| e.0 == name) {
@@ -2565,14 +2723,27 @@ impl<'s> Parser<'s> {
         for (i, &(c, a, b)) in CENTRED.iter().enumerate() {
             v[6 + i] = self.dag.op(c, [v[a as usize], v[b as usize], 0], (0, 0))?;
         }
-        Ok(v[7 + k])
+        // cx, cy, r, angle (step 9, `ty`, is no name: rows count down).
+        Ok(v[7 + [0, 1, 3, 4][k]])
     }
 
-    /// A built-in value here: inside a part, its own `t`, and where it is
-    /// drawn — `px = floor(x·127 + ½)`, `py = floor(y·31 + ½)`, `i = (31 −
-    /// py)·128 + px`, as on the panel (`x = px/127`).
+    /// A built-in value here. Where the formula has set `x` or `y` (or a
+    /// function names its values `x, y`), what comes from them follows:
+    /// `px = floor(x·127 + ½)`, `py = floor(y·31 + ½)`, `i = py·128 + px`,
+    /// as on the panel (`x = px/127`), and `cx cy r angle`.
     #[inline(never)]
     fn input(&mut self, inp: Input) -> Result<Id, Error> {
+        if matches!(inp, Input::X | Input::Y | Input::Px | Input::Py | Input::I) {
+            let own = |p: &Self, n: &str| {
+                p.lookup_local(n)
+                    .filter(|l| !l.control && !l.counter)
+                    .map(|l| l.id)
+            };
+            let (x, y) = (own(self, "x"), own(self, "y"));
+            if x.is_some() || y.is_some() {
+                return self.moved(inp, x, y);
+            }
+        }
         let at = (0, 0);
         // A declared control's slot reads as the value its line made (the
         // input held to its range).
@@ -2585,11 +2756,21 @@ impl<'s> Parser<'s> {
         if let Some(d) = self.decl.as_ref().filter(|d| k < 3 && d.slots[k] != NO) {
             return Ok(d.slots[k]);
         }
-        if let (Input::T, Some(t)) = (inp, self.env.t) {
-            return Ok(t);
-        }
-        let Some((x, y)) = self.env.at else {
-            return self.dag.input(inp, at);
+        self.dag.input(inp, at)
+    }
+
+    /// [`input`](Self::input)'s `x y px py i` from the formula's own `x`
+    /// or `y` (the built-in where it set only the other).
+    #[inline(never)]
+    fn moved(&mut self, inp: Input, x: Option<Id>, y: Option<Id>) -> Result<Id, Error> {
+        let at = (0, 0);
+        let x = match x {
+            Some(x) => x,
+            None => self.dag.input(Input::X, at)?,
+        };
+        let y = match y {
+            Some(y) => y,
+            None => self.dag.input(Input::Y, at)?,
         };
         let grid = |p: &mut Self, v: Id, n: i32| -> Result<Id, Error> {
             let k = p.dag.constant(n << 16, at)?;
@@ -2603,20 +2784,19 @@ impl<'s> Parser<'s> {
             Input::Y => Ok(y),
             Input::Px => grid(self, x, W as i32 - 1),
             Input::Py => grid(self, y, H as i32 - 1),
-            Input::I => {
+            _ => {
                 let px = grid(self, x, W as i32 - 1)?;
                 let py = grid(self, y, H as i32 - 1)?;
-                let top = self.dag.constant((H as i32 - 1) << 16, at)?;
                 let w = self.dag.constant((W as i32) << 16, at)?;
-                let row = self.dag.op(code::SUB, [top, py, 0], at)?;
-                let r = self.dag.op(code::MUL, [row, w, 0], at)?;
+                let r = self.dag.op(code::MUL, [py, w, 0], at)?;
                 self.dag.op(code::ADD, [r, px, 0], at)
             }
-            _ => self.dag.input(inp, at),
         }
     }
 
-    /// `( a, b, … )` with exactly `n` values.
+    /// `( a, b, … )` with exactly `n` values. Always inlined: as a frame of
+    /// its own (64 B on the ESP32) it sat in `expr`'s recursion.
+    #[inline(always)]
     fn args(&mut self, f: Token, name: &str, n: usize) -> Result<[Id; 3], Error> {
         let (a, _) = self.args_or_cover(f, name, n, false)?;
         Ok([a[0], a[1], a[2]])
@@ -2632,7 +2812,13 @@ impl<'s> Parser<'s> {
         n: usize,
         cover: bool,
     ) -> Result<([Id; 4], usize), Error> {
-        let open = self.expect(Tok::LParen, "`(`")?;
+        // `expect` by hand: its `Result<Token, Error>` was a slot in this
+        // frame, on the recursive path (as in `glyph_args`).
+        let open = self.peek();
+        if open.tok != Tok::LParen {
+            return Err(self.expected(open, "`(`"));
+        }
+        self.next();
         let mut out = [0 as Id; 4];
         let mut k = 0;
         if self.peek().tok != Tok::RParen {
@@ -2664,15 +2850,21 @@ impl<'s> Parser<'s> {
     /// frames stay small).
     #[inline(never)]
     fn pick(&mut self, t: Token) -> Result<Id, Error> {
-        if self.part_named("pick").is_some() {
-            return self.name(t);
+        if self.func_named("pick").is_some() {
+            return self.name_out_of_line(t);
         }
         let open = self.next();
         let k = self.expr(0)?;
         let mut v = Vec::new();
+        #[cfg(feature = "syntax")]
+        let mut spans = Vec::new();
         while self.peek().tok == Tok::Comma {
             self.next();
+            #[cfg(feature = "syntax")]
+            let st = self.peek().start;
             v.push(self.expr(0)?);
+            #[cfg(feature = "syntax")]
+            spans.push((st, self.toks[self.pos - 1].get().end));
         }
         let close = self.peek();
         if close.tok != Tok::RParen {
@@ -2685,14 +2877,25 @@ impl<'s> Parser<'s> {
                 "`pick` takes a number, then the values to pick from: `pick(k, a, b, …)`",
             );
         }
-        self.dag.pick(k, v, (t.start, t.end))
+        #[cfg(feature = "syntax")]
+        let note = self.pick_note(t, k, &v, &spans);
+        let id = self.dag.pick(k, v, (t.start, t.end))?;
+        #[cfg(feature = "syntax")]
+        if let Some((a, b, text)) = note {
+            self.notes.push((a, b, text, id));
+        }
+        Ok(id)
     }
 
     /// `digit(n, x, y)` / `glyph(c, x, y)`, with a font (`, small`, …)
     /// last if you like: the three values and the font.
     #[inline(never)]
     fn glyph_args(&mut self, f: Token, name: &str) -> Result<([Id; 3], u8), Error> {
-        let open = self.expect(Tok::LParen, "`(`")?;
+        let open = self.peek();
+        if open.tok != Tok::LParen {
+            return Err(self.expected(open, "`(`"));
+        }
+        self.next();
         let mut out = [0 as Id; 3];
         let (mut k, mut font_of) = (0, tables::NORMAL);
         if self.peek().tok != Tok::RParen {
@@ -2773,12 +2976,7 @@ impl<'s> Parser<'s> {
     #[inline(never)]
     fn arity(&self, f: Token, close: Token, name: &str, n: usize, k: usize, cover: bool) -> Error {
         let s = if n == 1 { "" } else { "s" };
-        // A part: where to draw it.
-        let what = if self.part_named(name).is_some() {
-            ", where to draw it (x, y)"
-        } else {
-            ""
-        };
+        let what = "";
         let msg = if cover {
             format!(
                 "`{name}` takes {n} value{s}{what} (or {}: the last is how much of the pixel it covers, 0 to 1), but got {k}",
@@ -2793,6 +2991,7 @@ impl<'s> Parser<'s> {
     /// The colour call at `t` (its name): `rgb(r, g, b)`, `hsv(h, s, v)`,
     /// `pal(name, k)`, `gray(v)`.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn colour(&mut self, t: Token) -> Result<Colour, Error> {
         let name = self.text(t);
         let &(_, ar, c) = COLOURS.iter().find(|e| e.0 == name).unwrap_or(&COLOURS[0]);
@@ -2831,12 +3030,17 @@ impl<'s> Parser<'s> {
                 scale: None,
             });
         }
+        let cycle = name == "cycle";
         self.expect(Tok::LParen, "`(`")?;
         let p = self.peek();
         if p.tok != Tok::Name {
             return self.err(
                 p,
-                "the first value of `pal` is a palette: fire, ocean, ice, chrono, amber, rainbow or gray",
+                if cycle {
+                    "the first value of `cycle` is a palette: fire, ocean, ice, chrono, amber, rainbow or one of yours"
+                } else {
+                    "the first value of `pal` is a palette: fire, ocean, ice, chrono, amber, rainbow or gray"
+                },
             );
         }
         self.next();
@@ -2847,8 +3051,56 @@ impl<'s> Parser<'s> {
         let Some(pal) = PALETTES.iter().find(|e| e.0 == pname).map(|e| e.1).or(own) else {
             return Err(self.unknown_palette(p));
         };
-        self.expect(Tok::Comma, "`,` (as in `pal(fire, k)`)")?;
-        let k = self.expr(0)?;
+        if cycle && pal == 255 {
+            // E932.
+            return self.err(
+                p,
+                "`cycle` turns a palette of colours, and gray is not one: write your own, `palette g = #000, #fff`",
+            );
+        }
+        self.expect(
+            Tok::Comma,
+            if cycle {
+                "`,` (as in `cycle(fire, v, t/4)`)"
+            } else {
+                "`,` (as in `pal(fire, k)`)"
+            },
+        )?;
+        let mut k = self.expr(0)?;
+        let mut turn = None;
+        if cycle {
+            self.expect(Tok::Comma, "`,` and the turn (as in `cycle(fire, v, t/4)`)")?;
+            let st = self.peek();
+            let s = self.expr(0)?;
+            let at = (
+                st.start,
+                self.toks[self.pos.saturating_sub(1)].get().end.max(st.end),
+            );
+            if self.dag.level(s) == LV_PIXEL {
+                // E931.
+                return Err(self.varies_err(at, CYCLE_ROW, s));
+            }
+            // The entry is (floor(v·32) + floor(s·32)) mod 32: the fraction
+            // of each is all it reads (a value that grows without end too).
+            let s = if self.dag.grows(s) {
+                self.dag.op(code::FRAC, [s, 0, 0], at)?
+            } else {
+                s
+            };
+            k = self.dag.op(code::FRAC, [k, 0, 0], at)?;
+            turn = Some(self.dag.push(
+                Node {
+                    code: code::TURN,
+                    a: s,
+                    b: 0,
+                    c: 0,
+                    val: i32::from(pal),
+                    level: LV_ROW,
+                    why: 0,
+                },
+                at,
+            )?);
+        }
         let mut alpha = None;
         if self.peek().tok == Tok::Comma {
             self.next();
@@ -2859,7 +3111,8 @@ impl<'s> Parser<'s> {
             return self.err(
                 close,
                 format!(
-                    "`pal` takes a palette and one value (and how much of the pixel it covers, 0 to 1, if you like); found {}",
+                    "`{name}` takes a palette{} (and how much of the pixel it covers, 0 to 1, if you like); found {}",
+                    if cycle { ", the picture and the turn" } else { " and one value" },
                     self.found(close)
                 ),
             );
@@ -2872,8 +3125,8 @@ impl<'s> Parser<'s> {
         };
         Ok(Colour {
             code,
-            args: [k, 0, 0],
-            pal,
+            args: [k, turn.unwrap_or(0), 0],
+            pal: if turn.is_some() { pal | TURNED } else { pal },
             alpha,
             blend: fixed::BLEND_OVER,
             scale: None,
@@ -2892,6 +3145,17 @@ impl<'s> Parser<'s> {
                 Tok::Name if self.toks[k + 1].get().tok == Tok::LParen && self.text(t) == "rgb" => {
                     return true
                 }
+                Tok::Name if self.text(t) == "under" && self.lookup_local("under").is_none() => {
+                    return true
+                }
+                Tok::Name
+                    if self.toks[k + 1].get().tok == Tok::LParen
+                        && self
+                            .func_named(self.text(t))
+                            .is_some_and(|f| self.funcs[f].colour == F_CHANNELS) =>
+                {
+                    return true
+                }
                 Tok::LParen => depth += 1,
                 Tok::RParen if depth > 0 => depth -= 1,
                 Tok::Comma if depth > 0 || !arg => {}
@@ -2900,6 +3164,45 @@ impl<'s> Parser<'s> {
             }
             k += 1;
         }
+    }
+
+    /// `under` (the picture under the formula at this pixel) or `under(x,
+    /// y)` (at pixel x, y), in a colour expression: the channel read now.
+    #[inline(never)]
+    fn under_atom(&mut self, t: Token) -> Result<Id, Error> {
+        let inp = [Input::Ur, Input::Ug, Input::Ub][(self.env.ch as usize).min(2)];
+        if self.peek().tok != Tok::LParen {
+            return self.input(inp);
+        }
+        let open = self.next();
+        let x = self.expr(0)?;
+        self.expect(Tok::Comma, "`,` (as in `under(px + 1, py)`)")?;
+        let y = self.expr(0)?;
+        let close = self.peek();
+        if close.tok != Tok::RParen {
+            return Err(self.not_closed(open, close, "under"));
+        }
+        self.next();
+        let (mut level, mut why) = (LV_PIXEL, 0);
+        for v in [x, y] {
+            let m = &self.dag.nodes[v as usize];
+            if m.level > level {
+                (level, why) = (m.level, m.why);
+            }
+        }
+        let _ = level;
+        self.dag.push(
+            Node {
+                code: code::UAT,
+                a: x,
+                b: y,
+                c: self.env.ch as Id,
+                val: 0,
+                level: LV_PIXEL,
+                why,
+            },
+            (t.start, close.end),
+        )
     }
 
     /// A colour expression at the cursor, read once for each channel: its
@@ -3009,28 +3312,20 @@ impl<'s> Parser<'s> {
         }
     }
 
-    /// A name about to be set at `t` (a value or a part): not a built-in,
-    /// and not one already set here.
-    fn new_name(&self, t: Token) -> Result<&'s str, Error> {
+    /// A name about to be set at `t` as `kind`: not a built-in, not a
+    /// loop counter, and for anything but a value or a counter (which may
+    /// set a name again, or shadow one from outside: the latest is read)
+    /// not a name already set here (E203).
+    fn new_name(&self, t: Token, kind: Naming) -> Result<&'s str, Error> {
         let name = self.text(t);
-        // (`ink` came after formulas were saved: a name set with it is that
-        // name, as `cx` and the rest.)
-        if let Some(e) = INPUTS.iter().find(|e| e.0 == name && e.0 != "ink") {
+        // A built-in value or function's name may be the formula's own (it
+        // then reads as the formula's; a call is still the function): only
+        // the keywords are not names.
+        if KEYWORDS.contains(&name) {
             return self.err(
                 t,
-                format!("`{name}` is built in ({}); pick another name", e.2),
+                format!("`{name}` is a word of the language; pick another name"),
             );
-        }
-        // Functions added after formulas were saved stay settable names
-        // (a call is still the function): a saved `glyph = …` compiles.
-        if CONSTS.iter().any(|e| e.0 == name)
-            || FUNCS
-                .iter()
-                .any(|e| e.0 == name && !LATER_FUNCS.contains(&name))
-            || COLOURS.iter().any(|e| e.0 == name)
-            || KEYWORDS.contains(&name)
-        {
-            return self.err(t, format!("`{name}` is built in; pick another name"));
         }
         if PALETTES.iter().any(|e| e.0 == name) {
             return self.err(
@@ -3038,35 +3333,43 @@ impl<'s> Parser<'s> {
                 format!("`{name}` is a palette's name; pick another name"),
             );
         }
-        let local = self
-            .locals
-            .iter()
-            .find(|l| l.name == name && self.visible(l.scope));
-        if local.is_some_and(|l| l.counter) {
+        let local = self.lookup_local(name);
+        if kind == Naming::Value && local.is_some_and(|l| l.counter) {
             return self.err(t, format!("`{name}` is a loop counter: it can't be set"));
         }
-        let prev = local
-            .map(|l| l.at)
-            .or(self.part_named(name).map(|k| self.parts[k].at))
-            .or(self.table_named(name).map(|k| self.table_names[k].at))
-            .or(self.sprite_named(name).map(|k| self.sprites[k].at))
-            .or(self.palette_named(name).map(|k| self.palette_names[k].at));
-        if let Some(at) = prev {
-            return self.err(
-                t,
-                format!(
-                    "`{name}` is already set on line {} — each name can be set once",
-                    self.line_of(at)
-                ),
-            );
-        }
-        Ok(name)
+        // (A control keeps its name: set again, its slider would do nothing.)
+        let control = local.filter(|l| l.control);
+        let (what, at) = if let Some(k) = self.func_named(name) {
+            ("function", self.funcs[k].at)
+        } else if let Some(k) = self.table_named(name) {
+            ("table", self.table_names[k].at)
+        } else if let Some(k) = self.sprite_named(name) {
+            ("sprite", self.sprites[k].at)
+        } else if let Some(k) = self.palette_named(name) {
+            ("palette", self.palette_names[k].at)
+        } else {
+            match (control, local) {
+                (Some(l), _) => ("control", l.at),
+                (_, Some(l)) if matches!(kind, Naming::Thing | Naming::Control) => {
+                    (if l.counter { "loop counter" } else { "value" }, l.at)
+                }
+                _ => return Ok(name),
+            }
+        };
+        // E203.
+        self.err(
+            t,
+            format!(
+                "`{name}` is already the name of a {what} (line {}) — pick another name",
+                self.line_of(at)
+            ),
+        )
     }
 
     /// `name = expr`.
     fn assignment(&mut self, in_frame: bool) -> Result<(), Error> {
         let t = self.next();
-        let name = self.new_name(t)?;
+        let name = self.new_name(t, Naming::Value)?;
         let eq = self.expect(Tok::Assign, "`=`")?;
         if matches!(self.peek().tok, Tok::Newline | Tok::Eof) {
             return self.err(eq, format!("a value is missing after `=` (`{name} = …`)"));
@@ -3074,29 +3377,21 @@ impl<'s> Parser<'s> {
         let start = self.peek().start;
         let id = self.expr(0)?;
         let end = self.toks[self.pos.saturating_sub(1)].get().end;
-        if in_frame && self.dag.level(id) > LV_FRAME {
-            let why = INPUTS[self.dag.nodes[id as usize].why as usize];
-            return Err(Error::new(
-                start,
-                end.max(start),
-                format!(
-                    "inside frame {{ }} only values that are the same for every pixel can be used, \
-                     but this uses `{}` ({})",
-                    why.0, why.2
-                ),
-            ));
-        }
         if self.in_draw > 0 {
             self.drawable(id, start, end)?;
         }
-        try_push(&mut self.locals, Local {
-            name,
-            id,
-            at: t.start,
-            in_frame,
-            counter: false,
-            scope: self.scope,
-        })?;
+        try_push(
+            &mut self.locals,
+            Local {
+                name,
+                id,
+                at: t.start,
+                in_frame,
+                counter: false,
+                control: false,
+                scope: self.scope,
+            },
+        )?;
         self.end_of_statement()
     }
 
@@ -3162,39 +3457,6 @@ impl<'s> Parser<'s> {
         self.scope != 0 && !self.scopes[self.scope as usize].1
     }
 
-    /// `frame { name = value … }` at `t` (one per formula or part, and one
-    /// per layer).
-    fn frame_block(&mut self, t: Token, seen: &mut bool) -> Result<(), Error> {
-        self.next();
-        if *seen {
-            return self.err(
-                t,
-                if self.in_layer() {
-                    "a layer can have one `frame { }` block"
-                } else {
-                    "there can be one `frame { }` block"
-                },
-            );
-        }
-        *seen = true;
-        self.expect(Tok::LBrace, "`{` (as in `frame { … }`)")?;
-        self.skip_newlines();
-        while self.peek().tok != Tok::RBrace {
-            if self.peek().tok == Tok::Eof {
-                let t = self.peek();
-                return self.err(t, "`frame {` is never closed: add `}`");
-            }
-            if !self.is_assignment() {
-                let t = self.peek();
-                return self.err(t, "only `name = value` lines can go inside frame { }");
-            }
-            self.assignment(true)?;
-            self.skip_newlines();
-        }
-        self.next();
-        self.end_of_statement()
-    }
-
     /// Whether the statement at the cursor is a name, maybe a bracket, and
     /// nothing else (`p` or `p(x*2, y)`: a part's colour, not `p.v + 1`).
     /// (`open`: what a `(` never closed counts as.)
@@ -3218,7 +3480,10 @@ impl<'s> Parser<'s> {
             }
             k += 1;
         }
-        matches!(self.toks[k].get().tok, Tok::Newline | Tok::Eof | Tok::RBrace)
+        matches!(
+            self.toks[k].get().tok,
+            Tok::Newline | Tok::Eof | Tok::RBrace
+        )
     }
 
     /// A colour line at `t` (its name), a part drawn (`p`, `p(x', y')`,
@@ -3227,27 +3492,10 @@ impl<'s> Parser<'s> {
     /// colours (several for a part with layers) and whether they are layers.
     fn colour_or_value(&mut self, t: Token, end: Tok) -> Result<(Vec<Colour>, bool), Error> {
         let word = if t.tok == Tok::Name { self.text(t) } else { "" };
-        if let Some(k) = self.part_named(word).filter(|_| self.whole_line(false)) {
-            self.next();
-            let (j, cover) = self.part_at(t, k, true)?;
-            self.end_of_statement()?;
-            let inst = &self.parts[k].insts[j];
-            if inst.colours.is_empty() {
-                return self.err(
-                    t,
-                    format!("part `{word}` has no colour, only values: `{word}.v`"),
-                );
-            }
-            let (mut cs, layered) = (inst.colours.clone(), inst.layered);
-            if let Some(k) = cover {
-                for c in &mut cs {
-                    c.alpha = Some(match c.alpha {
-                        Some(a) => self.dag.op(code::MUL, [a, k, 0], (t.start, t.end))?,
-                        None => k,
-                    });
-                }
-            }
-            return Ok((cs, layered));
+        if let Some(k) = self.func_named(word).filter(|&f| {
+            self.funcs[f].colour == F_WHOLE && self.toks[self.pos + 1].get().tok == Tok::LParen
+        }) {
+            return self.call_colour(t, k);
         }
         if t.tok == Tok::Name
             && COLOURS.iter().any(|e| e.0 == word)
@@ -3259,7 +3507,10 @@ impl<'s> Parser<'s> {
             let mut e = self.peek();
             // `pal(P, v) * k`: the palette's colour, each channel times k
             // (a light on a palette, in one step); `* k * m` too.
-            if word == "pal" && e.tok == Tok::Star && !self.has_colour(self.pos + 1, false) {
+            if (word == "pal" || word == "cycle")
+                && e.tok == Tok::Star
+                && !self.has_colour(self.pos + 1, false)
+            {
                 let at = (e.start, e.end);
                 let mut k = None;
                 while self.peek().tok == Tok::Star {
@@ -3282,15 +3533,17 @@ impl<'s> Parser<'s> {
             if infix_bp(e.tok).is_some() && word != "rgb" {
                 return self.err(
                     e,
-                        if word == "pal" {
+                        if word == "cycle" {
                         String::from(
-                            "`pal(…)` can't go into a sum: it can only be scaled, `pal(fire, v) * k` \
-                             (`#…` and `rgb(r, g, b)` colours can: `#fff * k`, `mix(#000, #f80, k)`)"
+                            "`cycle(…)` is a whole colour: it can't go into a sum, only be scaled, `cycle(fire, v, s) * k`"
+                        )
+                    } else if word == "pal" {
+                        String::from(
+                            "`pal(…)` is a whole colour: it can't go into a sum, only be scaled, `pal(fire, v) * k`"
                         )
                     } else {
                         format!(
-                            "`{word}(…)` can't go into a sum: only `#…` and `rgb(r, g, b)` colours can \
-                             (`#fff * k`, `rgb(r, g, b) * k`)"
+                            "`{word}(…)` is a whole colour: it can't go into a sum (only `#…` and `rgb(r, g, b)` can)"
                         )
                     },
                 );
@@ -3333,12 +3586,13 @@ impl<'s> Parser<'s> {
 
     /// `layer [blend] { … }` at `kw`: its own values (and `frame { }`),
     /// ending in its colour (several: a part with layers drawn whole).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     #[inline(never)]
-    fn layer(&mut self, kw: Token) -> Result<(Vec<Colour>, Token), Error> {
+    fn layer(&mut self, kw: Token) -> Result<(Vec<Colour>, Token, u8), Error> {
         self.next();
         let mut blend = None;
         let b = self.peek();
-        if b.tok == Tok::Name {
+        if b.tok == Tok::Name && self.text(b) != "rate" {
             let name = self.text(b);
             let Some(&(_, m)) = BLENDS.iter().find(|e| e.0 == name) else {
                 let s = suggest(name, BLENDS.iter().map(|e| e.0));
@@ -3353,7 +3607,34 @@ impl<'s> Parser<'s> {
             self.next();
             blend = Some(m);
         }
+        // `rate N`: redrawn every Nth frame, a band of rows a frame
+        // (`crate::rate`).
+        let mut rate = 0u8;
+        let r = self.peek();
+        if r.tok == Tok::Name && self.text(r) == "rate" {
+            self.next();
+            let n = self.next();
+            rate = match n.tok {
+                Tok::Num(v) if v & 0xffff == 0 && (2..=crate::rate::MAX_RATE as i32).contains(&(v >> 16)) => {
+                    (v >> 16) as u8
+                }
+                // E942.
+                _ => {
+                    return self.err(
+                        n,
+                        format!("`rate` takes a whole number of frames, 2 to {}: `layer rate 4 {{ … }}` is redrawn every 4th frame", crate::rate::MAX_RATE),
+                    )
+                }
+            };
+        }
         let open = self.peek();
+        if open.tok != Tok::LBrace
+            && rate > 0
+            && open.tok == Tok::Name
+            && BLENDS.iter().any(|e| e.0 == self.text(open))
+        {
+            return self.err(open, "write the blend first: `layer add rate 4 { … }`");
+        }
         if open.tok != Tok::LBrace {
             return self.err(
                 open,
@@ -3367,7 +3648,6 @@ impl<'s> Parser<'s> {
         let outer = self.scope;
         try_push(&mut self.scopes, (outer, false))?;
         self.scope = (self.scopes.len() - 1) as u16;
-        let mut seen_frame = false;
         let mut colour: Option<((Vec<Colour>, bool), Token)> = None;
         self.skip_newlines();
         loop {
@@ -3397,11 +3677,10 @@ impl<'s> Parser<'s> {
                         "a layer can't go inside another — close this one with `}` first",
                     )
                 }
+                "fn" => self.fn_def(t)?,
+                // E750.
                 "part" => {
-                    return self.err(
-                        t,
-                        "a part goes outside the layers (draw it in one with `layer { p }`)",
-                    )
+                    return self.err(t, "there are no parts: write a function, `fn p(x, y) { … }`, and call it, `p(x*2, y)`")
                 }
                 _ if self.is_fps() => {
                     return self.err(
@@ -3409,7 +3688,7 @@ impl<'s> Parser<'s> {
                         "`fps` is the whole formula's: put it on a line of its own, outside the layers",
                     )
                 }
-                "frame" => self.frame_block(t, &mut seen_frame)?,
+                _ if self.text(t) == "frame" && self.toks[self.pos + 1].get().tok == Tok::LBrace => return self.err(t, "there are no `frame { }` blocks: a value is worked out once a frame by itself when it reads only the time, the clock and the controls; write its lines without the block"),
                 "draw" | "table" | "for" => return Err(self.misplaced(t)),
                 _ if self.is_sprite() || self.is_palette() => return Err(self.misplaced(t)),
                 _ if self.is_assignment() => self.assignment(false)?,
@@ -3417,27 +3696,18 @@ impl<'s> Parser<'s> {
             }
             self.skip_newlines();
         }
-        self.next();
+        let close = self.next();
         self.scope = outer;
-        let Some(((mut cs, layered), ct)) = colour else {
+        let Some(((mut cs, _), ct)) = colour else {
+            // (At its `}`: where the colour line goes.)
             return self.err(
-                kw,
-                "this layer has no colour: end it with `rgb(…)`, `hsv(…)`, `pal(…)` or `gray(…)`",
+                close,
+                "this layer ends without a colour: its last line is `rgb(…)`, `hsv(…)`, `pal(…)` or `gray(…)`",
             );
         };
-        match (layered, blend) {
-            // A part with layers keeps its own blends: it goes over, whole.
-            (true, Some(m)) if m != fixed::BLEND_OVER => {
-                return self.err(
-                    b,
-                    "this part has layers of its own: it can only go over, as in `layer { p }`",
-                )
-            }
-            (true, _) => {}
-            (false, m) => cs[0].blend = m.unwrap_or(fixed::BLEND_OVER),
-        }
+        cs[0].blend = blend.unwrap_or(fixed::BLEND_OVER);
         self.end_of_statement()?;
-        Ok((cs, ct))
+        Ok((cs, ct, rate))
     }
 
     /// The `loop` the lines from token `k` set (to their `}`, or the end),
@@ -3468,186 +3738,6 @@ impl<'s> Parser<'s> {
         }
     }
 
-    /// `part name { … }` at `kw`: read where it is written (its errors show
-    /// there, and `name` / `name.v` drawn where the pixel is are ready).
-    #[inline(never)]
-    fn part(&mut self, kw: Token) -> Result<(), Error> {
-        self.next();
-        let n = self.peek();
-        if n.tok != Tok::Name {
-            return self.err(n, "a part needs a name, as in `part p { … }`");
-        }
-        let name = self.new_name(n)?;
-        self.next();
-        let open = self.peek();
-        if open.tok != Tok::LBrace {
-            return self.err(
-                open,
-                format!(
-                    "expected `{{` here (as in `part {name} {{ … }}`), found {}",
-                    self.found(open)
-                ),
-            );
-        }
-        let body = self.pos + 1;
-        let mut depth = 0;
-        let mut end = self.pos;
-        loop {
-            match self.toks[end].get().tok {
-                Tok::LBrace => depth += 1,
-                Tok::RBrace => {
-                    depth -= 1;
-                    if depth == 0 {
-                        break;
-                    }
-                }
-                Tok::Eof => return self.err(kw, "this `part {` is never closed — add `}`"),
-                _ => {}
-            }
-            end += 1;
-        }
-        let loop_v = self.loop_ahead(body).unwrap_or(8 * ONE);
-        try_push(&mut self.parts, Part {
-            name,
-            at: n.start,
-            scope: self.scope,
-            body,
-            end,
-            loop_v,
-            insts: Vec::new(),
-        })?;
-        self.instance(self.parts.len() - 1, None, kw)?;
-        self.pos = end + 1;
-        self.end_of_statement()
-    }
-
-    /// Part `k` read at `at` (`None`: where the pixel is), for its use at
-    /// `by`: once per place, with names of its own that nothing outside it
-    /// sees, `t` its own loop's, and `x y px py i` the place's.
-    #[inline(never)]
-    fn instance(&mut self, k: usize, at: Option<(Id, Id)>, by: Token) -> Result<usize, Error> {
-        if let Some(j) = self.parts[k].insts.iter().position(|i| i.at == at) {
-            return Ok(j);
-        }
-        let (body, end, loop_v) = (self.parts[k].body, self.parts[k].end, self.parts[k].loop_v);
-        // Read again (where it is written, it is read once, as all text is).
-        if at.is_some() {
-            self.work += end - body;
-        }
-        if self.work > MAX_WORK {
-            return self.err(
-                by,
-                "this formula draws its parts in too many places — simplify it",
-            );
-        }
-        self.depth += PART_DEPTH;
-        if self.depth > MAX_DEPTH {
-            return self.err(by, "parts go too deep here — take one out of another");
-        }
-        // (What it sets stays, in a scope nothing else sees: `p.v` reads it.
-        // Its draw stage is recorded where it is written, not again for
-        // each other place.)
-        let saved = (self.pos, self.scope, self.env, self.record, self.in_draw);
-        self.record &= at.is_none();
-        self.in_draw = 0;
-        // Its own time: `t` modulo its loop, unless the time here is shorter.
-        let t = if self.env.loop_v <= loop_v {
-            self.env.t
-        } else {
-            let a = (by.start, by.end);
-            let t0 = self.input(Input::T)?;
-            let n = self.dag.constant(loop_v, a)?;
-            Some(self.dag.op(code::MOD, [t0, n, 0], a)?)
-        };
-        try_push(&mut self.scopes, (self.scope, true))?;
-        self.scope = (self.scopes.len() - 1) as u16;
-        self.env = Env {
-            at: at.or(self.env.at),
-            t,
-            loop_v,
-            ch: NO_CH,
-        };
-        self.pos = body;
-        let b = self.body(Tok::RBrace)?;
-        let scope = self.scope;
-        (self.pos, self.scope, self.env, self.record, self.in_draw) = saved;
-        self.depth -= PART_DEPTH;
-        let p = &mut self.parts[k];
-        try_push(&mut p.insts, Inst {
-            at,
-            scope,
-            colours: b.colours,
-            layered: b.layered,
-        })?;
-        Ok(p.insts.len() - 1)
-    }
-
-    /// Part `k` used at `t` (its name, the cursor after it): `p`, or `p(x',
-    /// y')` — and as a `colour`, `p(x', y', k)`. Which reading, and the
-    /// coverage.
-    #[inline(never)]
-    fn part_at(&mut self, t: Token, k: usize, colour: bool) -> Result<(usize, Option<Id>), Error> {
-        let (mut at, mut cover) = (None, None);
-        if self.peek().tok == Tok::LParen {
-            let (a, n) = self.args_or_cover(t, self.text(t), 2, colour)?;
-            // Where the pixel is already: the reading as written.
-            let here = (self.input(Input::X)?, self.input(Input::Y)?);
-            at = Some((a[0], a[1])).filter(|&p| p != here);
-            cover = (n == 3).then_some(a[2]);
-        }
-        Ok((self.instance(k, at, t)?, cover))
-    }
-
-    /// `p.v` or `p(x', y').v` at `t`: a value part `k` sets.
-    #[inline(never)]
-    fn part_value(&mut self, t: Token, k: usize) -> Result<Id, Error> {
-        let (j, _) = self.part_at(t, k, false)?;
-        if self.peek().tok != Tok::Dot {
-            return Err(self.not_a_value(t, None));
-        }
-        self.next();
-        let v = self.expect(Tok::Name, "the name of one of the part's values")?;
-        let vn = self.text(v);
-        let scope = self.parts[k].insts[j].scope;
-        match self
-            .locals
-            .iter()
-            .find(|l| l.scope == scope && l.name == vn)
-        {
-            Some(l) => Ok(l.id),
-            None => Err(self.not_a_value(t, Some((v, scope)))),
-        }
-    }
-
-    /// Part `t` used as a value without `.v`, or `.v` (in `scope`) that it
-    /// doesn't set.
-    #[cold]
-    #[inline(never)]
-    fn not_a_value(&self, t: Token, v: Option<(Token, u16)>) -> Error {
-        let name = self.text(t);
-        let Some((v, scope)) = v else {
-            return self.fail_at(
-                t,
-                format!(
-                    "`{name}` is a part: draw it as a whole last line (of the formula, or of a layer), \
-                     or use one of its values, as in `{name}.v`"
-                ),
-            );
-        };
-        let vn = self.text(v);
-        let s = suggest(
-            vn,
-            self.locals
-                .iter()
-                .filter(|l| l.scope == scope)
-                .map(|l| l.name),
-        );
-        self.fail_at(
-            v,
-            format!("part `{name}` sets no value `{vn}`{}", did_you_mean(s)),
-        )
-    }
-
     /// `draw`, `table` or `for` at `t` where it can't go (inside a layer;
     /// `for` outside `draw { }`).
     #[cold]
@@ -3656,18 +3746,12 @@ impl<'s> Parser<'s> {
         self.fail(
             t,
             match self.text(t) {
-                "draw" => {
-                    "`draw { }` goes at the top of the formula (or a part), not inside a layer"
-                }
+                "draw" => "`draw { }` goes at the top of the formula, not inside a layer",
                 // E911.
-                "sprite" => {
-                    "a sprite goes at the top of the formula (or a part), not inside a layer"
-                }
+                "sprite" => "a sprite goes at the top of the formula, not inside a layer",
                 // E921.
-                "palette" => {
-                    "a palette goes at the top of the formula (or a part), not inside a layer"
-                }
-                "table" => "a table goes at the top of the formula (or a part), not inside a layer",
+                "palette" => "a palette goes at the top of the formula, not inside a layer",
+                "table" => "a table goes at the top of the formula, not inside a layer",
                 _ => "`for` goes inside `draw { }`: `draw { for k < 12 { … } }`",
             },
         )
@@ -3692,14 +3776,14 @@ impl<'s> Parser<'s> {
         let Some(k) = self.table_named(name) else {
             return self.err(
                 t,
-                format!("`[ ]` reads a table: `NAME[k]` — `{name}` is not a table"),
+                format!("`{name}[…]` reads a table, and `{name}` is not one"),
             );
         };
         let open = self.peek();
         if open.tok != Tok::LBracket {
             return self.err(
                 t,
-                format!("`{name}` is a table: read one of its numbers with `{name}[k]` (k from 0)"),
+                format!("`{name}` is a table: read one of its numbers, `{name}[k]` (k from 0)"),
             );
         }
         self.next();
@@ -3720,6 +3804,56 @@ impl<'s> Parser<'s> {
     /// The palette of the formula's own called `name` that can be seen
     /// here.
     #[inline(never)]
+    /// The entry named `w` among the palette tokens `from..to`.
+    fn entry_at(&self, from: u32, to: u32, w: &str) -> Option<u16> {
+        let mut e = 0;
+        for k in from as usize..to as usize {
+            let t = self.tok(k);
+            match t.tok {
+                Tok::Hex(_) => e += 1,
+                Tok::Name if self.text(t) == w => return Some(e),
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// `NAME.kerb` at `t` (the palette's name; the `.` next): the
+    /// fraction `pal` maps back to that colour, i/(n − 1) as `i/(n − 1)`
+    /// is written; `NAME.step` 1/(n − 1); `NAME.n` the count. Constants.
+    #[inline(never)]
+    fn palette_entry(&mut self, t: Token, k: usize) -> Result<Id, Error> {
+        self.next();
+        let w = self.expect(
+            Tok::Name,
+            "the name of one of the palette's colours, `n` or `step`",
+        )?;
+        let wn = self.text(w);
+        let p = &self.palette_names[k];
+        let (n, at) = (i32::from(p.n), (t.start, w.end));
+        let i = match wn {
+            "n" => return self.dag.constant(n << 16, at),
+            "step" => 1,
+            _ => match self.entry_at(p.from, p.to, wn) {
+                Some(i) => i32::from(i),
+                None => {
+                    // E927.
+                    let pn = p.name;
+                    return self.err(
+                        w,
+                        format!("palette `{pn}` has no colour named `{wn}`: name it in its line, as `{wn} #f80`"),
+                    );
+                }
+            },
+        };
+        let v = if n > 1 {
+            eval(code::DIV, i << 16, (n - 1) << 16, 0, None)
+        } else {
+            0
+        };
+        self.dag.constant(v, at)
+    }
+
     fn palette_named(&self, name: &str) -> Option<usize> {
         self.palette_names
             .iter()
@@ -3769,10 +3903,34 @@ impl<'s> Parser<'s> {
     fn palette(&mut self, kw: Token) -> Result<(), Error> {
         self.next();
         let n = self.next();
-        let name = self.new_name(n)?;
+        let name = self.new_name(n, Naming::Thing)?;
         self.next(); // `=`
         let mut cols: Vec<u32> = Vec::new();
+        let from = self.pos as u32;
         loop {
+            // A colour may have a name first (`kerb #806`): one of its
+            // own, not `n` or `step` (E925).
+            let w = self.peek();
+            if w.tok == Tok::Name && matches!(self.tok(self.pos + 1).tok, Tok::Hex(_)) {
+                let wn = self.text(w);
+                if wn == "n" || wn == "step" {
+                    // E926.
+                    return self.err(
+                        w,
+                        format!("`n` and `step` are every palette's own (`{name}.n`, `{name}.step`): name this colour another way"),
+                    );
+                }
+                if self.entry_at(from, self.pos as u32, wn).is_some() {
+                    // E925.
+                    return self.err(
+                        w,
+                        format!(
+                            "`{wn}` already names a colour of `{name}`: give this one another name"
+                        ),
+                    );
+                }
+                self.next();
+            }
             let c = self.peek();
             let Tok::Hex(v) = c.tok else {
                 // E922.
@@ -3814,12 +3972,18 @@ impl<'s> Parser<'s> {
                 self.palettes.len() - 1
             }
         };
-        try_push(&mut self.palette_names, Palette {
-            name,
-            at: n.start,
-            scope: self.scope,
-            j,
-        })?;
+        try_push(
+            &mut self.palette_names,
+            Palette {
+                name,
+                at: n.start,
+                scope: self.scope,
+                j,
+                n: cols.len() as u16,
+                from,
+                to: self.pos as u32,
+            },
+        )?;
         self.end_of_statement()
     }
 
@@ -3919,7 +4083,7 @@ impl<'s> Parser<'s> {
         }
         self.fail_at(
             t,
-            format!("`{name}` is a sprite: read its pixels with `{name}[u, v]`"),
+            format!("`{name}` is a sprite: read its pixels, `{name}[u, v]`"),
         )
     }
 
@@ -3982,7 +4146,7 @@ impl<'s> Parser<'s> {
     fn sprite(&mut self, kw: Token) -> Result<(), Error> {
         self.next();
         let n = self.next();
-        let name = self.new_name(n)?;
+        let name = self.new_name(n, Naming::Thing)?;
         self.next(); // `{`
         let mut raws: Vec<Token> = Vec::new();
         loop {
@@ -4042,11 +4206,19 @@ impl<'s> Parser<'s> {
                 ns += 1;
             }
             let neg = kb[ns] == b'-';
-            let Some(v) = number(sub(
-                self.src,
-                key.start + ns + usize::from(neg),
-                key.start + te,
-            )) else {
+            // `R #f00`: a colour, the paint index `spr` draws it in.
+            let hex = (kb[ns] == b'#')
+                .then(|| hex_colour(sub(self.src, key.start + ns + 1, key.start + te)))
+                .flatten();
+            let v = match hex {
+                Some(rgb) => Some((self.paint_index(rgb, key)? as i32) << 16),
+                None => number(sub(
+                    self.src,
+                    key.start + ns + usize::from(neg),
+                    key.start + te,
+                )),
+            };
+            let Some(v) = v else {
                 return Err(bad);
             };
             if chars.contains(&kb[s]) {
@@ -4116,12 +4288,15 @@ impl<'s> Parser<'s> {
                 self.tables.len() - words.len()
             }
         };
-        try_push(&mut self.sprites, Sprite {
-            name,
-            at: n.start,
-            scope: self.scope,
-            start,
-        })?;
+        try_push(
+            &mut self.sprites,
+            Sprite {
+                name,
+                at: n.start,
+                scope: self.scope,
+                start,
+            },
+        )?;
         self.end_of_statement()
     }
 
@@ -4134,7 +4309,7 @@ impl<'s> Parser<'s> {
         if n.tok != Tok::Name {
             return self.err(n, "a table needs a name, as in `table T = 1, 2, 3`");
         }
-        let name = self.new_name(n)?;
+        let name = self.new_name(n, Naming::Thing)?;
         self.next();
         self.expect(Tok::Assign, "`=` (as in `table T = 1, 2, 3`)")?;
         let mut vals: Vec<i32> = Vec::new();
@@ -4151,7 +4326,7 @@ impl<'s> Parser<'s> {
                 );
             };
             self.next();
-            vals.push(if neg { -x } else { x });
+            try_push(&mut vals, if neg { -x } else { x })?;
             if self.peek().tok != Tok::Comma {
                 break;
             }
@@ -4180,13 +4355,16 @@ impl<'s> Parser<'s> {
                 self.tables.len() - vals.len()
             }
         };
-        try_push(&mut self.table_names, Table {
-            name,
-            at: n.start,
-            scope: self.scope,
-            start,
-            len: vals.len(),
-        })?;
+        try_push(
+            &mut self.table_names,
+            Table {
+                name,
+                at: n.start,
+                scope: self.scope,
+                start,
+                len: vals.len(),
+            },
+        )?;
         self.end_of_statement()
     }
 
@@ -4197,16 +4375,56 @@ impl<'s> Parser<'s> {
         if self.dag.level(id) < LV_ROW {
             return Ok(());
         }
-        let why = INPUTS[self.dag.nodes[id as usize].why as usize];
-        Err(Error::new(
-            start,
-            end.max(start),
-            format!(
-                "inside draw {{ }} only values that are the same for every pixel can be used \
-                 (no x, y, px, py, i, ur, ug, ub, ul or ink), but this uses `{}` ({})",
-                why.0, why.2
-            ),
-        ))
+        Err(self.varies_err((start, end.max(start)), DRAW_ONLY, id))
+    }
+
+    /// E301, E708, E931: `head` and what makes `id` vary (out of line:
+    /// the callers are on the parser's deepest path).
+    #[cold]
+    #[inline(never)]
+    fn varies_err(&self, (a, b): (usize, usize), head: &str, id: Id) -> Error {
+        let mut m = String::from(head);
+        m.push_str(&self.varies(id));
+        Error::new(a, b, m)
+    }
+
+    /// What makes `id` vary across the panel, for an error: "`k` (line 2)
+    /// is per pixel: it reads `x`" when one of the formula's own values is
+    /// on the way (the nearest), else "this uses `x` (…)" (E301, E708,
+    /// E931).
+    #[cold]
+    #[inline(never)]
+    fn varies(&self, id: Id) -> String {
+        let named = |m: Id| {
+            self.locals
+                .iter()
+                .rposition(|l| l.id == m && !l.counter && self.visible(l.scope))
+        };
+        let (j, root) = match named(id) {
+            Some(j) => (Some(j), cause(&self.dag, id, &|_| None).1),
+            None => cause(&self.dag, id, &named),
+        };
+        match j {
+            Some(j) => {
+                let l = &self.locals[j];
+                let root = cause(&self.dag, l.id, &|_| None).1;
+                let w = input_word(&self.dag.nodes[root as usize]).0;
+                let per = if self.dag.level(l.id) == LV_ROW {
+                    "row"
+                } else {
+                    "pixel"
+                };
+                format!(
+                    "`{}` (line {}) is per {per}: it reads `{w}`",
+                    l.name,
+                    self.line_of(l.at)
+                )
+            }
+            None => {
+                let (w, what) = input_word(&self.dag.nodes[root as usize]);
+                format!("this uses `{w}` ({what})")
+            }
+        }
     }
 
     /// `draw { … }` at `kw`: once a frame, before the rows — values, `for`
@@ -4220,7 +4438,7 @@ impl<'s> Parser<'s> {
         if self.record && self.drawn.is_some() {
             return self.err(
                 kw,
-                "there can be one `draw { }` block (the formula's or one part's: they share one canvas)",
+                "there can be one `draw { }` block (functions that draw are called inside it)",
             );
         }
         let open = self.peek();
@@ -4269,7 +4487,16 @@ impl<'s> Parser<'s> {
                 self.assignment(false)?;
             } else if word == "for" {
                 self.for_loop(t)?;
-            } else if PRIMITIVES.contains(&word) && next == Tok::LParen {
+            } else if word == "if" {
+                self.if_block(t)?;
+            } else if next == Tok::LParen && self.func_named(word).is_some() {
+                self.call_block(t)?;
+            } else if next == Tok::LParen
+                && (PAINT_CALLS.contains(&word)
+                    || INK_CALLS.contains(&word) && self.paints_with_colour())
+            {
+                self.paint_call(t)?;
+            } else if INK_CALLS.contains(&word) && next == Tok::LParen {
                 self.primitive(t)?;
             } else if !self.closed() {
                 return self.err(
@@ -4283,7 +4510,7 @@ impl<'s> Parser<'s> {
             } else {
                 return self.err(
                     t,
-                    "inside draw { } go `name = value`, `for k < N { … }`, `line(…)` and `dot(…)` lines only",
+                    "inside draw { } go `name = value`, `for k < N { … }`, `if c { … }` and drawing: `line`, `dot`, `pset`, `rect`, `rectfill`, `circ`, `circfill`, `trifill`, `cls`, `spr`, `print`",
                 );
             }
             self.skip_newlines();
@@ -4332,7 +4559,7 @@ impl<'s> Parser<'s> {
         {
             return self.err(n, format!("`{name}` is already a loop counter here"));
         }
-        let name = self.new_name(n)?;
+        let name = self.new_name(n, Naming::Counter)?;
         self.pos += 3;
         let open = self.peek();
         if open.tok != Tok::LBrace {
@@ -4379,16 +4606,22 @@ impl<'s> Parser<'s> {
             (n.start, n.end),
         )?;
         self.loops += 1;
-        try_push(&mut self.locals, Local {
-            name,
-            id: ctr,
-            at: n.start,
-            in_frame: false,
-            counter: true,
-            scope: self.scope,
-        })?;
+        try_push(
+            &mut self.locals,
+            Local {
+                name,
+                id: ctr,
+                at: n.start,
+                in_frame: false,
+                counter: true,
+                control: false,
+                scope: self.scope,
+            },
+        )?;
         if self.record {
             try_push(&mut self.draw, DItem::For(ctr, count as u16))?;
+            #[cfg(feature = "syntax")]
+            self.loop_at.push((kw.start, num.end));
         }
         self.in_draw += 1;
         let r = self.draw_lines(kw);
@@ -4446,9 +4679,9 @@ impl<'s> Parser<'s> {
             return self.err(
                 t,
                 if line {
-                    format!("`line` takes 4 values (x0, y0, x1, y1: pixels, y up from the bottom) and, if you like, the ink at each end (0 to 1), but got {k}")
+                    format!("`line` takes x0, y0, x1, y1 (pixels from the top left) and 1 or 2 inks: {k} given")
                 } else {
-                    format!("`dot` takes 2 values (x, y: pixels, y up from the bottom) and, if you like, its ink (0 to 1), but got {k}")
+                    format!("`dot` takes x, y (pixels from the top left) and an ink: {k} given")
                 },
             );
         }
@@ -4464,11 +4697,719 @@ impl<'s> Parser<'s> {
             v[2] = self.dag.constant(ONE, at)?;
         }
         if self.record {
-            try_push(&mut self.draw, if line {
-                DItem::Line(v)
+            try_push(
+                &mut self.draw,
+                if line {
+                    DItem::Line(v)
+                } else {
+                    DItem::Dot([v[0], v[1], v[2]])
+                },
+            )?;
+        }
+        self.end_of_statement()
+    }
+
+    /// The function called `name`, if the formula has one.
+    fn func_named(&self, name: &str) -> Option<usize> {
+        self.funcs.iter().rposition(|f| f.name == name)
+    }
+
+    /// `fn NAME(a, b) = value` or `fn NAME(a, b) { … }` at `kw`: read
+    /// later, at each call.
+    #[inline(never)]
+    fn fn_def(&mut self, kw: Token) -> Result<(), Error> {
+        self.next();
+        let n = self.next();
+        if n.tok != Tok::Name || self.tok(self.pos).tok != Tok::LParen {
+            return self.err(kw, "a function is `fn name(a, b) = value`, or `fn name(a, b) { … }` for lines that draw");
+        }
+        let name = self.new_name(n, Naming::Value)?;
+        self.next();
+        let mut params = Vec::new();
+        while self.peek().tok != Tok::RParen {
+            let p = self.next();
+            if p.tok != Tok::Name {
+                return self.err(p, "a function's values are names: `fn name(a, b) = …`");
+            }
+            try_push(&mut params, (self.text(p), p.start))?;
+            if self.peek().tok == Tok::Comma {
+                self.next();
+            } else if self.peek().tok != Tok::RParen {
+                return Err(self.expected(self.peek(), "`,` or `)`"));
+            }
+        }
+        self.next();
+        let t = self.next();
+        let block = match t.tok {
+            Tok::Assign => false,
+            Tok::LBrace => true,
+            _ => {
+                return self.err(
+                    t,
+                    "after a function's values: `= value`, or `{ … }` for lines that draw",
+                )
+            }
+        };
+        let body = self.pos;
+        // To the end of its line (a value) or its `}` (lines).
+        let mut depth = 0i32;
+        loop {
+            let t = self.peek();
+            match t.tok {
+                Tok::Eof if block => {
+                    return self.err(
+                        kw,
+                        format!("this `fn {name} {{` is never closed — add `}}`"),
+                    )
+                }
+                Tok::Eof => break,
+                Tok::LBrace | Tok::LParen | Tok::LBracket => depth += 1,
+                Tok::RBrace if block && depth == 0 => break,
+                Tok::RBrace | Tok::RParen | Tok::RBracket => depth -= 1,
+                Tok::Newline if !block && depth <= 0 => break,
+                _ => {}
+            }
+            self.next();
+        }
+        let end = self.pos;
+        let last = self.last_line(body, end);
+        if last == end {
+            return self.err(kw, format!("function `{name}` has nothing in it"));
+        }
+        let colour = self.line_colour(last);
+        try_push(
+            &mut self.funcs,
+            Func {
+                name,
+                at: n.start,
+                params,
+                body,
+                end,
+                block,
+                last,
+                colour,
+            },
+        )?;
+        if block {
+            self.next();
+        }
+        self.end_of_statement()
+    }
+
+    /// Where the last line from `body` to `end` starts (`end` if none).
+    fn last_line(&self, body: usize, end: usize) -> usize {
+        let (mut last, mut depth, mut start) = (end, 0i32, true);
+        for k in body..end {
+            let t = self.toks[k].get().tok;
+            if start && t != Tok::Newline {
+                last = k;
+            }
+            start = t == Tok::Newline && depth <= 0;
+            match t {
+                Tok::LBrace | Tok::LParen | Tok::LBracket => depth += 1,
+                Tok::RBrace | Tok::RParen | Tok::RBracket => depth -= 1,
+                _ => {}
+            }
+        }
+        last
+    }
+
+    /// What the line at `k` is, as a function's last: a value, a colour
+    /// read by channel or a whole colour.
+    fn line_colour(&self, k: usize) -> u8 {
+        let t = self.toks[k].get();
+        if t.tok == Tok::Name
+            && matches!(self.text(t), w if PRIMITIVES.contains(&w) || w == "for" || w == "if")
+        {
+            return F_DRAWS;
+        }
+        if t.tok == Tok::Name && self.toks[k + 1].get().tok == Tok::LParen {
+            let w = self.text(t);
+            if let Some(f) = self.func_named(w) {
+                if self.funcs[f].colour == F_WHOLE {
+                    return F_WHOLE;
+                }
+            } else if w == "rgb" {
+                // `rgb(r, g, b, cover)`: a whole colour (its coverage).
+                let (mut depth, mut commas, mut j) = (0, 0, k + 1);
+                loop {
+                    match self.toks[j].get().tok {
+                        Tok::LParen | Tok::LBracket => depth += 1,
+                        Tok::RParen | Tok::RBracket => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        Tok::Comma if depth == 1 => commas += 1,
+                        Tok::Eof => break,
+                        _ => {}
+                    }
+                    j += 1;
+                }
+                if commas == 3 || (commas == 1 && self.has_colour(k + 2, true)) {
+                    return F_WHOLE;
+                }
+            } else if w != "mix" && COLOURS.iter().any(|e| e.0 == w) {
+                return F_WHOLE;
+            }
+        }
+        if self.has_colour(k, false) {
+            F_CHANNELS
+        } else {
+            F_VALUE
+        }
+    }
+
+    /// A function's body at the cursor: the names it sets, up to its last
+    /// line (E746 for a line that draws).
+    fn body_names(&mut self, t: Token, k: usize) -> Result<(), Error> {
+        loop {
+            self.skip_newlines();
+            if self.pos >= self.funcs[k].last {
+                return Ok(());
+            }
+            let w = self.peek();
+            if !self.is_assignment() {
+                let name = self.funcs[k].name;
+                let word = self.text(w);
+                if PRIMITIVES.contains(&word) || word == "for" || word == "if" {
+                    return self.err(
+                        t,
+                        format!("`{name}` draws: call it on a line of its own inside `draw {{ }}`"),
+                    );
+                }
+                return self.err(w, "only a function's last line is its value: set a name here (`v = …`), or move it last");
+            }
+            self.assignment(false)?;
+        }
+    }
+
+    /// A function whose last line is a whole colour, on the colour line:
+    /// its colour.
+    #[inline(never)]
+    fn call_colour(&mut self, t: Token, k: usize) -> Result<(Vec<Colour>, bool), Error> {
+        self.next();
+        let args = self.call_args(t, k)?;
+        if !matches!(self.peek().tok, Tok::Newline | Tok::Eof | Tok::RBrace) {
+            let name = self.funcs[k].name;
+            return self.err(
+                self.peek(),
+                format!("`{name}(…)` is a whole colour: it can't go into a sum (only `#…` and `rgb(r, g, b)` can)"),
+            );
+        }
+        let outer = self.bind(t, k, &args)?;
+        let save = self.pos;
+        self.pos = self.funcs[k].body;
+        self.calling.push(k);
+        let r = match self.body_names(t, k) {
+            Ok(()) => {
+                let l = self.peek();
+                self.colour_or_value(l, Tok::RBrace)
+            }
+            Err(e) => Err(e),
+        };
+        self.calling.pop();
+        self.pos = save;
+        self.scope = outer;
+        self.depth -= 1;
+        let r = r?;
+        self.end_of_statement()?;
+        Ok(r)
+    }
+
+    /// A call's values at the cursor (after the name), as many as `f` takes.
+    fn call_args(&mut self, t: Token, k: usize) -> Result<Vec<Id>, Error> {
+        let name = self.funcs[k].name;
+        let want = self.funcs[k].params.len();
+        if self.calling.contains(&k) {
+            return self.err(
+                t,
+                format!("`{name}` calls itself: a function can't (there are no loops of calls)"),
+            );
+        }
+        let open = self.next();
+        let mut args = Vec::new();
+        if self.peek().tok != Tok::RParen {
+            loop {
+                try_push(&mut args, self.expr(0)?)?;
+                if self.peek().tok == Tok::Comma {
+                    self.next();
+                    continue;
+                }
+                break;
+            }
+        }
+        let close = self.peek();
+        if close.tok != Tok::RParen {
+            return Err(self.not_closed(open, close, name));
+        }
+        self.next();
+        if args.len() != want {
+            return self.err(
+                t,
+                format!("`{name}` takes {want} values, but got {}", args.len()),
+            );
+        }
+        Ok(args)
+    }
+
+    /// Bind `f`'s values to `args` in a scope of their own (seen from the
+    /// call's), for reading its body; the scope the call was in.
+    fn bind(&mut self, t: Token, k: usize, args: &[Id]) -> Result<u16, Error> {
+        let outer = self.scope;
+        try_push(&mut self.scopes, (outer, false))?;
+        self.scope = (self.scopes.len() - 1) as u16;
+        for (i, &id) in args.iter().enumerate() {
+            let (name, at) = self.funcs[k].params[i];
+            try_push(
+                &mut self.locals,
+                Local {
+                    name,
+                    id,
+                    at,
+                    in_frame: false,
+                    counter: false,
+                    control: false,
+                    scope: self.scope,
+                },
+            )?;
+        }
+        self.work += self.funcs[k].end - self.funcs[k].body;
+        if self.work > MAX_WORK {
+            // E749.
+            return self.err(
+                t,
+                "this formula calls its functions too many times over — simplify it",
+            );
+        }
+        self.depth += 1;
+        if self.depth > MAX_DEPTH {
+            return Err(self.too_deep());
+        }
+        Ok(outer)
+    }
+
+    /// `name(…)` of a function in a value: its value.
+    #[inline(never)]
+    fn call_value(&mut self, t: Token, k: usize) -> Result<Id, Error> {
+        if self.funcs[k].colour == F_DRAWS {
+            let name = self.funcs[k].name;
+            // E746.
+            return self.err(
+                t,
+                format!("`{name}` draws: call it on a line of its own inside `draw {{ }}`"),
+            );
+        }
+        if self.funcs[k].colour == F_WHOLE {
+            let name = self.funcs[k].name;
+            return self.err(
+                t,
+                format!("`{name}(…)` is a whole colour: use it alone on the colour line (only `#…` and `rgb(r, g, b)` go into sums)"),
+            );
+        }
+        let args = self.call_args(t, k)?;
+        let outer = self.bind(t, k, &args)?;
+        let save = self.pos;
+        self.pos = self.funcs[k].body;
+        self.calling.push(k);
+        let v = match self.body_names(t, k) {
+            Ok(()) => self.expr(0),
+            Err(e) => Err(e),
+        };
+        if self.funcs[k].block {
+            self.skip_newlines();
+        }
+        let at_end = self.pos == self.funcs[k].end;
+        self.calling.pop();
+        self.pos = save;
+        self.scope = outer;
+        self.depth -= 1;
+        let v = v?;
+        if !at_end {
+            let name = self.funcs[k].name;
+            return self.err(
+                t,
+                format!("function `{name}`'s last line is one value: `fn {name}(…) = value`"),
+            );
+        }
+        Ok(v)
+    }
+
+    /// `name(…)` of a function on a line of its own in draw: its lines.
+    #[inline(never)]
+    fn call_block(&mut self, t: Token) -> Result<(), Error> {
+        let k = self.func_named(self.text(t)).unwrap_or(0);
+        if !self.funcs[k].block {
+            let name = self.funcs[k].name;
+            return self.err(
+                t,
+                format!("`{name}` is a value, not lines that draw: use it in one, `v = {name}(…)`"),
+            );
+        }
+        self.next();
+        let args = self.call_args(t, k)?;
+        let outer = self.bind(t, k, &args)?;
+        let save = self.pos;
+        self.pos = self.funcs[k].body;
+        self.calling.push(k);
+        let r = self.draw_lines(t);
+        self.calling.pop();
+        self.pos = save;
+        self.scope = outer;
+        self.depth -= 1;
+        r?;
+        self.end_of_statement()
+    }
+
+    /// Whether the call at the cursor (`line(` or `dot(`) ends in a colour
+    /// (`#…`, `pal(…)`, `gray(…)`): it paints, else it draws ink.
+    fn paints_with_colour(&self) -> bool {
+        let mut depth = 0;
+        let mut last = self.pos + 2;
+        let mut k = self.pos + 1;
+        loop {
+            let t = self.tok(k);
+            match t.tok {
+                Tok::LParen | Tok::LBracket => depth += 1,
+                Tok::RParen | Tok::RBracket => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                Tok::Comma if depth == 1 => last = k + 1,
+                Tok::Eof => return false,
+                Tok::Newline if depth <= 1 => return false,
+                _ => {}
+            }
+            k += 1;
+        }
+        let t = self.tok(last);
+        matches!(t.tok, Tok::Hex(_))
+            || (t.tok == Tok::Name
+                && matches!(self.text(t), "pal" | "gray")
+                && self.tok(last + 1).tok == Tok::LParen)
+    }
+
+    /// Colour `rgb` in the paint palette (added once).
+    fn paint_index(&mut self, rgb: u32, at: Token) -> Result<u8, Error> {
+        if let Some(k) = self.paint.iter().skip(1).position(|&c| c == rgb) {
+            return Ok(k as u8 + 1);
+        }
+        if self.paint.len() >= MAX_PAINT {
+            return self.err(
+                at,
+                format!(
+                    "a formula paints with {} colours at most (each of a palette's 32 counts)",
+                    MAX_PAINT - 1
+                ),
+            );
+        }
+        try_push(&mut self.paint, rgb)?;
+        Ok((self.paint.len() - 1) as u8)
+    }
+
+    /// Palette `pal`'s 32 entries in the paint palette (once): where they
+    /// start.
+    fn paint_palette(&mut self, pal: u8, at: Token) -> Result<u8, Error> {
+        if let Some(&(_, b)) = self.paint_pals.iter().find(|e| e.0 == pal) {
+            return Ok(b);
+        }
+        if self.paint.len() + 32 > MAX_PAINT {
+            return self.err(
+                at,
+                format!(
+                    "a formula paints with {} colours at most (each of a palette's 32 counts)",
+                    MAX_PAINT - 1
+                ),
+            );
+        }
+        let base = self.paint.len() as u8;
+        for e in 0..32 {
+            let c = match pal {
+                255 => {
+                    let v = fixed::chan((e as i32) * ONE / 31) as u32;
+                    v << 16 | v << 8 | v
+                }
+                0..=4 => {
+                    let c = crate::tables::PALETTES[pal as usize][e];
+                    (c[0] as u32) << 16 | (c[1] as u32) << 8 | c[2] as u32
+                }
+                _ => self
+                    .palettes
+                    .get((pal - 5) as usize)
+                    .map_or(0, |p| p[e] as u32),
+            };
+            try_push(&mut self.paint, c)?;
+        }
+        try_push(&mut self.paint_pals, (pal, base))?;
+        Ok(base)
+    }
+
+    /// A paint colour at the cursor: `#…`, `pal(P, v)` or `gray(v)` (its
+    /// index, a value the same for every pixel).
+    #[inline(never)]
+    fn paint_colour(&mut self) -> Result<Id, Error> {
+        let t = self.peek();
+        let at = (t.start, t.end);
+        if let Tok::Hex(rgb) = t.tok {
+            self.next();
+            let k = self.paint_index(rgb, t)?;
+            return self.dag.constant((k as i32) << 16, at);
+        }
+        let word = if t.tok == Tok::Name { self.text(t) } else { "" };
+        if !matches!(word, "pal" | "gray") || self.tok(self.pos + 1).tok != Tok::LParen {
+            return self.err(
+                t,
+                "a colour to paint with is `#…` (as #f80), `pal(palette, v)` or `gray(v)`",
+            );
+        }
+        self.next();
+        self.next();
+        let pal = if word == "gray" {
+            255
+        } else {
+            let pt = self.next();
+            let pname = self.text(pt);
+            let own = self
+                .palette_named(pname)
+                .map(|k| 5 + self.palette_names[k].j as u8);
+            let Some(pal) = PALETTES.iter().find(|e| e.0 == pname).map(|e| e.1).or(own) else {
+                return Err(self.unknown_palette(pt));
+            };
+            self.expect(Tok::Comma, "`,` after the palette")?;
+            pal
+        };
+        let start = self.peek().start;
+        let v = self.expr(0)?;
+        let end = self.toks[self.pos.saturating_sub(1)].get().end;
+        self.drawable(v, start, end)?;
+        self.expect(Tok::RParen, "`)`")?;
+        let base = self.paint_palette(pal, t)?;
+        let m = self.dag.nodes[v as usize];
+        self.dag.push(
+            Node {
+                code: code::PALIDX,
+                a: v,
+                b: base as Id,
+                c: 0,
+                val: 0,
+                level: m.level.max(LV_FRAME),
+                why: m.why,
+            },
+            at,
+        )
+    }
+
+    /// A paint primitive at `t` (`pset(x, y, c)`, `line(x0, y0, x1, y1,
+    /// c)`, `rect`/`rectfill(x0, y0, x1, y1, c)`, `circ`/`circfill(x, y, r,
+    /// c)`, `trifill(x0, y0, x1, y1, x2, y2, c)`, `cls(c)`, `spr(s, x, y
+    /// [, flip])`, `print(text or value, x, y, c [, font [, digits]])`).
+    #[inline(never)]
+    fn paint_call(&mut self, t: Token) -> Result<(), Error> {
+        use crate::program::paint;
+        let name = self.text(t);
+        let kind = match name {
+            "cls" => paint::CLS,
+            "pset" | "dot" => paint::PSET,
+            "line" => paint::LINE,
+            "rect" => paint::RECT,
+            "rectfill" => paint::RECTFILL,
+            "circ" => paint::CIRC,
+            "circfill" => paint::CIRCFILL,
+            "trifill" => paint::TRIFILL,
+            "spr" => paint::SPR,
+            _ => paint::PRINT,
+        };
+        self.next();
+        let open = self.next();
+        let mut v = [0 as Id; 9];
+        let mut n;
+        let mut kind = kind;
+        let usage = match kind {
+            paint::CLS => "`cls(colour)`",
+            paint::PSET => "`pset(x, y, colour)` (or `dot`)",
+            paint::LINE => "`line(x0, y0, x1, y1, colour)`",
+            paint::RECT | paint::RECTFILL => "`rect(x0, y0, x1, y1, colour)` (corners included; `rectfill` filled)",
+            paint::CIRC | paint::CIRCFILL => "`circ(x, y, radius, colour)` (`circfill` filled)",
+            paint::TRIFILL => "`trifill(x0, y0, x1, y1, x2, y2, colour)`",
+            paint::SPR => "`spr(sprite, x, y)` or `spr(sprite, x, y, flip)` (1 across, 2 down, 3 both)",
+            _ => "`print(\"TEXT\" or a value, x, y, colour)`, then maybe `small` or `bold` and the digits a value has at least",
+        };
+        let at = (t.start, open.end);
+        // The values before the colour, the colour, then what follows it.
+        let before = match kind {
+            paint::SPR | paint::PRINT => 0,
+            k => paint::ARGS[k as usize] - 1,
+        };
+        if kind == paint::SPR {
+            let st = self.next();
+            let Some(k) = (st.tok == Tok::Name)
+                .then(|| self.sprite_named(self.text(st)))
+                .flatten()
+            else {
+                return self.err(
+                    st,
+                    "`spr` draws a sprite: `spr(name, x, y)`, its name a `sprite name { … }`'s",
+                );
+            };
+            let at_tab = self.sprites[k].start;
+            v[0] = self.dag.constant((at_tab as i32) << 16, at)?;
+            n = 1;
+            for _ in 0..3 {
+                if self.peek().tok != Tok::Comma {
+                    break;
+                }
+                self.next();
+                v[n] = self.paint_value()?;
+                n += 1;
+            }
+            if n == 3 {
+                v[3] = self.dag.constant(0, at)?;
+                n = 4;
+            }
+            if n != 4 {
+                return self.err(t, format!("{usage} takes a sprite and its place"));
+            }
+        } else if kind == paint::PRINT {
+            // The text: in quotes (its characters into the tables), or a value.
+            let st = self.peek();
+            if st.tok == Tok::Str {
+                self.next();
+                let text = sub(self.src, st.start + 1, st.end.saturating_sub(1));
+                let vals: Vec<i32> = text.bytes().map(|c| (c as i32) << 16).collect();
+                if vals.len() > 32 {
+                    return self.err(st, "`print` writes 32 characters at most");
+                }
+                let start = match self
+                    .tables
+                    .windows(vals.len().max(1))
+                    .position(|w| w == vals.as_slice())
+                {
+                    Some(k) if !vals.is_empty() => k,
+                    _ => {
+                        if self.tables.len() + vals.len() + 32 * self.palettes.len() > MAX_TABLE {
+                            return self.err(st, "this text doesn't fit: tables, sprites and texts hold 256 numbers in all");
+                        }
+                        try_extend(&mut self.tables, &vals)?;
+                        self.tables.len() - vals.len()
+                    }
+                };
+                v[0] = self.dag.constant((start as i32) << 16, at)?;
+                v[1] = self.dag.constant((vals.len() as i32) << 16, at)?;
             } else {
-                DItem::Dot([v[0], v[1], v[2]])
-            })?;
+                kind = paint::PRINTNUM;
+                v[0] = self.paint_value()?;
+                v[1] = self.dag.constant(ONE, at)?;
+            }
+            for slot in &mut v[3..5] {
+                self.expect(Tok::Comma, "`,` and where to write it")?;
+                *slot = self.paint_value()?;
+            }
+            self.expect(Tok::Comma, "`,` and the colour")?;
+            v[5] = self.paint_colour()?;
+            v[2] = self.dag.constant(0, at)?;
+            if self.peek().tok == Tok::Comma {
+                self.next();
+                let f = self.next();
+                let font = match (f.tok, self.text(f)) {
+                    (Tok::Name, "normal") => 0,
+                    (Tok::Name, "small") => 1,
+                    (Tok::Name, "bold") if kind == paint::PRINTNUM => 2,
+                    _ => {
+                        return self.err(
+                            f,
+                            "`print`'s font is `normal`, `small` or (for a value) `bold`",
+                        )
+                    }
+                };
+                v[2] = self.dag.constant(font << 16, at)?;
+                if kind == paint::PRINTNUM && self.peek().tok == Tok::Comma {
+                    self.next();
+                    v[1] = self.paint_value()?;
+                }
+            }
+            n = 6;
+        } else {
+            for (k, slot) in v.iter_mut().enumerate().take(before) {
+                if k > 0 {
+                    self.expect(Tok::Comma, "`,`")?;
+                }
+                if self.peek().tok == Tok::RParen {
+                    return self.err(t, format!("{usage}: a value is missing"));
+                }
+                *slot = self.paint_value()?;
+            }
+            if before > 0 {
+                self.expect(Tok::Comma, "`,` and the colour")?;
+            }
+            v[before] = self.paint_colour()?;
+            n = before + 1;
+        }
+        let close = self.peek();
+        if close.tok != Tok::RParen {
+            return self.err(close, format!("{usage}: expected `)` here"));
+        }
+        self.next();
+        if self.record {
+            try_push(&mut self.draw, DItem::Paint(kind, v, n as u8))?;
+        }
+        self.end_of_statement()
+    }
+
+    /// A value a paint primitive takes (the same for every pixel).
+    fn paint_value(&mut self) -> Result<Id, Error> {
+        let start = self.peek().start;
+        let e = self.expr(0)?;
+        let end = self.toks[self.pos.saturating_sub(1)].get().end;
+        self.drawable(e, start, end)?;
+        if self.dag.grows(e) {
+            return Err(Error::new(
+                start,
+                end.max(start),
+                "a value that grows without end can't be drawn at: use frac(t*k)*128, t % n or min(t, k)",
+            ));
+        }
+        Ok(e)
+    }
+
+    /// `if c { … } [else { … }]` at `kw`, inside draw.
+    #[inline(never)]
+    fn if_block(&mut self, kw: Token) -> Result<(), Error> {
+        self.next();
+        let c = self.paint_value()?;
+        let open = self.peek();
+        if open.tok != Tok::LBrace {
+            return Err(self.expected(open, "`{` (as in `if k > 2 { … }`)"));
+        }
+        self.next();
+        if self.record {
+            try_push(&mut self.draw, DItem::If(c))?;
+        }
+        self.depth += 1;
+        if self.depth > MAX_DEPTH {
+            return Err(self.too_deep());
+        }
+        self.draw_lines(kw)?;
+        self.next();
+        // `else {` on the same line or the next.
+        let mut k = self.pos;
+        while self.tok(k).tok == Tok::Newline {
+            k += 1;
+        }
+        let e = self.tok(k);
+        if e.tok == Tok::Name && self.text(e) == "else" && self.tok(k + 1).tok == Tok::LBrace {
+            self.pos = k + 2;
+            if self.record {
+                try_push(&mut self.draw, DItem::Else)?;
+            }
+            self.draw_lines(e)?;
+            self.next();
+        }
+        self.depth -= 1;
+        if self.record {
+            try_push(&mut self.draw, DItem::EndIf)?;
         }
         self.end_of_statement()
     }
@@ -4484,9 +5425,9 @@ impl<'s> Parser<'s> {
             blocks: 0,
             loop_v: None,
             fps: None,
+            rates: Vec::new(),
         };
         let mut last: Option<Token> = None;
-        let mut seen_frame = false;
         self.skip_newlines();
         self.header(end == Tok::Eof)?;
         loop {
@@ -4506,6 +5447,7 @@ impl<'s> Parser<'s> {
                 ));
             }
             match self.keyword() {
+                "fn" => self.fn_def(t)?,
                 "loop" => {
                     self.next();
                     if b.loop_v.is_some() {
@@ -4535,15 +5477,21 @@ impl<'s> Parser<'s> {
                         return self.err(t, "`fps` is already set");
                     }
                 }
-                "frame" => self.frame_block(t, &mut seen_frame)?,
+                _ if self.text(t) == "frame" && self.toks[self.pos + 1].get().tok == Tok::LBrace => return self.err(t, "there are no `frame { }` blocks: a value is worked out once a frame by itself when it reads only the time, the clock and the controls; write its lines without the block"),
                 "layer" => {
-                    let (cs, ct) = self.layer(t)?;
+                    let (cs, ct, rate) = self.layer(t)?;
+                    if rate > 0 {
+                        try_push(&mut b.rates, (b.colours.len(), rate))?;
+                    }
                     b.colours.extend(cs);
                     b.top = Some(ct);
                     b.layered = true;
                     b.blocks += 1;
                 }
-                "part" => self.part(t)?,
+                // E750.
+                "part" => {
+                    return self.err(t, "there are no parts: write a function, `fn p(x, y) { … }`, and call it, `p(x*2, y)`")
+                }
                 "draw" => self.draw_block(t)?,
                 "table" => self.table(t)?,
                 _ if self.is_sprite() => self.sprite(t)?,
@@ -4552,7 +5500,7 @@ impl<'s> Parser<'s> {
                 "use" => {
                     return self.err(
                         t,
-                        "`use` puts a formula in by its name, as `part p { … }`, when you leave the line",
+                        "`use` puts a formula in by its name, as a function `fn p(x, y) { … }`, when you leave the line",
                     )
                 }
                 _ if self.is_assignment() => self.assignment(false)?,
@@ -4608,8 +5556,11 @@ impl<'s> Parser<'s> {
         let bare = matches!(
             n.tok,
             Tok::Newline | Tok::Eof | Tok::RBrace | Tok::Num(_) | Tok::Name
-        ) && self.part_named(w).is_none()
-            && !self.locals.iter().any(|l| l.name == w && self.visible(l.scope));
+        ) && self.func_named(w).is_none()
+            && !self
+                .locals
+                .iter()
+                .any(|l| l.name == w && self.visible(l.scope));
         match w {
             "name" | "about" => n.tok == Tok::Str || bare,
             "control" => n.tok == Tok::Name,
@@ -4657,7 +5608,11 @@ impl<'s> Parser<'s> {
                     let k = usize::from(w == "about");
                     self.once(t, &mut seen[k])?;
                     let q = self.next();
-                    let most = if k == 0 { MAX_NAME_TEXT } else { MAX_ABOUT_TEXT };
+                    let most = if k == 0 {
+                        MAX_NAME_TEXT
+                    } else {
+                        MAX_ABOUT_TEXT
+                    };
                     let inner = self.text_in(q, most)?;
                     if host {
                         let d = &mut self.decls().text;
@@ -4759,7 +5714,12 @@ impl<'s> Parser<'s> {
                 (v >> 16) as usize
             }
             // E603.
-            _ => return self.err(t, "`psi` takes the language's version, a whole number: `psi 1`"),
+            _ => {
+                return self.err(
+                    t,
+                    "`psi` takes the language's version, a whole number: `psi 1`",
+                )
+            }
         };
         self.next();
         if v > VERSION {
@@ -4854,14 +5814,14 @@ impl<'s> Parser<'s> {
                 return Err(self.fail_at(
                     nt,
                     format!(
-                        "`{name}` is control {}'s letter: name this one something else (controls take a, b and c in order)",
-                        j + 1
+                        "`{name}` is the {} control's letter: give this one another name (controls take a, b, c in order)",
+                        ["first", "second", "third"][j]
                     ),
                 ));
             }
             Some(_) => {}
             None => {
-                self.new_name(nt)?;
+                self.new_name(nt, Naming::Control)?;
             }
         }
         let (mut lo, mut hi, mut def) = (0, ONE, None);
@@ -4877,7 +5837,10 @@ impl<'s> Parser<'s> {
             let b = self.signed().ok_or_else(|| self.fail(bt, HOW))?;
             if a >= b {
                 // E959.
-                return self.err(start, "a range goes from the lower number to the higher, e.g. `0..1`");
+                return self.err(
+                    start,
+                    "a range goes from the lower number to the higher, e.g. `0..1`",
+                );
             }
             (lo, hi, ranged) = (a, b, true);
         }
@@ -4920,14 +5883,18 @@ impl<'s> Parser<'s> {
             v = self.dag.op(code::FLOOR, [v, 0, 0], at)?;
         }
         if letter.is_none() {
-            try_push(&mut self.locals, Local {
-                name,
-                id: v,
-                at: nt.start,
-                in_frame: false,
-                counter: false,
-                scope: self.scope,
-            })?;
+            try_push(
+                &mut self.locals,
+                Local {
+                    name,
+                    id: v,
+                    at: nt.start,
+                    in_frame: false,
+                    counter: false,
+                    control: true,
+                    scope: self.scope,
+                },
+            )?;
         }
         // The slots: the formula's own controls, or a part's for a slot the
         // formula's own lines leave undeclared (the first part to declare it).
@@ -5024,6 +5991,12 @@ pub fn compile_with(
     compile_impl(src, prog, runs, narrow, true, true)
 }
 
+/// [`compile_into`] as the player takes it ([`crate::psb`]): laid out, but
+/// not narrowed or fused (the player does both itself, from the program).
+pub fn compile_portable(src: &str, prog: &mut Program) -> Result<Info, Error> {
+    compile_impl(src, prog, true, false, true, false)
+}
+
 /// [`compile_into`] without the fused runs' markers (`crate::fuse`; the
 /// same bytes): for the tests that compare, and psi-probe's before and
 /// after.
@@ -5060,7 +6033,7 @@ fn compile_impl(
     compile_full(
         src,
         prog,
-        (runs, narrow, reuse, fuse),
+        (runs, narrow, reuse, fuse, false),
         None,
         #[cfg(feature = "syntax")]
         None,
@@ -5077,7 +6050,7 @@ fn compile_impl(
 fn compile_full<'s>(
     src: &'s str,
     prog: &mut Program,
-    (runs, narrow, reuse, fuse): (bool, bool, bool, bool),
+    (runs, narrow, reuse, fuse, look): (bool, bool, bool, bool, bool),
     mut declared: Option<&mut Declared>,
     #[cfg(feature = "syntax")] sink: Option<&'s mut (dyn crate::syntax::Sink + 's)>,
 ) -> Result<Info, Error> {
@@ -5087,6 +6060,7 @@ fn compile_full<'s>(
         prog,
         runs,
         reuse,
+        look,
         declared.as_deref_mut(),
         #[cfg(feature = "syntax")]
         sink,
@@ -5099,6 +6073,7 @@ fn compile_full<'s>(
             prog,
             false,
             reuse,
+            look,
             declared,
             #[cfg(feature = "syntax")]
             None,
@@ -5117,14 +6092,7 @@ fn compile_full<'s>(
 /// as lanes, decided once. One place, so no way of compiling can miss one.
 #[inline(never)]
 fn finish_program(prog: &mut Program, narrow: bool, fuse: bool) {
-    if narrow {
-        crate::range::narrow(prog);
-        if fuse {
-            crate::fuse::fuse(prog);
-        }
-    }
-    // The draw loops that run as lanes, decided once (`vector_loop`).
-    prog.mark_lane_loops();
+    prog.finish(narrow, fuse);
 }
 
 /// [`compile_into`], and where the formula's declarations are in `src`
@@ -5138,7 +6106,7 @@ pub fn compile_declared(src: &str, prog: &mut Program) -> Result<Declared, Error
     compile_full(
         src,
         prog,
-        (true, false, true, false),
+        (true, false, true, false, false),
         Some(&mut d),
         #[cfg(feature = "syntax")]
         None,
@@ -5153,6 +6121,7 @@ fn compile_inner<'s>(
     prog: &mut Program,
     runs: bool,
     reuse: bool,
+    look: bool,
     declared: Option<&mut Declared>,
     #[cfg(feature = "syntax")] sink: Option<&'s mut (dyn crate::syntax::Sink + 's)>,
 ) -> Result<Info, Error> {
@@ -5188,10 +6157,7 @@ fn compile_inner<'s>(
         depth: 0,
         scope: 0,
         scopes: alloc::vec![(0, false)],
-        parts: Vec::new(),
         env: Env {
-            at: None,
-            t: None,
             loop_v: 0,
             ch: NO_CH,
         },
@@ -5202,6 +6168,10 @@ fn compile_inner<'s>(
         palettes: Vec::new(),
         palette_names: Vec::new(),
         draw: Vec::new(),
+        funcs: Vec::new(),
+        calling: Vec::new(),
+        paint: alloc::vec![0],
+        paint_pals: Vec::new(),
         drawn: None,
         record: true,
         in_draw: 0,
@@ -5215,13 +6185,17 @@ fn compile_inner<'s>(
         decls_seen: Vec::new(),
         #[cfg(feature = "syntax")]
         sink,
+        #[cfg(feature = "syntax")]
+        notes: Vec::new(),
+        #[cfg(feature = "syntax")]
+        loop_at: Vec::new(),
     };
     p.env.loop_v = p.loop_ahead(0).unwrap_or(8 * ONE);
     p.dag.forever = p.env.loop_v == FOREVER;
     let body = p.body(Tok::Eof);
     #[cfg(feature = "syntax")]
     p.observe();
-    finish(src, &mut p, body?, prog, runs, reuse, declared)
+    finish(src, &mut p, body?, prog, (runs, reuse, look), declared)
 }
 
 /// The rest of [`compile_inner`], once the formula is read: the program
@@ -5233,8 +6207,7 @@ fn finish(
     p: &mut Parser<'_>,
     body: Body,
     prog: &mut Program,
-    runs: bool,
-    reuse: bool,
+    (runs, reuse, look): (bool, bool, bool),
     declared: Option<&mut Declared>,
 ) -> Result<Info, Error> {
     if let Some(v) = body.loop_v {
@@ -5250,18 +6223,52 @@ fn finish(
         declarations(d, body.layered, prog, declared)?;
     }
     let mut layers = body.colours;
-    let (Some(ct), false) = (body.top, layers.is_empty()) else {
+    let mut top = body.top;
+    // A formula that only paints: under its paint, the picture under it
+    // (black when it plays alone), as a look over every GIF would want.
+    if top.is_none() && layers.is_empty() && p.draw.iter().any(|d| matches!(d, DItem::Paint(..))) {
+        let args = [
+            p.input(Input::Ur)?,
+            p.input(Input::Ug)?,
+            p.input(Input::Ub)?,
+        ];
+        try_push(
+            &mut layers,
+            Colour {
+                code: code::OUT_RGB,
+                args,
+                pal: 0,
+                alpha: None,
+                blend: fixed::BLEND_OVER,
+                scale: None,
+            },
+        )?;
+        top = p.drawn;
+    }
+    let (Some(ct), false) = (top, layers.is_empty()) else {
         let at = src.len();
-        let msg = if p.locals.is_empty() && p.parts.is_empty() {
+        let msg = if p.locals.is_empty() && p.funcs.is_empty() {
             "empty: write a colour, e.g. `hsv(x + t/4, 1, 1)`"
         } else {
             "the last line should be the colour, e.g. `rgb(r, g, b)`, `hsv(h, s, v)` or `pal(fire, k)`"
         };
         return Err(Error::new(at, at, msg));
     };
+    // (A look drawn with a blend or an amount redraws its layers every
+    // frame: a slow layer has to cover the whole panel.)
+    let slow = if look && as_look(p, prog, &mut layers, (ct.start, ct.end))? {
+        &[][..]
+    } else {
+        &body.rates[..]
+    };
     let frame_values = p.locals.iter().filter(|l| l.in_frame).count();
     // `ink` with nothing drawn: always a mistake (unlike `ur` alone).
-    if p.drawn.is_none() && p.dag.nodes.iter().any(|m| m.code == code::INK) {
+    if p.drawn.is_none()
+        && p.dag
+            .nodes
+            .iter()
+            .any(|m| matches!(m.code, code::INK | code::INKN))
+    {
         let t = (0..p.toks.len())
             .map(|k| p.toks[k].get())
             .find(|&t| t.tok == Tok::Name && p.text(t) == "ink")
@@ -5273,12 +6280,37 @@ fn finish(
         ));
     }
     prog.tables[..p.tables.len()].copy_from_slice(&p.tables);
+    prog.paint[..p.paint.len()].copy_from_slice(&p.paint);
     for (j, entries) in p.palettes.iter().enumerate() {
         prog.tables[user_palette_at(j)..][..32].copy_from_slice(entries);
     }
     if p.dag.forever {
+        // E905 at the formula's own value that grows and varies across the
+        // panel, when one is on the way.
+        let locals = &p.locals;
+        let named = |dag: &Dag, v: Id| -> Option<Error> {
+            let j = locals.iter().rposition(|l| l.id == v).or_else(|| {
+                cause(dag, v, &|m| {
+                    locals.iter().rposition(|l| l.id == m && dag.grows(m))
+                })
+                .0
+            })?;
+            let l = &locals[j];
+            // (Bytes, not `&src[..]`: a str slice brings its panic's
+            // Debug and Unicode tables, ~4 KB of wasm.)
+            let line = src.bytes().take(l.at).filter(|&b| b == b'\n').count() + 1;
+            Some(Error::new(
+                l.at,
+                l.at + l.name.len(),
+                format!(
+                    "a colour can't take a value that grows without end and changes across the panel, \
+                     as `{0}` (line {line}) does: use frac({0}) or min({0}/k, 1)",
+                    l.name
+                ),
+            ))
+        };
         for c in &mut layers {
-            grown_colour(&mut p.dag, c, (ct.start, ct.end))?;
+            grown_colour(&mut p.dag, c, (ct.start, ct.end), &named)?;
         }
     }
     // A layer under one that covers everything (`over`, coverage 1) is never
@@ -5291,10 +6323,43 @@ fn finish(
             && c.alpha
                 .is_none_or(|a| dag.konst(a).is_some_and(|v| v >= ONE))
     };
+    // Each layer's `rate` (0: every frame), by its index after the drain.
+    let mut rates = try_vec(0u8, layers.len())?;
+    for &(i, n) in slow {
+        if let Some(r) = rates.get_mut(i) {
+            *r = n;
+        }
+    }
     if let Some(k) = layers.iter().rposition(opaque) {
         layers.drain(..k);
+        rates.drain(..k);
     }
     let backdrop = !opaque(&layers[0]);
+    // `cycle`'s turned palettes: a slot each after the formula's own, one
+    // for each palette and turn (E933 past three in all).
+    let mut turns: Vec<Id> = Vec::new();
+    let turn_of =
+        |c: &Colour| (c.code == code::OUT_PAL && c.pal & TURNED != 0).then_some(c.args[1]);
+    for c in &layers {
+        if let Some(tn) = turn_of(c).filter(|tn| !turns.contains(tn)) {
+            turns.push(tn);
+        }
+    }
+    let n_own = p.palettes.len();
+    if n_own + turns.len() > USER_PALETTES {
+        // E933.
+        return Err(Error::new(
+            ct.start,
+            ct.end,
+            format!(
+                "a formula holds {USER_PALETTES} palettes: its own ({n_own} here) and one more for each turn `cycle` gives ({} here)",
+                turns.len()
+            ),
+        ));
+    }
+    for (j, &tn) in turns.iter().enumerate() {
+        p.dag.nodes[tn as usize].b = (n_own + j) as Id;
+    }
     let mut steps = Vec::with_capacity(layers.len());
     for (k, c) in layers.iter().enumerate() {
         let plain = k == 0 && !backdrop;
@@ -5328,18 +6393,61 @@ fn finish(
                 code::OUT_LAYER + (c.code - code::OUT_RGB) + 4 * c.blend
             },
             args: c.args,
-            pal: c.pal,
+            pal: match turn_of(c) {
+                Some(tn) => 5 + p.dag.nodes[tn as usize].b as u8,
+                None => c.pal,
+            },
             alpha,
             scale,
             shift,
+            turn: turn_of(c),
         });
     }
+    // `layer rate N { }`: the slow layers, a run from the bottom with one
+    // rate, under at least one that moves, covering the panel.
+    let n_slow = rates.iter().take_while(|&&r| r > 0).count();
+    let rate_err = |msg: &str| Err(Error::new(ct.start, ct.end, String::from(msg)));
+    if rates[n_slow..].iter().any(|&r| r > 0) {
+        // E941.
+        return rate_err("`rate` goes on the bottom layers only: the first layer, or the first few one after another");
+    }
+    let slow = if n_slow > 0 {
+        let n = rates[0];
+        if rates[..n_slow].iter().any(|&r| r != n) {
+            // E943.
+            return rate_err("the slow layers share one `rate`: give each the same number");
+        }
+        if n_slow == layers.len() {
+            // E947.
+            return rate_err("a `rate` layer is the slow one under a layer that moves: add a layer above it, or leave `rate` out");
+        }
+        if backdrop {
+            // E948.
+            return rate_err("the bottom `rate` layer must cover the whole panel: `layer rate N { … }`, no blend, no coverage");
+        }
+        let reads = split_slow(&mut p.dag, &mut steps, n_slow).map_err(|e| Error {
+            start: ct.start,
+            end: ct.end,
+            ..e
+        })?;
+        Some(Slow {
+            layers: n_slow,
+            rate: n,
+            reads,
+        })
+    } else {
+        None
+    };
     // What only reading needed goes before the layout: the tokens (the
     // biggest list), the names, the sharing index. Laying out holds a
     // dozen lists of its own; the compile's peak was the two at once.
     p.toks = Vec::new();
-    p.locals = Vec::new();
-    p.parts = Vec::new();
+    // (The language service names values in its notes after the layout.)
+    #[cfg(not(feature = "syntax"))]
+    {
+        p.locals = Vec::new();
+    }
+    p.funcs = Vec::new();
     p.tables = Vec::new();
     p.table_names = Vec::new();
     p.sprites = Vec::new();
@@ -5349,15 +6457,100 @@ fn finish(
     p.dag.divs = Vec::new();
     // A limit hit while laying out the steps is the formula's as a whole:
     // point at its (top) colour line.
-    emit(&p.dag, &steps, &p.draw, backdrop, runs, reuse, prog).map_err(|e| Error {
+    #[cfg(feature = "syntax")]
+    let mut seen = (Vec::new(), Vec::new());
+    emit(
+        &p.dag,
+        &steps,
+        &p.draw,
+        backdrop,
+        runs,
+        reuse,
+        slow,
+        prog,
+        #[cfg(feature = "syntax")]
+        &mut seen,
+    )
+    .map_err(|e| Error {
         start: ct.start,
         end: ct.end,
         ..e
     })?;
+    #[cfg(feature = "syntax")]
+    p.layout_notes(prog, &seen);
     Ok(Info {
         frame_values,
         layers: body.blocks,
     })
+}
+
+/// The formula as its own `look` line asks to be drawn over a GIF (`look
+/// screen 40`: its colour put on with that blend, covering that much):
+/// the player's look program. A formula with no `look` line, or `look`
+/// (over, 100), is drawn as it is.
+pub fn compile_look(src: &str, prog: &mut Program) -> Result<Info, Error> {
+    compile_full(
+        src,
+        prog,
+        (true, false, true, false, true),
+        None,
+        #[cfg(feature = "syntax")]
+        None,
+    )
+}
+
+/// [`compile_look`] with (`runs`) or without the runs and (`narrow`) or
+/// without the narrowed steps, as [`compile_with`]: the estimate's tests.
+#[doc(hidden)]
+pub fn compile_look_with(
+    src: &str,
+    prog: &mut Program,
+    runs: bool,
+    narrow: bool,
+) -> Result<Info, Error> {
+    compile_full(
+        src,
+        prog,
+        (runs, narrow, true, true, true),
+        None,
+        #[cfg(feature = "syntax")]
+        None,
+    )
+}
+
+/// [`compile_look`]'s blend and amount, put on the formula's colours (a
+/// formula with layers goes over only: [`declarations`] refused another).
+#[inline(never)]
+fn as_look(
+    p: &mut Parser<'_>,
+    prog: &Program,
+    layers: &mut [Colour],
+    at: (usize, usize),
+) -> Result<bool, Error> {
+    let Some((blend, amount)) = prog.meta().look().filter(|&(b, a)| b != "over" || a < 100) else {
+        return Ok(false);
+    };
+    let mode = BLENDS
+        .iter()
+        .find(|e| e.0 == blend)
+        .map_or(fixed::BLEND_OVER, |e| e.1);
+    let k = if amount < 100 {
+        Some(p.dag.constant((i32::from(amount) * ONE + 50) / 100, at)?)
+    } else {
+        None
+    };
+    for c in layers {
+        if mode != fixed::BLEND_OVER {
+            c.blend = mode;
+        }
+        if let Some(k) = k {
+            c.alpha = Some(match c.alpha {
+                Some(a) => p.dag.op(code::MUL, [a, k, 0], at)?,
+                None => k,
+            });
+        }
+    }
+    Ok(true)
 }
 
 /// [`compile_into`], telling `sink` what the compiler saw (the language
@@ -5368,7 +6561,7 @@ pub fn compile_observed<'s>(
     prog: &mut Program,
     sink: &'s mut (dyn crate::syntax::Sink + 's),
 ) -> Result<Info, Error> {
-    compile_full(src, prog, (true, true, true, true), None, Some(sink))
+    compile_full(src, prog, (true, true, true, true, false), None, Some(sink))
 }
 
 #[cfg(feature = "syntax")]
@@ -5383,11 +6576,26 @@ impl<'s> Parser<'s> {
             .rev()
             .find(|l| l.name == name && self.visible(l.scope))
             .map(|l| l.at)
-            .or(self.part_named(name).map(|k| self.parts[k].at))
+            .or(self.func_named(name).map(|k| self.funcs[k].at))
             .or(self.table_named(name).map(|k| self.table_names[k].at))
             .or(self.sprite_named(name).map(|k| self.sprites[k].at))
             .or(self.palette_named(name).map(|k| self.palette_names[k].at));
         self.reads.push((t.start, t.end, def.unwrap_or(usize::MAX)));
+    }
+
+    /// Whether a name set in `scope` is seen from `from` (as
+    /// [`visible`](Self::visible) from the scope being read).
+    fn seen_from(&self, mut from: u16, scope: u16) -> bool {
+        loop {
+            if from == scope {
+                return true;
+            }
+            let (parent, own) = self.scopes[from as usize];
+            if own || from == 0 {
+                return false;
+            }
+            from = parent;
+        }
     }
 
     /// Tell the sink what was read (after the formula, or up to an error).
@@ -5414,21 +6622,72 @@ impl<'s> Parser<'s> {
         for &(a, e) in &self.decls_seen {
             sink.declaration(sub(self.src, a, e), (a, e));
         }
-        for l in &self.locals {
-            let kind = if l.counter { Defined::Counter } else { Defined::Value };
-            sink.defined(l.name, word(self, l.at), kind, l.scope, level(self.dag.level(l.id)));
+        // A habit from other languages: radians in a wave (`sin(x*6.28)`).
+        self.radians_notes(&mut *sink);
+        for (i, l) in self.locals.iter().enumerate() {
+            let kind = if l.counter {
+                Defined::Counter
+            } else {
+                Defined::Value
+            };
+            let lv = self.dag.level(l.id);
+            sink.defined(l.name, word(self, l.at), kind, l.scope, level(lv));
+            if l.counter || lv == LV_CONST {
+                continue;
+            }
+            // The nearest value set before it (and seen from it) that makes
+            // it vary as it does, else the built-in.
+            let named = |m: Id| {
+                self.locals[..i]
+                    .iter()
+                    .rposition(|e| e.id == m && self.seen_from(l.scope, e.scope))
+            };
+            let via = match named(l.id) {
+                Some(j) => Some(j),
+                None => cause(&self.dag, l.id, &named).0,
+            };
+            let root = cause(&self.dag, l.id, &|_| None).1;
+            let n = &self.dag.nodes[root as usize];
+            let input = if n.code == K_INPUT || (code::U_R..=code::INKN).contains(&n.code) {
+                input_word(n).0
+            } else {
+                ""
+            };
+            sink.why(
+                word(self, l.at),
+                via.map(|j| word(self, self.locals[j].at)),
+                input,
+            );
         }
-        for p in &self.parts {
-            sink.defined(p.name, word(self, p.at), Defined::Part, p.scope, Level::Pixel);
+        for f in &self.funcs {
+            sink.defined(f.name, word(self, f.at), Defined::Function, 0, Level::Pixel);
         }
         for t in &self.table_names {
-            sink.defined(t.name, word(self, t.at), Defined::Table, t.scope, Level::Constant);
+            sink.defined(
+                t.name,
+                word(self, t.at),
+                Defined::Table,
+                t.scope,
+                Level::Constant,
+            );
         }
         for t in &self.sprites {
-            sink.defined(t.name, word(self, t.at), Defined::Sprite, t.scope, Level::Constant);
+            sink.defined(
+                t.name,
+                word(self, t.at),
+                Defined::Sprite,
+                t.scope,
+                Level::Constant,
+            );
         }
         for t in &self.palette_names {
-            sink.defined(t.name, word(self, t.at), Defined::Palette, t.scope, Level::Constant);
+            sink.defined(
+                t.name,
+                word(self, t.at),
+                Defined::Palette,
+                t.scope,
+                Level::Constant,
+            );
         }
         for &(a, e, d) in &self.reads {
             sink.read((a, e), (d != usize::MAX).then(|| word(self, d)));
@@ -5436,7 +6695,12 @@ impl<'s> Parser<'s> {
         for &(id, a, e) in &self.dag.made {
             let n = self.dag.nodes[id as usize];
             if n.code < K_CONST {
-                sink.op((a, e), level(n.level), n.code, crate::program::value_ns(n.code));
+                sink.op(
+                    (a, e),
+                    level(n.level),
+                    n.code,
+                    crate::program::value_ns(n.code),
+                );
             }
         }
         self.sink = Some(sink);
@@ -5475,11 +6739,16 @@ fn declarations(
 /// the others held to 0..1 (the colour step clamps them so anyway); a
 /// coverage, a palette's scale or a value with a part per pixel can't
 /// (E905).
-fn grown_colour(dag: &mut Dag, c: &mut Colour, at: (usize, usize)) -> Result<(), Error> {
+fn grown_colour(
+    dag: &mut Dag,
+    c: &mut Colour,
+    at: (usize, usize),
+    named: &dyn Fn(&Dag, Id) -> Option<Error>,
+) -> Result<(), Error> {
     // Held to 0..1, as the colour step and the coverage hold it anyway.
     let unit = |dag: &mut Dag, v: Id| -> Result<Id, Error> {
         if !dag.is_wide(v) {
-            return Err(Error::new(at.0, at.1, GROWN_COLOUR));
+            return Err(named(dag, v).unwrap_or_else(|| Error::new(at.0, at.1, GROWN_COLOUR)));
         }
         let (z, one) = (dag.constant(0, at)?, dag.constant(ONE, at)?);
         let lo = dag.op(code::MAX, [v, z, 0], at)?;
@@ -5500,29 +6769,29 @@ fn grown_colour(dag: &mut Dag, c: &mut Colour, at: (usize, usize)) -> Result<(),
     if let Some(a) = c.alpha.filter(|&a| dag.grows(a)) {
         c.alpha = Some(unit(dag, a)?);
     }
-    if c.scale.is_some_and(|k| dag.grows(k)) {
-        return Err(Error::new(at.0, at.1, GROWN_COLOUR));
+    if let Some(k) = c.scale.filter(|&k| dag.grows(k)) {
+        return Err(named(dag, k).unwrap_or_else(|| Error::new(at.0, at.1, GROWN_COLOUR)));
     }
     Ok(())
 }
 
 /// E922: a palette's colours.
-const PALETTE_COLOURS: &str =
-    "a palette is 1 to 32 colours: `palette sea = #003, #06c, #fff` (pal(sea, 0) is the first, pal(sea, 1) the last)";
+const PALETTE_COLOURS: &str = "a palette is 1 to 32 colours: `palette sea = #003, #06c, #fff`";
 
 /// E912/E913: a sprite's key.
 const SPRITE_KEY: &str =
     "a sprite starts with its key: `key . 0, R 1, D 2` (each character, then the number it reads as)";
-const SPRITE_KEY_ENTRY: &str = "a key is a character and its number, as `R 1` or `. -0.5`, separated by commas (not ; { } , - / or a space)";
+const SPRITE_KEY_ENTRY: &str =
+    "a key entry is a character (not ; { } , - / or a space) and its number, `R 1`, after a comma";
 
 /// E901 for a growing value with a part per pixel or row.
-const GROWS_SPLIT: &str = "a value that grows without end plus a part per pixel or row only goes into frac, sin, cos, tri, saw, sqr, noise, % or a multiply: \
-add the pixel's part there, as frac(t*k) + x or sin(t*k + x)";
+const GROWS_SPLIT: &str = "a growing value plus a per-pixel or per-row part only goes into frac, \
+the waves, noise, % or a multiply: as frac(t*k) + x or sin(t*k + x)";
 
 /// E905.
 const GROWN_COLOUR: &str =
-    "a colour can't take a value that grows without end and changes across the panel \
-(`t` in a `loop forever` formula): use frac(…) of it, or min(t/k, 1)";
+    "a colour can't take a value that grows without end and changes across the panel: \
+use frac(…) of it, or min(t/k, 1)";
 
 /// A colour step to lay out: its code (plain or a layer's), its values,
 /// the palette and the coverage (a layer's).
@@ -5535,18 +6804,128 @@ struct Step {
     /// x, 3).
     scale: Option<Id>,
     shift: u8,
+    /// `cycle`'s turn of its palette (a row step, `code::TURN`).
+    turn: Option<Id>,
 }
 
 impl Step {
     /// What it reads, in operand order (a palette's scale, then the
-    /// coverage last).
+    /// coverage), then the turn of its palette (not an operand: a row step
+    /// before it).
     fn reads(&self) -> impl Iterator<Item = Id> + '_ {
         self.args[..code::arity(self.code)]
             .iter()
             .copied()
             .chain(self.scale)
             .chain(self.alpha)
+            .chain(self.turn)
     }
+}
+
+/// A formula's slow layers (`layer rate N { }`): the first `layers`
+/// colour steps, redrawn every `rate`th frame, reading what `reads` says
+/// (`crate::rate::READS_*`).
+#[derive(Clone, Copy)]
+struct Slow {
+    layers: usize,
+    rate: u8,
+    reads: u8,
+}
+
+/// Give the slow layers (the first `n` steps) pixel values of their own:
+/// one the layers above read too is copied for them (the fast part runs
+/// without the slow one's steps, the slow part without the fast one's).
+/// What they read, transitively (`rate::READS_*`); E944 if they read the
+/// canvas or the picture under.
+#[inline(never)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+fn split_slow(dag: &mut Dag, steps: &mut [Step], n: usize) -> Result<u8, Error> {
+    let len = dag.nodes.len();
+    // Who reads each node: bit 0 the slow layers, bit 1 the others.
+    let mut by = try_vec(0u8, len)?;
+    for (k, st) in steps.iter().enumerate() {
+        let b = if k < n { 1 } else { 2 };
+        for x in st.reads() {
+            by[x as usize] |= b;
+        }
+    }
+    for i in (0..len).rev() {
+        let b = by[i];
+        if b != 0 && dag.nodes[i].code < K_CONST {
+            for x in reads(dag, i) {
+                by[x as usize] |= b;
+            }
+        }
+    }
+    // Copies, in node order (operands first): a pixel value both read is
+    // copied for the slow layers, and so is one only they read that reads
+    // a copy.
+    let mut what = 0u8;
+    let mut map = try_vec(NO, len)?;
+    for i in 0..len {
+        if by[i] & 1 == 0 {
+            continue;
+        }
+        let mut c = dag.nodes[i];
+        if (code::U_R..=code::INKN).contains(&c.code) || c.code == code::UAT {
+            // E944.
+            return Err(Error::new(
+                0,
+                0,
+                "a `rate` layer is drawn on its own: it can't read `ink`, `ur`, `ug`, `ub` or `ul`",
+            ));
+        }
+        if c.code == K_INPUT {
+            what |= match c.val {
+                WIDE_T | 0 => crate::rate::READS_T,
+                1..=3 => crate::rate::READS_CLOCK,
+                4..=6 => crate::rate::READS_SLIDERS,
+                v if v == S_SEED as i32 => crate::rate::READS_SEED,
+                _ => 0,
+            };
+            continue;
+        }
+        if c.level != LV_PIXEL || c.code >= K_CONST {
+            continue;
+        }
+        let mut moved = false;
+        for x in [&mut c.a, &mut c.b, &mut c.c]
+            .into_iter()
+            .take(code::arity(c.code))
+        {
+            if map[*x as usize] != NO {
+                *x = map[*x as usize];
+                moved = true;
+            }
+        }
+        // (A node only the slow layers read, of a copy: copied too, after
+        // it — every node after the nodes it reads.)
+        if by[i] & 2 == 0 && !moved {
+            continue;
+        } else if dag.nodes.len() >= MAX_NODES {
+            return Err(Error::new(
+                0,
+                0,
+                "this formula is too long for the panel — simplify it",
+            ));
+        } else {
+            try_push(&mut dag.nodes, c)?;
+            map[i] = (dag.nodes.len() - 1) as Id;
+        }
+    }
+    for st in &mut steps[..n] {
+        let ar = code::arity(st.code);
+        for x in st.args[..ar]
+            .iter_mut()
+            .chain(st.scale.as_mut())
+            .chain(st.alpha.as_mut())
+        {
+            if map[*x as usize] != NO {
+                *x = map[*x as usize];
+            }
+        }
+    }
+    Ok(what)
 }
 
 /// Lay the reachable nodes out as steps: scalar slots for the constants
@@ -5559,6 +6938,7 @@ impl Step {
 /// order it is written: each loop's values (those that depend on its
 /// counter) at the top of its body.
 #[inline(never)]
+#[allow(clippy::too_many_arguments)]
 fn emit(
     dag: &Dag,
     steps: &[Step],
@@ -5566,7 +6946,9 @@ fn emit(
     backdrop: bool,
     runs: bool,
     reuse: bool,
+    slow: Option<Slow>,
     prog: &mut Program,
+    #[cfg(feature = "syntax")] seen: &mut (Vec<usize>, Vec<usize>),
 ) -> Result<(), Error> {
     let nodes = &dag.nodes;
     let n = nodes.len();
@@ -5575,7 +6957,7 @@ fn emit(
             0,
             0,
             format!(
-                "this formula is too long for the panel ({steps} steps; the limit is {MAX_OPS}) — simplify it"
+                "this formula is too long for the panel: {steps} steps, the limit is {MAX_OPS}"
             ),
         )
     };
@@ -5602,12 +6984,19 @@ fn emit(
     close(&mut need);
     // The draw stage only when something shown reads `ink` (else, like a
     // value nothing uses, it is left out).
-    let inked = (0..n).any(|i| need[i] != NONE && nodes[i].code == code::INK);
-    let draw = if inked { draw } else { &[] };
+    let inked = (0..n).any(|i| need[i] != NONE && matches!(nodes[i].code, code::INK | code::INKN));
+    let painted = draw.iter().any(|d| matches!(d, DItem::Paint(..)));
+    let draw = if inked || painted { draw } else { &[] };
     for item in draw {
+        let one;
         let ids: &[Id] = match item {
             DItem::Line(v) => v,
             DItem::Dot(v) => v,
+            DItem::Paint(_, v, n) => &v[..*n as usize],
+            DItem::If(c) => {
+                one = [*c];
+                &one
+            }
             _ => &[],
         };
         for &x in ids {
@@ -5617,6 +7006,9 @@ fn emit(
     close(&mut need);
     if inked {
         prog.uses |= INKED;
+    }
+    if painted {
+        prog.uses |= PAINTS;
     }
     let live = |i: usize| need[i] != NONE;
     // A value that grows without end with a part per pixel, where nothing
@@ -5632,7 +7024,8 @@ fn emit(
             _ => 1,
         })
         .sum();
-    let total = (0..n).filter(|&i| is_op(i)).count() + steps.len() + control;
+    let total =
+        (0..n).filter(|&i| is_op(i)).count() + steps.len() + control + usize::from(slow.is_some());
     if total > MAX_OPS {
         return Err(too_long(total));
     }
@@ -5701,12 +7094,23 @@ fn emit(
             if nodes[i].val as u8 == LANE | L_I {
                 prog.uses |= USES_I;
             }
-        } else if is_op(i) && (code::U_R..=code::U_L).contains(&nodes[i].code) {
+        } else if is_op(i)
+            && ((code::U_R..=code::U_L).contains(&nodes[i].code) || nodes[i].code == code::UAT)
+        {
             prog.uses |= UNDER;
         }
     }
     if backdrop {
         prog.uses |= BACKDROP;
+    }
+    // A `rate` formula's fast part draws over the held picture, which it
+    // reads as the picture under: none of it may read what is under (E944).
+    if slow.is_some() && prog.uses & UNDER != 0 {
+        return Err(Error::new(
+            0,
+            0,
+            "a formula with `rate` draws its own picture: it can't read `ur`, `ug`, `ub` or `ul`",
+        ));
     }
     let mut ops: Vec<WOp> = try_with_capacity(total + 2)?;
     // A step for node `m` into `d`; a pick's table of its choices' slots
@@ -5732,10 +7136,10 @@ fn emit(
         }
         let l = |k: usize, x: Id| if n > k { loc[x as usize] } else { 0 };
         let (mut b, mut c) = (l(1, m.b), l(2, m.c));
-        if m.code == code::TAB {
+        if m.code == code::TAB || m.code == code::PALIDX {
             (b, c) = (m.b, m.c);
         }
-        if matches!(m.code, code::W_CMP | code::W_MINMAX | code::SPR) {
+        if matches!(m.code, code::W_CMP | code::W_MINMAX | code::SPR | code::UAT) {
             c = m.c;
         }
         if m.code == code::PICK {
@@ -5775,14 +7179,14 @@ fn emit(
     for level in [LV_FRAME, LV_ROW] {
         for i in 0..n {
             let m = &nodes[i];
-            if is_op(i) && m.level == level {
+            if is_op(i) && m.level == level && m.code != code::TURN {
                 // A wide value has a wide slot; a noise's offset its place.
                 let d = if code::is_wide(m.code) && code::wide_ops(m.code).0 {
                     if next_wide >= WIDE {
                         return Err(Error::new(
                             0,
                             0,
-                            format!("this formula has too many values that grow without end (more than {}) — simplify it", WIDE - 1),
+                            format!("too many values that grow without end (more than {}): share one, as frac(u*k) of one `u`", WIDE - 1),
                         ));
                     }
                     next_wide += 1;
@@ -5803,8 +7207,56 @@ fn emit(
             // loop's values, its lines and inner loops; END back to just
             // after the FOR.
             let mut open: Vec<(usize, u16, u16)> = Vec::new();
+            // `if`: the IF (or the else's JUMP) whose target is the end.
+            let mut ifs: Vec<usize> = Vec::new();
             for item in draw {
                 match *item {
+                    DItem::Paint(kind, v, n) => {
+                        let l = |k: usize| loc[v[k.min(n as usize - 1)] as usize];
+                        let groups = (n as usize).div_ceil(3);
+                        for g in 0..groups {
+                            let k = 3 * g;
+                            ops.push(WOp {
+                                code: if g + 1 == groups {
+                                    code::PAINT
+                                } else {
+                                    code::ARGS
+                                },
+                                d: if g + 1 == groups { kind as u16 } else { 0 },
+                                a: l(k),
+                                b: l(k + 1),
+                                c: l(k + 2),
+                            });
+                        }
+                    }
+                    DItem::If(cond) => {
+                        ifs.push(ops.len());
+                        ops.push(WOp {
+                            code: code::IF,
+                            d: 0,
+                            a: loc[cond as usize],
+                            b: 0,
+                            c: 0,
+                        });
+                    }
+                    DItem::Else => {
+                        if let Some(at) = ifs.pop() {
+                            ifs.push(ops.len());
+                            ops.push(WOp {
+                                code: code::JUMP,
+                                d: 0,
+                                a: 0,
+                                b: 0,
+                                c: 0,
+                            });
+                            ops[at].b = ops.len().min(255) as u16;
+                        }
+                    }
+                    DItem::EndIf => {
+                        if let Some(at) = ifs.pop() {
+                            ops[at].b = ops.len().min(255) as u16;
+                        }
+                    }
                     DItem::For(ctr, count) => {
                         let cs = new_slot(&mut vs, Some((count as i32) << 16))?;
                         let ks = new_slot(&mut vs, None)?;
@@ -5871,6 +7323,27 @@ fn emit(
             }
             prog.draw_end = ops.len().min(MAX_OPS) as u16;
         } else {
+            // `cycle`'s turns, the row section's last steps (the JIT's
+            // driver runs them after its row function): palette slot `b`
+            // (`finish`'s) as palette `val` turned by `a`.
+            for i in 0..n {
+                let m = &nodes[i];
+                if is_op(i) && m.code == code::TURN {
+                    if !set[m.a as usize] {
+                        return Err(Error::new(0, 0, String::from(LAYOUT_BUG)));
+                    }
+                    loc[i] = 0;
+                    set[i] = true;
+                    prog.uses |= OWNPAL;
+                    ops.push(WOp {
+                        code: code::TURN,
+                        d: m.b,
+                        a: loc[m.a as usize],
+                        b: m.val as u16,
+                        c: 0,
+                    });
+                }
+            }
             prog.row_end = ops.len().min(MAX_OPS) as u16;
         }
     }
@@ -5884,32 +7357,91 @@ fn emit(
     // worked out on a frame's first row and kept (`Item::Column`), when
     // they are worth a step; then the still cache's values. Each tried
     // with the registers, dropped when they don't fit.
+    // The slow layers' pixel values (`split_slow` gave them their own):
+    // never in the column or the still run (the slow part runs without
+    // them, the fast part without the slow steps).
+    // (Lists of their own only for a `rate` formula: this is where the
+    // compile's heap peaks.)
+    let none = alloc::vec![false; n];
+    let mut in_slow = Vec::new();
+    if let Some(sl) = slow {
+        in_slow = try_vec(false, n)?;
+        for st in &steps[..sl.layers] {
+            for x in st.reads() {
+                in_slow[x as usize] = true;
+            }
+        }
+        for i in (0..n).rev() {
+            if in_slow[i] && nodes[i].code < K_CONST {
+                for x in reads(dag, i) {
+                    in_slow[x as usize] = true;
+                }
+            }
+        }
+    }
+    let slow_px = |i: usize| in_slow.get(i).copied().unwrap_or(false);
     let col = column_nodes(dag);
-    let in_col: Vec<bool> = (0..n).map(|i| px_op(i) && col[i]).collect();
+    let in_col: Vec<bool> = (0..n).map(|i| px_op(i) && col[i] && !slow_px(i)).collect();
+    let mut no_still = Vec::new();
+    if slow.is_some() {
+        no_still = in_slow.clone();
+        for (o, &c) in no_still.iter_mut().zip(&in_col) {
+            *o |= c;
+        }
+    }
     let col_ns: u32 = (0..n)
         .filter(|&i| in_col[i])
         .map(|i| value_ns(nodes[i].code))
         .sum();
-    let none = alloc::vec![false; n];
     let mut layout = None;
-    for (use_col, use_still) in [(true, true), (true, false), (false, true), (false, false)] {
+    // A formula that cycles a palette (`cycle`) asks the still cache first:
+    // its picture is usually still, and with the index cached a frame is
+    // the palette's turn and a look-up (console-lessons 2.1). The others
+    // keep the column run first, as before.
+    let cycles = steps.iter().any(|st| st.turn.is_some());
+    let orders = if cycles {
+        [(true, true), (false, true), (true, false), (false, false)]
+    } else {
+        [(true, true), (true, false), (false, true), (false, false)]
+    };
+    for (use_col, use_still) in orders {
         let (use_col, use_still) = (use_col && runs, use_still && runs);
         let use_col = use_col && col_ns >= COLUMN_GAIN_NS;
         let excl = if use_col { &in_col } else { &none };
         let markers = usize::from(use_col);
         let cached = if use_still && total + markers < MAX_OPS {
-            choose_still(dag, steps, &px_op, excl)
+            choose_still(
+                dag,
+                steps,
+                &px_op,
+                match (slow.is_some(), use_col) {
+                    (false, _) => excl,
+                    (true, true) => &no_still,
+                    (true, false) => &in_slow,
+                },
+            )
         } else {
             Vec::new()
         };
-        if (use_col && col_ns < COLUMN_GAIN_NS) || (use_still && cached.is_empty() && !use_col) {
+        if (use_col && col_ns < COLUMN_GAIN_NS)
+            || (use_still && cached.is_empty() && (!use_col || cycles))
+        {
             continue;
         }
         // The markers are steps too: at the step limit, the plain layout.
         if total + markers + usize::from(!cached.is_empty()) > MAX_OPS {
             continue;
         }
-        let lay = pixel_seq(dag, steps, &px_op, &need, &cached, excl, use_col);
+        let lay = pixel_seq(
+            dag,
+            steps,
+            &px_op,
+            &need,
+            &cached,
+            excl,
+            use_col,
+            slow.map_or(0, |s| s.layers),
+        );
         if let Some(r) = registers(nodes, steps, &lay.seq, &lay.pinned) {
             layout = Some((lay, cached, r));
             break;
@@ -5919,10 +7451,25 @@ fn emit(
         return Err(Error::new(
             0,
             0,
-            format!("this formula keeps too many values at once (more than {REGS}) — simplify it"),
+            format!("this formula holds more than {REGS} values at once (the panel's registers): use each sooner"),
         ));
     };
-    let (seq, run_len, col_len) = (lay.seq, lay.run_len, lay.col_len);
+    let (seq, run_len, col_len, slow_len) = (lay.seq, lay.run_len, lay.col_len, lay.slow_len);
+    // (The language service's cache note: the still cache's values and the
+    // column run's.)
+    #[cfg(feature = "syntax")]
+    {
+        seen.0 = if run_len > 0 {
+            cached.clone()
+        } else {
+            Vec::new()
+        };
+        seen.1 = if col_len > 0 {
+            (0..n).filter(|&i| in_col[i]).collect()
+        } else {
+            Vec::new()
+        };
+    }
     let mut marker = None;
     for (at, item) in seq.iter().enumerate() {
         match *item {
@@ -5933,6 +7480,20 @@ fn emit(
                 b: 0,
                 c: 0,
             }),
+            Item::Slow => {
+                let sl = slow.unwrap_or(Slow {
+                    layers: 0,
+                    rate: 0,
+                    reads: 0,
+                });
+                ops.push(WOp {
+                    code: code::SLOW,
+                    d: u16::from(sl.rate),
+                    a: slow_len as u16,
+                    b: sl.layers as u16,
+                    c: u16::from(sl.reads),
+                });
+            }
             Item::Still => {
                 marker = Some(ops.len());
                 ops.push(WOp {
@@ -6125,7 +7686,7 @@ fn assign_slots(
         Error::new(
             0,
             0,
-            format!("this formula has too many numbers and steps (more than {MAX_SCALARS} values) — simplify it"),
+            format!("this formula needs more than {MAX_SCALARS} numbers and once-a-frame values: use fewer"),
         )
     };
     let mut phys = alloc::vec![0u8; n];
@@ -6201,6 +7762,8 @@ enum Item {
     Colour(usize),
     Still,
     Column,
+    /// The slow layers' marker (`code::SLOW`).
+    Slow,
 }
 
 /// A wide noise's code.
@@ -6255,7 +7818,7 @@ fn registers(
                     last_use[x as usize] = at;
                 }
             }
-            Item::Still | Item::Column => {}
+            Item::Still | Item::Column | Item::Slow => {}
         }
     }
     // A kept column value is never given up: the rows after the first
@@ -6317,7 +7880,7 @@ fn still_nodes(dag: &Dag) -> Vec<bool> {
             }
             K_COUNTER | K_SPLIT => false,
             // (A wide noise's offsets move every frame.)
-            c if (code::U_R..=code::INK).contains(&c) || is_noise_o(c) => false,
+            c if (code::U_R..=code::INKN).contains(&c) || c == code::UAT || is_noise_o(c) => false,
             _ => reads(dag, i).all(|x| still[x as usize]),
         };
     }
@@ -6475,6 +8038,8 @@ struct PixelSeq {
     seq: Vec<Item>,
     run_len: usize,
     col_len: usize,
+    /// The slow layers' items after their marker.
+    slow_len: usize,
     pinned: Vec<bool>,
 }
 
@@ -6483,6 +8048,7 @@ struct PixelSeq {
 /// still cache the per-frame values the cached run reads, the marker and
 /// the run (the cached values and the steps only they need), then the other
 /// values before the colour step that first needs them, as without either.
+#[allow(clippy::too_many_arguments)]
 fn pixel_seq(
     dag: &Dag,
     steps: &[Step],
@@ -6491,15 +8057,40 @@ fn pixel_seq(
     cached: &[usize],
     in_col: &[bool],
     col: bool,
+    slow: usize,
 ) -> PixelSeq {
     let n = dag.nodes.len();
     let mut seq: Vec<Item> = Vec::new();
     let mut pinned = alloc::vec![false; n];
     let mut col_len = 0;
+    // The slow layers (`layer rate N`) first, after their marker: their
+    // values and colours (none in the runs below); the slow part runs only
+    // them, the fast part starts after them. (A whole frame never runs a
+    // `rate` formula's steps in one go: the runs' kept registers are not
+    // the slow steps' to keep.)
+    // (One loop for a layer's values and colour, the slow ones' and the
+    // others'.)
+    let layer = |seq: &mut Vec<Item>, k: usize, ok: &dyn Fn(usize) -> bool| {
+        for (i, &nd) in need.iter().enumerate().take(n) {
+            if nd == k && ok(i) {
+                seq.push(Item::Value(i));
+            }
+        }
+        seq.push(Item::Colour(k));
+    };
+    let mut slow_len = 0;
+    if slow > 0 {
+        seq.push(Item::Slow);
+        for k in 0..slow {
+            layer(&mut seq, k, px_op);
+        }
+        slow_len = seq.len() - 1;
+    }
     if col {
         seq.push(Item::Column);
+        let at = seq.len();
         seq.extend((0..n).filter(|&i| in_col[i]).map(Item::Value));
-        col_len = seq.len() - 1;
+        col_len = seq.len() - at;
         // Kept: the column values something after the run reads.
         for i in 0..n {
             if px_op(i) && !in_col[i] {
@@ -6529,18 +8120,14 @@ fn pixel_seq(
             run_len = seq.len() - before;
         }
     }
-    for k in 0..steps.len() {
-        for i in 0..n {
-            if px(i) && need[i] == k && !run[i] && !first[i] {
-                seq.push(Item::Value(i));
-            }
-        }
-        seq.push(Item::Colour(k));
+    for k in slow..steps.len() {
+        layer(&mut seq, k, &|i| px(i) && !run[i] && !first[i]);
     }
     PixelSeq {
         seq,
         run_len,
         col_len,
+        slow_len,
         pinned,
     }
 }
@@ -6566,7 +8153,7 @@ fn column_nodes(dag: &Dag) -> Vec<bool> {
                 }
                 K_CONST => true,
                 K_COUNTER => false,
-                c if (code::U_R..=code::INK).contains(&c) => false,
+                c if (code::U_R..=code::INKN).contains(&c) || c == code::UAT => false,
                 _ => reads(dag, i).all(|x| col[x as usize]),
             },
             _ => false,

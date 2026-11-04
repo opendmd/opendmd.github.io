@@ -78,14 +78,24 @@ pub fn q16(num: i32, den: i32) -> i32 {
 /// The VM's working memory for a lane width `N` (64 or 128): the lane
 /// registers, the `i` lane, the scalar slots, and the `x`/`px` columns
 /// (worked out once, by [`Scratch::new`] or [`Scratch::reset`]): 8,192 B
-/// at 128 lanes, 4,864 B at 64. Plain integers, so a zeroed allocation plus `reset` is a
-/// valid one.
+/// at 128 lanes, 4,864 B at 64, and racing the beam's 12 B. Plain integers, so a zeroed allocation plus `reset` is a
+/// valid one. (`repr(C)`: the beam's fields after the VM's, which keep
+/// their offsets.)
+#[repr(C)]
 pub struct Scratch<const N: usize> {
     /// `[0]` is the `i` lane, then the [`REGS`] registers.
     pub(crate) lanes: [[i32; N]; REGS + 1],
     pub(crate) sc: [i32; MAX_SCALARS],
     pub(crate) xs: [i32; W],
     pub(crate) pxs: [i32; W],
+    /// Racing the beam, while a frame is drawn ([`render_rows_beam`]):
+    /// the rows' order (0 top to bottom, 1 the panel's pair order), the
+    /// sink, and the row begun last (+ 1; 0 none). `next`: the frame
+    /// loop's place in the order (`Rows::begin`).
+    pub(crate) order: u8,
+    pub(crate) last: u8,
+    pub(crate) next: u8,
+    pub(crate) beam: BeamSink,
 }
 
 impl<const N: usize> Scratch<N> {
@@ -99,6 +109,10 @@ impl<const N: usize> Scratch<N> {
             sc: [0; MAX_SCALARS],
             xs: [0; W],
             pxs: [0; W],
+            order: 0,
+            last: 0,
+            next: 0,
+            beam: BeamSink::default(),
         };
         s.reset();
         s
@@ -219,6 +233,34 @@ fn run2<const N: usize, A: Src, B: Src>(
     }
 }
 
+/// `run1` and `run2` in IRAM, for the two steps a raced Formula's draw
+/// loop spent its flash time on (`recip`, `hash`: Starfield's lanes,
+/// display-isolation 2026-11-02, esp32sim's block profile). Generic as
+/// they are: only the instances these two are used with are placed.
+#[inline(never)]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi_hot")]
+fn run1_hot<const N: usize, A: Src>(d: &mut [i32; N], mut a: A, f: impl Fn(i32) -> i32) {
+    for o in d.iter_mut() {
+        *o = f(a.at(0));
+        a.step(1);
+    }
+}
+
+#[inline(never)]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi_hot")]
+fn run2_hot<const N: usize, A: Src, B: Src>(
+    d: &mut [i32; N],
+    mut a: A,
+    mut b: B,
+    f: impl Fn(i32, i32) -> i32,
+) {
+    for o in d.iter_mut() {
+        *o = f(a.at(0), b.at(0));
+        a.step(1);
+        b.step(1);
+    }
+}
+
 #[inline(never)]
 fn run3<const N: usize, A: Src, B: Src, C: Src>(
     d: &mut [i32; N],
@@ -297,6 +339,31 @@ fn fast2<const N: usize, A: Src, B: Src>(
 #[inline(never)]
 #[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
 fn fast3<const N: usize, A: Src, B: Src, C: Src>(
+    d: &mut [i32; N],
+    mut a: A,
+    mut b: B,
+    mut c: C,
+    f: impl Fn(i32, i32, i32) -> i32,
+) {
+    for o in d.as_chunks_mut::<4>().0 {
+        let x = [a.at(0), a.at(1), a.at(2), a.at(3)];
+        let y = [b.at(0), b.at(1), b.at(2), b.at(3)];
+        let z = [c.at(0), c.at(1), c.at(2), c.at(3)];
+        *o = [
+            f(x[0], y[0], z[0]),
+            f(x[1], y[1], z[1]),
+            f(x[2], y[2], z[2]),
+            f(x[3], y[3], z[3]),
+        ];
+        a.step(4);
+        b.step(4);
+        c.step(4);
+    }
+}
+
+/// [`fast3`] in flash: the operand orders of `mix` no bundled Formula uses.
+#[inline(never)]
+fn fast3_flash<const N: usize, A: Src, B: Src, C: Src>(
     d: &mut [i32; N],
     mut a: A,
     mut b: B,
@@ -545,6 +612,11 @@ pub fn render_rows_still<const N: usize>(
     rows: u32,
     out: &mut [u8],
 ) {
+    if prog.slow_marker().is_some() {
+        return crate::rate::render_scratch::<N>(
+            prog, scratch, ink, still, inputs, tables, rows, out, true, None,
+        );
+    }
     frame::<N>(
         prog,
         scratch,
@@ -559,6 +631,7 @@ pub fn render_rows_still<const N: usize>(
         // (Opaque: a constant here had LLVM make a second, specialised
         // copy of the frame loop, 9 KB of IRAM.)
         core::hint::black_box(None),
+        core::hint::black_box(crate::rate::WHOLE),
     )
 }
 
@@ -568,6 +641,8 @@ pub fn render_rows_still<const N: usize>(
 /// not word-aligned; a row not drawn is left as it was: give zeros).
 /// The bytes written are the same as without it; the player marks only
 /// what changed, so the blit pushes nothing else (console-lessons 2.5).
+/// A `rate` formula (drawn from nothing: see [`crate::render_held`] for
+/// its held way) says every row drawn changed.
 #[allow(clippy::too_many_arguments)]
 pub fn render_rows_changed<const N: usize>(
     prog: &Program,
@@ -581,6 +656,20 @@ pub fn render_rows_changed<const N: usize>(
     out: &mut [u8],
     changed: &mut [u32; H],
 ) {
+    if prog.slow_marker().is_some() {
+        return crate::rate::render_scratch::<N>(
+            prog,
+            scratch,
+            ink,
+            still,
+            inputs,
+            tables,
+            rows,
+            out,
+            true,
+            Some(changed),
+        );
+    }
     frame::<N>(
         prog,
         scratch,
@@ -593,6 +682,164 @@ pub fn render_rows_changed<const N: usize>(
         out,
         true,
         core::hint::black_box(Some(changed)),
+        core::hint::black_box(crate::rate::WHOLE),
+    )
+}
+
+/// Racing the beam (console-lessons §2.6): told [`BEAM_START`] as the rows
+/// start, then each row pair as soon as both its rows are drawn — `sink(p, out, top, bottom)` for rows `p` and
+/// `p + 16` (`p` in 0..16, in order), `top` and `bottom` their changed
+/// groups as [`render_rows_changed`] gives them (all set without a
+/// compare). `out` then holds those two rows of the new frame, the rows
+/// told before them, and the old bytes of the rows still to come.
+pub type PairSink<'a> = &'a mut (dyn FnMut(usize, &[u8], u32, u32) + 'a);
+
+/// What a [`PairSink`] is told once, first, as the rows start (after the
+/// frame's steps and its draw stage, before the first row): `sink(BEAM_START,
+/// out, 0, 0)`. The player plans the race from there, so a heavy draw stage
+/// is not counted as the first pair's time (Starfield, beam-b).
+pub const BEAM_START: usize = usize::MAX;
+
+/// Row `i` of the pair order: 0, 16, 1, 17, … 15, 31 (the panel lights
+/// rows `r` and `r + 16` together, `r` = 0..15 down each refresh).
+#[inline(always)]
+pub fn pair_row(i: usize) -> usize {
+    (i >> 1) | ((i & 1) * (H / 2))
+}
+
+/// The rows in order (`Scratch::order` 0), and in the panel's pair order
+/// ([`pair_row`]; 1).
+static ORDERS: [[u8; H]; 2] = {
+    let mut t = [[0u8; H]; 2];
+    let mut i = 0;
+    while i < H {
+        t[0][i] = i as u8;
+        t[1][i] = ((i >> 1) | ((i & 1) * (H / 2))) as u8;
+        i += 1;
+    }
+    t
+};
+
+/// The frame loop's next row of `rows` in the scratch's order (`H`: none
+/// left). (Out of IRAM: once a row.)
+#[inline(never)]
+#[cfg_attr(all(target_os = "espidf", feature = "sram1-iram"), link_section = ".iram1.s1")]
+fn next_row<const N: usize>(scratch: &mut Scratch<N>, rows: u32) -> usize {
+    loop {
+        let i = usize::from(scratch.next);
+        if i >= H {
+            return H;
+        }
+        scratch.next += 1;
+        let r = usize::from(ORDERS[usize::from(scratch.order & 1)][i]);
+        if rows & (1 << r) != 0 {
+            return r;
+        }
+    }
+}
+
+/// Racing the beam's sink while a frame is drawn ([`render_rows_beam`]):
+/// in the scratch, not an argument of `frame` (one more cost the IRAM
+/// loop spills). `None` (all-zero) otherwise.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct BeamSink(Option<core::ptr::NonNull<PairFn>>);
+
+/// What a [`PairSink`] points at.
+type PairFn = dyn FnMut(usize, &[u8], u32, u32);
+
+// SAFETY: only ever set for the length of one `frame` call on the calling
+// thread (`BeamGuard`); a scratch moved between threads holds `None`.
+unsafe impl Send for BeamSink {}
+unsafe impl Sync for BeamSink {}
+
+/// Clears the scratch's sink and order when the frame is done (or panics).
+struct BeamGuard<'s, const N: usize>(&'s mut Scratch<N>);
+
+impl<const N: usize> Drop for BeamGuard<'_, N> {
+    fn drop(&mut self) {
+        self.0.beam = BeamSink::default();
+        self.0.order = 0;
+        self.0.last = 0;
+    }
+}
+
+/// A whole frame as [`render_rows_still`] (with `changed`:
+/// [`render_rows_changed`]) draws it, the same bytes and the same changed
+/// groups, but its rows drawn in the panel's pair order with `sink` told
+/// of each pair as it is finished ([`PairSink`]), so the player can write
+/// it to the panel behind the scan. A `rate` formula with its slow layers'
+/// picture held in `under` ([`crate::Held::picture`], brought up to date
+/// first): its fast part raced over it, the bytes of
+/// [`crate::render_held`]'s frame. Without `under` a `rate` formula is drawn
+/// whole from nothing first and the pairs told after; any other formula
+/// reads `under` as [`render_rows_still`] does.
+#[allow(clippy::too_many_arguments)]
+pub fn render_rows_beam<const N: usize>(
+    prog: &Program,
+    scratch: &mut Scratch<N>,
+    ink: Option<&mut Ink>,
+    still: Option<&mut Still>,
+    inputs: &Inputs,
+    tables: &Tables,
+    under: Option<&[u8]>,
+    out: &mut [u8],
+    changed: Option<&mut [u32; H]>,
+    sink: PairSink<'_>,
+) {
+    let rate = prog.slow_marker().is_some();
+    if rate && under.is_none() {
+        let mut ch = [u32::MAX; H];
+        let tell = changed.is_some();
+        crate::rate::render_scratch::<N>(
+            prog,
+            scratch,
+            ink,
+            still,
+            inputs,
+            tables,
+            u32::MAX,
+            out,
+            true,
+            Some(&mut ch),
+        );
+        sink(BEAM_START, out, 0, 0);
+        for p in 0..H / 2 {
+            sink(p, out, ch[p], ch[p + H / 2]);
+        }
+        if let Some(c) = changed.filter(|_| tell) {
+            *c = ch;
+        }
+        return;
+    }
+    // SAFETY: the sink's lifetime is erased for the scratch; the guard
+    // clears it before `sink`'s borrow ends.
+    let erased = unsafe {
+        core::mem::transmute::<
+            core::ptr::NonNull<dyn FnMut(usize, &[u8], u32, u32) + '_>,
+            core::ptr::NonNull<dyn FnMut(usize, &[u8], u32, u32) + 'static>,
+        >(core::ptr::NonNull::from(sink))
+    };
+    let g = BeamGuard(scratch);
+    g.0.beam = BeamSink(Some(erased));
+    g.0.order = 1;
+    g.0.last = 0;
+    frame::<N>(
+        prog,
+        g.0,
+        ink,
+        still,
+        inputs,
+        tables,
+        under,
+        u32::MAX,
+        out,
+        true,
+        core::hint::black_box(changed),
+        core::hint::black_box(if rate {
+            crate::rate::FAST
+        } else {
+            crate::rate::WHOLE
+        }),
     )
 }
 
@@ -611,6 +858,11 @@ pub fn render_rows_ink_turns<const N: usize>(
     rows: u32,
     out: &mut [u8],
 ) {
+    if prog.slow_marker().is_some() {
+        return crate::rate::render_scratch::<N>(
+            prog, scratch, ink, None, inputs, tables, rows, out, false, None,
+        );
+    }
     frame::<N>(
         prog,
         scratch,
@@ -623,6 +875,7 @@ pub fn render_rows_ink_turns<const N: usize>(
         out,
         core::hint::black_box(false),
         core::hint::black_box(None),
+        core::hint::black_box(crate::rate::WHOLE),
     )
 }
 
@@ -634,7 +887,7 @@ pub fn render_rows_ink_turns<const N: usize>(
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
 #[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
-fn frame<const N: usize>(
+pub(crate) fn frame<const N: usize>(
     prog: &Program,
     scratch: &mut Scratch<N>,
     ink: Option<&mut Ink>,
@@ -646,6 +899,7 @@ fn frame<const N: usize>(
     out: &mut [u8],
     lanes: bool,
     changed: Option<&mut [u32; H]>,
+    part: u8,
 ) {
     #[cfg(feature = "stats")]
     stats::stamp(1);
@@ -666,11 +920,9 @@ fn frame<const N: usize>(
     if prog.uses & SEEDED != 0 {
         sc[S_SEED as usize] = inputs.seed;
     }
-    let (fe, re, pe) = (
-        prog.frame_end as usize,
-        prog.row_end as usize,
-        prog.pixel_end as usize,
-    );
+    let fe = prog.frame_end as usize;
+    #[cfg(not(target_arch = "wasm32"))]
+    let pe = prog.pixel_end as usize;
     // A `loop forever` formula's wide values (0: `t`) live in the last
     // lane while the frame's steps run (no lane is in use before the rows).
     if prog.forever() {
@@ -692,6 +944,14 @@ fn frame<const N: usize>(
         }
         _ => None,
     };
+    let paint = crate::draw::paint_of(prog, ink);
+    // A `rate` formula's parts (`crate::rate`): the slow part runs only
+    // the steps after its marker (no still cache: the caller gives none),
+    // the fast part the steps after those, each lane starting from `under`
+    // (the held picture) or, without one, from what `out` holds. (Any part
+    // but these of a `rate` formula: the fast part.)
+    let fast = part == crate::rate::FAST;
+    let (k0, k1) = crate::rate::steps(prog, part);
     let mut cache = match (still, prog.still_marker()) {
         (Some(st), Some(at)) if st.lanes_for(prog) => {
             if st.holds(prog) {
@@ -718,20 +978,27 @@ fn frame<const N: usize>(
     if prog.uses & OWNPAL != 0 {
         unpack_palettes(&prog.tables, &mut own);
     }
-    let backdrop = prog.uses & BACKDROP != 0;
+    let backdrop = prog.uses & BACKDROP != 0 || fast;
     // Each row's values and what it changed (`Rows`): the row as it was
     // kept when `changed` asks.
     let mut per_row = Rows::new(changed, out);
     // The column run: on the first row drawn, then its values are kept in
     // their registers (one lane is the whole row only at N = W).
     let mut columns_kept = false;
+    // Racing the beam: the rows in the panel's pair order, each pair told
+    // as soon as both its rows are drawn (`render_rows_beam`): the order
+    // and the sink are the scratch's, and `Rows::begin` tells the pair the
+    // row before it finished (nothing more in this loop, no argument more
+    // to it: every value it keeps live cost spills, 0.2-0.5 KB of IRAM).
     #[cfg(feature = "stats")]
     stats::stamp(2);
-    for row in 0..H {
-        if rows & (1 << row) == 0 {
-            continue;
+    scratch.next = 0;
+    loop {
+        // (The row, and its values and kept bytes: `Rows::begin`.)
+        let row = per_row.begin(prog, scratch, tables, out, rows, &mut own);
+        if row >= H {
+            break;
         }
-        per_row.begin(prog, scratch, tables, out, row);
         let span = row * W * 3..(row + 1) * W * 3;
         let row_bytes = &mut out[span.clone()];
         let under_row = under.map(|u| &u[span.clone()]);
@@ -748,15 +1015,16 @@ fn frame<const N: usize>(
             if backdrop {
                 match ul {
                     Some(u) => px.as_flattened_mut().copy_from_slice(u),
-                    None => px.fill([0; 3]),
+                    None if !fast => px.fill([0; 3]),
+                    None => {}
                 }
             }
             // (A still cache's lanes are pointed at again by its marker
             // below, at this lane's pixels.)
             let mut alias: Alias = [core::ptr::null(); REGS + 1];
-            let mut k = re;
+            let mut k = k0;
             let mut keep_at = usize::MAX;
-            while k < pe {
+            while k < k1 {
                 let op = &prog.ops[k];
                 if k == keep_at {
                     if let Cache::Keep(st, at) = &mut cache {
@@ -811,6 +1079,11 @@ fn frame<const N: usize>(
                     k += 1;
                     continue;
                 }
+                if op.code == code::UAT {
+                    under_at(scratch, &mut alias, op, base, under);
+                    k += 1;
+                    continue;
+                }
                 if code::is_colour(op.code) {
                     colour_step(scratch, &alias, op, base, tables, &own, px);
                 } else {
@@ -829,9 +1102,15 @@ fn frame<const N: usize>(
                 k += 1;
             }
         }
+        // The paint plane over every layer (`draw { }` with colours): once
+        // a row, out of line (a test in the lane loop would have LLVM copy
+        // the loop: IRAM); no call at all for a formula that doesn't paint.
+        if let Some(p) = paint {
+            crate::draw::paint_row(prog, p, row, &mut out[span]);
+        }
         columns_kept = N == W;
     }
-    per_row.finish(out);
+    per_row.end(out, scratch);
     #[cfg(feature = "stats")]
     stats::stamp(3);
     if let Cache::Keep(st, _) = cache {
@@ -854,7 +1133,13 @@ pub(crate) fn reg_index(v: u8) -> usize {
 /// Copy the cached registers' lanes (`n` of `regs`) into the kept lanes at
 /// pixel `at`.
 #[inline(never)]
-pub(crate) fn keep<const N: usize>(s: &Scratch<N>, st: &mut Still, regs: [u8; 2], n: u8, at: usize) {
+pub(crate) fn keep<const N: usize>(
+    s: &Scratch<N>,
+    st: &mut Still,
+    regs: [u8; 2],
+    n: u8,
+    at: usize,
+) {
     for (j, &r) in regs.iter().enumerate().take(n as usize) {
         if let Some(l) = st.lanes[j].as_deref_mut() {
             l.0[at..at + N].copy_from_slice(&s.lanes[reg_index(r)]);
@@ -877,10 +1162,23 @@ pub(crate) fn fetch<const N: usize>(al: &mut Alias, st: &Still, regs: [u8; 2], n
 /// The row steps for one row. In flash (consolea-a: as quick as in IRAM,
 /// the road 3,347 µs against main's 3,393; `noise_o` and the other row
 /// helpers they call stay in IRAM), and IRAM is short.
+///
+/// `cycle`'s turns (`code::TURN`, the section's last steps) turn the
+/// formula's palette slots in `own` for the row.
 #[inline(never)]
-fn row_steps<const N: usize>(prog: &Program, scratch: &mut Scratch<N>, tables: &Tables) {
-    for op in &prog.ops[prog.draw_end as usize..prog.row_end as usize] {
+#[cfg_attr(all(target_os = "espidf", feature = "sram1-iram"), link_section = ".iram1.s1")]
+pub(crate) fn row_steps<const N: usize>(
+    prog: &Program,
+    scratch: &mut Scratch<N>,
+    tables: &Tables,
+    own: &mut Pals,
+) {
+    let turns = prog.turns();
+    for op in &prog.ops[prog.draw_end as usize..turns.start] {
         scalar(&mut scratch.sc, op, tables, &prog.tables);
+    }
+    for op in &prog.ops[turns] {
+        crate::program::turn(tables, own, &scratch.sc, op);
     }
 }
 
@@ -910,6 +1208,42 @@ impl<'a> Rows<'a> {
         }
     }
 
+    /// Racing the beam: the row drawn last compared, and if it was a
+    /// pair's second (`p + 16`), the pair told to the scratch's sink. (Out
+    /// of the IRAM loop: 16 pairs a frame.)
+    #[inline(never)]
+    fn tell<const N: usize>(&mut self, out: &[u8], scratch: &mut Scratch<N>) {
+        self.finish(out);
+        let last = core::mem::replace(&mut scratch.last, 0) as usize;
+        let Some(mut sink) = scratch.beam.0 else {
+            return;
+        };
+        if last == 0 {
+            // SAFETY: as below.
+            unsafe { (sink.as_mut())(BEAM_START, out, 0, 0) };
+        } else if last > H / 2 {
+            let row = last - 1;
+            let p = row - H / 2;
+            let (a, b) = self
+                .changed
+                .as_deref()
+                .map_or((u32::MAX, u32::MAX), |c| (c[p], c[row]));
+            // SAFETY: set by `render_rows_beam` around this frame's call
+            // only (`BeamGuard` clears it), so the closure is alive.
+            unsafe { (sink.as_mut())(p, out, a, b) };
+        }
+    }
+
+    /// After the last row: it compared (and, racing, its pair told).
+    #[inline(never)]
+    fn end<const N: usize>(&mut self, out: &[u8], scratch: &mut Scratch<N>) {
+        if scratch.beam.0.is_some() {
+            self.tell(out, scratch);
+        } else {
+            self.finish(out);
+        }
+    }
+
     /// Row `row`'s values in the slots the pixel steps read (`py` and `y`,
     /// then the row steps), and its bytes kept (the row drawn before it
     /// compared first).
@@ -923,14 +1257,24 @@ impl<'a> Rows<'a> {
         scratch: &mut Scratch<N>,
         tables: &Tables,
         out: &[u8],
-        row: usize,
-    ) {
-        self.finish(out);
+        rows: u32,
+        own: &mut Pals,
+    ) -> usize {
+        let row = next_row(scratch, rows);
+        if row >= H {
+            return H;
+        }
+        if scratch.beam.0.is_some() {
+            self.tell(out, scratch);
+        } else {
+            self.finish(out);
+        }
+        scratch.last = row as u8 + 1;
         // y and py count from the bottom (y = 0 is the bottom row).
-        let py = ((H - 1 - row) as i32) << 16;
+        let py = (row as i32) << 16;
         scratch.sc[S_PY as usize] = py;
         scratch.sc[S_Y as usize] = fixed::div(py, ((H - 1) as i32) << 16);
-        row_steps(prog, scratch, tables);
+        row_steps(prog, scratch, tables, own);
         if self.track && row < H {
             self.kept = row;
             // SAFETY: row `row`'s W × 3 bytes of the W × H × 3 picture,
@@ -945,6 +1289,7 @@ impl<'a> Rows<'a> {
         } else if let Some(c) = self.changed.as_deref_mut().and_then(|ch| ch.get_mut(row)) {
             *c = u32::MAX;
         }
+        row
     }
 
     /// Which 4-pixel groups of the row `begin` kept differ from its bytes
@@ -967,7 +1312,8 @@ impl<'a> Rows<'a> {
                 let mut now = out.as_ptr().add(row * W * 3).cast::<u32>();
                 let mut was = self.before.as_ptr();
                 for g in 0..W / 4 {
-                    let d = (*was ^ *now) | (*was.add(1) ^ *now.add(1)) | (*was.add(2) ^ *now.add(2));
+                    let d =
+                        (*was ^ *now) | (*was.add(1) ^ *now.add(1)) | (*was.add(2) ^ *now.add(2));
                     m |= u32::from(d != 0) << g;
                     now = now.add(3);
                     was = was.add(3);
@@ -997,6 +1343,7 @@ pub(crate) fn scalar_value(
     match op.code {
         code::TAB => tab(tabs, op.b, op.c, g(op.a)),
         code::SPR => spr(tabs, op.c, g(op.a), g(op.b)),
+        code::PALIDX => (op.b as i32 + fixed::pal_index(g(op.a)) as i32) << 16,
         code::NOISE_O..=code::NOISE_O_LAST => noise_o(g(op.a), g(op.b), g(op.c), sc, op.code),
         _ => eval(op.code, g(op.a), g(op.b), g(op.c), Some(t)),
     }
@@ -1122,6 +1469,7 @@ impl<const N: usize> Scratch<N> {
 /// scalar steps' own functions ([`value_of`]: what a turn at a time runs).
 #[cfg(not(target_arch = "wasm32"))]
 #[inline(never)]
+#[cfg_attr(all(target_os = "espidf", feature = "sram1-iram"), link_section = ".iram1.s1")]
 pub(crate) fn lane_draw<const N: usize>(
     s: &mut Scratch<N>,
     op: &Op,
@@ -1142,14 +1490,14 @@ pub(crate) fn lane_draw<const N: usize>(
         SUB => bin!(fast2, d, a, b, fixed::sub),
         MUL => bin!(fast2, d, a, b, fixed::mul),
         DIV => bin!(run2, d, a, b, fixed::div),
-        RECIP => un!(run1, d, a, fixed::recip),
+        RECIP => un!(run1_hot, d, a, fixed::recip),
         LT => bin!(fast2, d, a, b, fixed::lt),
         GT => bin!(fast2, d, a, b, fixed::gt),
         AND => bin!(fast2, d, a, b, fixed::and),
         OR => bin!(fast2, d, a, b, fixed::or),
         MIN => bin!(fast2, d, a, b, fixed::min),
         MAX => bin!(fast2, d, a, b, fixed::max),
-        HASH => bin!(run2, d, a, b, fixed::hash),
+        HASH => bin!(run2_hot, d, a, b, fixed::hash),
         MOD => bin!(run2, d, a, b, fixed::modulo),
         LE => bin!(fast2, d, a, b, fixed::le),
         GE => bin!(fast2, d, a, b, fixed::ge),
@@ -1306,7 +1654,7 @@ pub(crate) fn lane_op<const N: usize>(
         MAX => bin!(fast2, d, a, b, fixed::max),
         STEP => bin!(fast2, d, a, b, fixed::step),
         ATAN2 => bin!(run2, d, a, b, fixed::atan2),
-        HASH => bin!(run2, d, a, b, fixed::hash),
+        HASH => bin!(run2_hot, d, a, b, fixed::hash),
         LEN => bin!(run2, d, a, b, fixed::len),
         BIT => bin!(fast2, d, a, b, fixed::bit),
         NEG => un!(fast1, d, a, fixed::neg),
@@ -1320,7 +1668,7 @@ pub(crate) fn lane_op<const N: usize>(
         SAW => un!(fast1, d, a, fixed::saw),
         SQR => un!(fast1, d, a, fixed::sqr),
         SQRT => un!(run1, d, a, fixed::sqrt),
-        RECIP => un!(run1, d, a, fixed::recip),
+        RECIP => un!(run1_hot, d, a, fixed::recip),
         // (k is always a lane: a pick with a scalar k is compares and
         // selects.)
         PICK => {
@@ -1335,7 +1683,21 @@ pub(crate) fn lane_op<const N: usize>(
         TAB => tab_lane(d, a, tabs, op),
         SELECT => tern!(fast3, d, a, b, c, fixed::select),
         CLAMP => tern!(fast3, d, a, b, c, fixed::clamp),
-        MIX => tern!(fast3, d, a, b, c, fixed::mix),
+        // `mix` from IRAM with its operands as the bundled Formulas have
+        // them (scalar/lane: SLS, SSL, LLS; each also lowers to the JIT);
+        // the four orders none uses from flash, their 2.7 KB of IRAM the
+        // draw stage's (census of opendmd-web/formulas, display-isolation
+        // 2026-11-02).
+        MIX => match (a, b, c) {
+            (Arg::Sc(u), Arg::Lane(q), Arg::Sc(w)) => fast3(d, S(u), L(q), S(w), fixed::mix),
+            (Arg::Sc(u), Arg::Sc(v), Arg::Lane(r)) => fast3(d, S(u), S(v), L(r), fixed::mix),
+            (Arg::Lane(p), Arg::Lane(q), Arg::Sc(w)) => fast3(d, L(p), L(q), S(w), fixed::mix),
+            (Arg::Lane(p), Arg::Lane(q), Arg::Lane(r)) => fast3_flash(d, L(p), L(q), L(r), fixed::mix),
+            (Arg::Lane(p), Arg::Sc(v), Arg::Lane(r)) => fast3_flash(d, L(p), S(v), L(r), fixed::mix),
+            (Arg::Lane(p), Arg::Sc(v), Arg::Sc(w)) => fast3_flash(d, L(p), S(v), S(w), fixed::mix),
+            (Arg::Sc(u), Arg::Lane(q), Arg::Lane(r)) => fast3_flash(d, S(u), L(q), L(r), fixed::mix),
+            (Arg::Sc(u), Arg::Sc(v), Arg::Sc(w)) => d.fill(fixed::mix(u, v, w)),
+        },
         SMOOTH => tern!(run3, d, a, b, c, fixed::smooth),
         // A whole `z` (`noise(x, y, 0)`): the plane's four corners only —
         // the other four are weighed 0 there, so the bytes are the same.
@@ -1350,7 +1712,9 @@ pub(crate) fn lane_op<const N: usize>(
         // monomorphised copies would be ~1 KB more of wasm.
         DIGIT..=DIGIT_B => glyph_lane(d, [a, b, c], &glyphs(t, op.code)),
         U_R..=U_L => load_under(d, under, op.code - U_R),
-        INK => load_ink(d, ink),
+        INK => load_ink(d, ink, 0),
+        // (`n` a constant: `Arg::Sc`.)
+        INKN => load_ink(d, ink, if let Arg::Sc(n) = a { n >> 16 } else { 0 }),
         _ => {}
     }
 }
@@ -1738,11 +2102,17 @@ fn load_under<const N: usize>(d: &mut [i32; N], under: Option<&[u8]>, ch: u8) {
     }
 }
 
-/// The draw stage's canvas under the lane, 0..1; 0 without one.
+/// The draw stage's canvas under the lane, 0..1 (`n` 0), or in `n`
+/// levels (`ink(n)`, `fixed::ink_levels`); 0 without one.
 #[inline(never)]
 #[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
-fn load_ink<const N: usize>(d: &mut [i32; N], ink: Option<&[u8]>) {
+fn load_ink<const N: usize>(d: &mut [i32; N], ink: Option<&[u8]>, n: i32) {
     match ink {
+        Some(k) if n > 0 => {
+            for (o, &b) in d.iter_mut().zip(k) {
+                *o = fixed::ink_levels(b, n);
+            }
+        }
         Some(k) => {
             for (o, &b) in d.iter_mut().zip(k) {
                 *o = fixed::byte(b);
@@ -1939,4 +2309,45 @@ pub mod stats {
         };
         STILL1.store(still1, Relaxed);
     }
+
+    /// The paint plane laid over a whole frame (`out`, W × H × 3 bytes) as
+    /// the VM and the JIT's driver lay it, a row at a time: psi-probe times
+    /// the overlay alone with it. Nothing for a formula that doesn't paint
+    /// or a canvas without the plane.
+    pub fn paint_rows(prog: &Program, ink: &Ink, out: &mut [u8]) {
+        if let Some(p) = crate::draw::paint_of(prog, Some(ink)) {
+            for (row, span) in out.chunks_exact_mut(W * 3).enumerate().take(H) {
+                crate::draw::paint_row(prog, p, row, span);
+            }
+        }
+    }
+}
+
+/// `under(x', y')`'s channel `op.c` for a lane: the picture under the
+/// formula at the pixel nearest (x', y'), held to the panel (0 without a
+/// picture). Out of line, in flash.
+#[inline(never)]
+fn under_at<const N: usize>(
+    s: &mut Scratch<N>,
+    al: &mut Alias,
+    op: &Op,
+    base: usize,
+    under: Option<&[u8]>,
+) {
+    let (a, b) = (s.arg(al, op.a, base), s.arg(al, op.b, base));
+    let at = |v: Arg, j: usize| match v {
+        // SAFETY: a lane operand points at N values (`Scratch::arg`).
+        Arg::Lane(p) => unsafe { *p.add(j) },
+        Arg::Sc(v) => v,
+    };
+    let ch = (op.c as usize).min(2);
+    let mut out = [0i32; N];
+    for (j, o) in out.iter_mut().enumerate() {
+        let x = (fixed::add(at(a, j), fixed::ONE / 2) >> 16).clamp(0, W as i32 - 1) as usize;
+        let y = (fixed::add(at(b, j), fixed::ONE / 2) >> 16).clamp(0, H as i32 - 1) as usize;
+        *o = fixed::byte(under.map_or(0, |u| u.get((y * W + x) * 3 + ch).copied().unwrap_or(0)));
+    }
+    let di = reg_index(op.d);
+    al[di] = core::ptr::null();
+    s.lanes[di] = out;
 }

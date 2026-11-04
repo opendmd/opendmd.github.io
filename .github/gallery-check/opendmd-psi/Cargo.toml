@@ -1,6 +1,6 @@
 [package]
 name = "opendmd-psi"
-version = "1.0.0-beta.12"
+version = "1.0.0-beta.13"
 edition = "2021"
 description = "Psi: OpenDMD's per-pixel effects language (Formulas) — a compiler and a row-vectorised Q16.16 VM, no_std."
 license = "MIT OR Apache-2.0"
@@ -12,7 +12,14 @@ publish = false
 [dependencies]
 
 [features]
-default = ["tables"]
+# The ESP32 build with SRAM1 as IRAM (sdkconfig ESP_SYSTEM_ESP32_SRAM1_REGION_AS_IRAM,
+# the Makefile's FW_SRAM1_IRAM=1): the next hottest functions placed there too.
+sram1-iram = []
+default = ["tables", "compiler"]
+# The compiler (text -> program). The player never compiles: it loads
+# programs the browser or the build compiled (`psb`), so the firmware
+# leaves this out.
+compiler = ["tables"]
 # Psi's own copies of the sine and the five palettes, identical to
 # opendmd-core's `fx::SIN` / `PALETTES` (core's tests check it). The
 # firmware, the simulator and the web app get Psi through opendmd-core's
@@ -25,10 +32,10 @@ tables = []
 stats = []
 # The editor's cheat-sheet rows in `builtins::cheat` (tests and tools; the
 # firmware never links them).
-docs = []
+docs = ["compiler"]
 # The language-service hook (`syntax`: the lexer's tokens and a `Sink` the
 # compiler tells what it saw). Off in the firmware: the calls are compiled out.
-syntax = []
+syntax = ["compiler"]
 # The narrow JIT (`jit`): Psi's pixel stage as Xtensa code in executable
 # heap, the VM for the rest. Compiled only for the ESP32 (xtensa, espidf);
 # its encoders are tested on the host against the GNU assembler.
@@ -51,7 +58,19 @@ name = "builtins"
 required-features = ["docs"]
 
 [[test]]
+name = "diagnostics"
+required-features = ["docs"]
+
+[[test]]
+name = "reference"
+required-features = ["docs"]
+
+[[test]]
 name = "syntax"
+required-features = ["syntax"]
+
+[[test]]
+name = "fmt"
 required-features = ["syntax"]
 
 [[test]]
@@ -62,13 +81,6 @@ required-features = ["tables"]
 name = "bench"
 required-features = ["tables"]
 
-[[example]]
-name = "stack"
-required-features = ["tables"]
-
-[[example]]
-name = "psi-check"
-required-features = ["tables"]
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"

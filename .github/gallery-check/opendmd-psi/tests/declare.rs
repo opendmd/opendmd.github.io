@@ -6,8 +6,8 @@
 //! composition `look::compose` makes.
 
 use opendmd_psi::{
-    compact, compile, compile_declared, compile_with, golden, look, render_rows_ink, Control,
-    Ink, Program, Scratch, OWN,
+    compact, compile, compile_declared, compile_with, golden, look, render_rows_ink, Control, Ink,
+    Program, Scratch, OWN,
 };
 
 const ONE: i32 = 1 << 16;
@@ -19,7 +19,16 @@ fn frame(p: &Program, ms: u32, abc: [i32; 3]) -> Vec<u8> {
     let mut out = vec![0u8; 128 * 32 * 3];
     let mut sc = Box::new(Scratch::<128>::new());
     let mut ink = Box::new(Ink::new());
-    render_rows_ink(p, &mut sc, Some(&mut ink), &i, &OWN, None, u32::MAX, &mut out);
+    render_rows_ink(
+        p,
+        &mut sc,
+        Some(&mut ink),
+        &i,
+        &OWN,
+        None,
+        u32::MAX,
+        &mut out,
+    );
     out
 }
 
@@ -74,14 +83,13 @@ const ERRORS: &[(&str, &str, usize, usize, &str)] = &[
     ("control k = calm\ngray(k)", "a choice has 2 to 6 words", 1, 13, "E961"),
     ("control k = a1, a2, a3, a4, a5, a6, a7\ngray(k)", "a choice has 2 to 6 words", 1, 13, "E961"),
     ("control k = calm, wild, calm\ngray(k)", "`calm` is a choice already", 1, 25, "E962"),
-    ("control b = 0.5\ngray(b)", "`b` is control 2's letter", 1, 9, "E963"),
-    ("control k = 0\ncontrol a = 0\ngray(k)", "`a` is control 1's letter", 2, 9, "E963"),
+    ("control b = 0.5\ngray(b)", "`b` is the second control's letter", 1, 9, "E963"),
+    ("control k = 0\ncontrol a = 0\ngray(k)", "`a` is the first control's letter", 2, 9, "E963"),
     ("look shiny\ngray(x)", "`look` takes a blend (over, screen, add, multiply, max or min) and an amount from 0 to 100", 1, 6, "E964"),
     ("look screen 140\ngray(x)", "`look` takes a blend", 1, 13, "E964"),
     ("look 40.5\ngray(x)", "`look` takes a blend", 1, 6, "E964"),
     ("look screen 40\nlayer { gray(x) }\nlayer add { gray(y) }", "a formula with layers goes over the GIF as a look", 1, 1, "E965"),
-    ("control x = 0.5\ngray(x)", "`x` is built in", 1, 9, "E204"),
-    ("control k = 0.5\nk = 2\ngray(k)", "`k` is already set on line 1", 2, 1, "E203"),
+    ("control k = 0.5\ncontrol k = 0.2\ngray(k)", "`k` is already the name of a control (line 1)", 2, 9, "E203"),
     ("gray(\"x\")", "there are no strings but on `name`, `about` and `control` lines", 1, 6, "E001"),
     ("loop 4 \"x\"\ngray(x)", "there are no strings", 1, 8, "E001"),
 ];
@@ -94,6 +102,19 @@ fn every_declaration_error_says_what_and_where() {
             Ok(_) => bad.push(format!("{code} {src:?}: compiled")),
             Err(e) => {
                 let lc = e.line_col(src);
+                // (With `docs`: the sentence's code, from `errors.rs`, is the row's.)
+                #[cfg(feature = "docs")]
+                if opendmd_psi::errors::code_of(&e.msg)
+                    .map(opendmd_psi::errors::label)
+                    .as_deref()
+                    != Some(code)
+                {
+                    bad.push(format!(
+                        "{code} {src:?}: classified as {:?}: {}",
+                        opendmd_psi::errors::code_of(&e.msg),
+                        e.msg
+                    ));
+                }
                 if !e.msg.contains(want) || lc != (line, col) {
                     bad.push(format!(
                         "{code} {src:?}: got {:?} at {lc:?}, want {want:?} at {:?}\n{}",
@@ -117,7 +138,10 @@ fn the_codes_are_in_the_tooling_plan() {
     ))
     .unwrap();
     for &(_, _, _, _, code) in ERRORS {
-        assert!(plan.contains(code), "{code} is not in psi-tooling-plan.md §4");
+        assert!(
+            plan.contains(code),
+            "{code} is not in psi-tooling-plan.md §4"
+        );
     }
 }
 
@@ -139,12 +163,20 @@ fn what_the_declarations_compile_to() {
     let m = p.meta();
     assert_eq!(
         m.control(0),
-        Some(Control::Slider { lo: ONE, hi: 4 * ONE, default: 2 * ONE })
+        Some(Control::Slider {
+            lo: ONE,
+            hi: 4 * ONE,
+            default: 2 * ONE
+        })
     );
     assert_eq!(m.control(1), Some(Control::Choice { n: 3 }));
     assert_eq!(
         m.control(2),
-        Some(Control::Slider { lo: 0, hi: ONE, default: ONE / 4 })
+        Some(Control::Slider {
+            lo: 0,
+            hi: ONE,
+            default: ONE / 4
+        })
     );
     assert_eq!(m.declared(), 7);
     assert_eq!(m.look(), Some(("screen", 40)));
@@ -153,13 +185,23 @@ fn what_the_declarations_compile_to() {
     assert_eq!(at(d.name.unwrap()), "Rotozoom -- the; one");
     assert_eq!(at(d.about.unwrap()), "Mode 7:  a checker");
     let c0 = d.controls[0].unwrap();
-    assert_eq!((at(c0.name), c0.label.map(at), c0.words), ("zoom", Some("Zoom"), None));
+    assert_eq!(
+        (at(c0.name), c0.label.map(at), c0.words),
+        ("zoom", Some("Zoom"), None)
+    );
     let c1 = d.controls[1].unwrap();
-    assert_eq!((at(c1.name), c1.words.map(at)), ("wobble", Some("gentle, strong, off")));
+    assert_eq!(
+        (at(c1.name), c1.words.map(at)),
+        ("wobble", Some("gentle, strong, off"))
+    );
     assert_eq!(at(d.controls[2].unwrap().name), "c");
     // The program is the same as with the values written in.
     let lit = compile("loop 4\ngray(clamp(a, 1, 4)/4 + pick(floor(clamp(b, 0, 2)), 0, 0.25, 0.5) + clamp(c, 0, 1))").unwrap();
-    for abc in [[2 * ONE, 0, ONE / 4], [ONE / 2, 7 * ONE, -ONE], [i32::MAX, i32::MIN, 3 * ONE]] {
+    for abc in [
+        [2 * ONE, 0, ONE / 4],
+        [ONE / 2, 7 * ONE, -ONE],
+        [i32::MAX, i32::MIN, 3 * ONE],
+    ] {
         assert_eq!(frame(&p, 500, abc), frame(&lit, 500, abc), "{abc:?}");
     }
     // No declarations: nothing declared, the defaults 0.
@@ -180,7 +222,8 @@ fn compact_keeps_the_declarations_as_written() {
     let da = compile_declared(FULL, &mut a).unwrap();
     let db = compile_declared(&c, &mut b).unwrap();
     assert_eq!(a, b);
-    let text = |s: &str, r: Option<(u32, u32)>| r.map(|r| s[r.0 as usize..r.1 as usize].to_string());
+    let text =
+        |s: &str, r: Option<(u32, u32)>| r.map(|r| s[r.0 as usize..r.1 as usize].to_string());
     assert_eq!(text(FULL, da.name), text(&c, db.name));
     assert_eq!(text(FULL, da.about), text(&c, db.about));
     // `'"'` is a character, on a line that starts with `name` but sets it
@@ -198,46 +241,41 @@ fn the_words_stay_names_where_they_are_not_declarations() {
     let p = compile("name = x\nabout = y\ncontrol = 0.5\nlook = 0.25\npsi = 1\nrgb(name, about*control, look*psi)").unwrap();
     assert_eq!(p.meta().declared(), 0);
     assert_eq!(p, compile("rgb(x, y*0.5, 0.25)").unwrap());
-    // A part called `look` drawn by itself as the last line (a composed look).
-    assert!(compile("part look {\n  gray(x)\n}\nlook").is_ok());
-    assert!(compile("part look {\n  gray(x)\n}\nlook(x, y, 0.4)").is_ok());
+    // A function called `look`, its value the last line.
+    assert!(compile("fn look(v) = v*0.5\ngray(look(x))").is_ok());
     // `psi 1`: accepted, the same program.
-    assert_eq!(compile("psi 1\ngray(x)").unwrap(), compile("gray(x)").unwrap());
+    assert_eq!(
+        compile("psi 1\ngray(x)").unwrap(),
+        compile("gray(x)").unwrap()
+    );
 }
 
 /// The slot letters read as the control: `a` is the first control's value
-/// (held to its range), in a part too.
+/// (held to its range), in a function too.
 #[test]
 fn the_letters_read_as_the_controls() {
-    let named = compile("control size 1..3 = 2\npart p {\n  gray(a/3)\n}\nlayer { gray(size/3) }\nlayer add { p(x, y, 0.5) }").unwrap();
-    let lit = compile("part p {\n  gray(clamp(a, 1, 3)/3)\n}\nlayer { gray(clamp(a, 1, 3)/3) }\nlayer add { p(x, y, 0.5) }").unwrap();
+    let named = compile(
+        "control size 1..3 = 2\nfn p() = a/3\nlayer { gray(size/3) }\nlayer add { gray(p(), 0.5) }",
+    )
+    .unwrap();
+    let lit =
+        compile("layer { gray(clamp(a, 1, 3)/3) }\nlayer add { gray(clamp(a, 1, 3)/3, 0.5) }")
+            .unwrap();
     for v in [0, ONE, 2 * ONE, 9 * ONE] {
         assert_eq!(frame(&named, 0, [v, 0, 0]), frame(&lit, 0, [v, 0, 0]));
     }
 }
 
-/// A formula pasted into a part keeps its controls: their names read in the
-/// part, and when the formula's own lines declare none the part's describe
-/// the slots (a look composed as `part look { … }` keeps its defaults).
+/// A look keeps the formula's controls.
 #[test]
-fn a_parts_controls() {
+fn a_looks_controls() {
     let inner = "control dim 0..1 = 0.4 \"Dim rows\"\ngray(py % 2 ? 1 : 0.3 + dim*0.6)";
-    let composed = look::compose(inner, "screen", 40).unwrap();
-    let p = compile(&composed).unwrap();
-    assert_eq!(p.meta().control(0), compile(inner).unwrap().meta().control(0));
+    let p = look::compose(inner, "screen", 40).unwrap();
+    assert_eq!(
+        p.meta().control(0),
+        compile(inner).unwrap().meta().control(0)
+    );
     assert_eq!(p.meta().declared(), 1);
-    // The formula's own control wins; the part's names still read.
-    let own = compile(&format!("control k = 0.9\npart q {{\n{inner}\n}}\nlayer {{ gray(k) }}\nlayer {{ q(x, y, 0.5) }}")).unwrap();
-    assert_eq!(own.meta().default_value(0), compile("control k = 0.9\ngray(k)").unwrap().meta().default_value(0));
-    // A part describes a slot the formula's own lines leave undeclared, even
-    // when they declare others: its range and default reach `Meta`.
-    let mixed = compile("control q 0.5..1 = 0.75\npart p {\n  control r 2..8 = 4\n  control s 0..100 = 50\n  gray(frac(s*x + r))\n}\nlayer { gray(q) }\nlayer add { p(x, y, 0.5) }").unwrap();
-    assert_eq!(mixed.meta().declared(), 3);
-    assert_eq!(mixed.meta().control(0), Some(Control::Slider { lo: ONE / 2, hi: ONE, default: 3 * ONE / 4 }));
-    assert_eq!(mixed.meta().control(1), Some(Control::Slider { lo: 0, hi: 100 * ONE, default: 50 * ONE }));
-    // A part's declarations other than control do nothing.
-    let q = compile("part p {\n  psi 1\n  name \"P\"\n  look screen 40\n  gray(x)\n}\np").unwrap();
-    assert_eq!(q.meta().look(), None);
 }
 
 /// The narrowed steps (`range`) assume each declared control is within its
@@ -251,15 +289,9 @@ fn control_ranges_are_sound_for_any_value() {
         "control z -2..2 = 0\ncontrol s 0..100 = 50\nloop 4\nrgb(frac(z*px*s*3.5), frac((s*s*s)/7 + py*z), sin(z*x*s))",
         "control m = a1, b1, c1, d1\ncontrol wd 0..0.01 = 0.005\nloop 4\ngray(frac(pick(m, x, y, px*wd*1000, py) + m*px*py*wd*65.5))",
         "control big 0..30000 = 1000\nloop 4\nk = big*big\nrgb(frac(k*x/1000), frac(big*px*py/3), frac(big*7.5 + x))",
-        // (The review's, formula-f1: loop forever; sprites and palettes; the
-        // formula reading `a` before a part declares it, both orders; a
-        // formula with fewer controls than its part.)
+        // (The review's, formula-f1: loop forever; sprites and palettes.)
         "control z 1..4 = 2\ncontrol s 0..100 = 50\nloop forever\nv = frac(t*z/7 + seed)\ngray(frac(v*s*px + noise(x*z, y*s, t)))",
         "control m = red, green, blue\ncontrol k 0..10 = 3\npalette p = #f00, #0f0, #00f\nsprite s {\n  key . 0, X 1\n  .X.\n  X.X\n}\nloop 4\nv = s[floor(x*3*k), floor(y*2)]\nlayer { pal(p, frac(m/2 + v*k)) }\nlayer add { gray(frac(k*x*37 + m*px)) }",
-        "loop 4\nk = a*a*900\npart p {\n  control r 2..8 = 4\n  gray(frac(r*x*py*a))\n}\nlayer { gray(frac(k*x)) }\nlayer add { p(x, y, 0.5) }",
-        "loop 4\npart p {\n  control r 2..8 = 4\n  gray(frac(r*x*py))\n}\nk = a*a*900\nlayer { gray(frac(k*x)) }\nlayer add { p(x, y, 0.5) }",
-        "control q 0.5..1 = 0.75\nloop 4\npart p {\n  control r 2..8 = 4\n  control s 0..100 = 50\n  gray(frac(s*x*py*31 + r))\n}\nlayer { gray(frac(q*px*py*31 + b*c)) }\nlayer add { p(x, y, 0.5) }",
-        "control q 0.5..1 = 0.75\ncontrol k = on, off\npart p {\n  control r 2..8 = 4\n  gray(frac(r*x*py*a))\n}\nlayer { gray(frac(q*px*py*31 + k)) }\nlayer add { p(x, y, 0.5) }",
     ];
     let vals = [
         i32::MIN,
@@ -304,8 +336,9 @@ fn control_ranges_are_sound_for_any_value() {
     }
 }
 
-/// `look [blend] [amount]` as the composition: the program the look line
-/// asks for is the one `look::compose` gives for the formula without it.
+/// `look [blend] [amount]` as the composition: the look program the line
+/// asks for is the one `look::compose` gives for the formula without it;
+/// played on its own, the line changes nothing drawn.
 #[test]
 fn the_look_line_is_the_composition() {
     let bodies = [
@@ -327,22 +360,17 @@ fn the_look_line_is_the_composition() {
                         continue;
                     }
                 };
-                let want = look::compose(body, blend, amount).unwrap();
-                match look::declared(&src, &p) {
-                    None => {
-                        // `look` (over, 100) is the formula itself: played
-                        // as itself, the line changes nothing drawn.
-                        assert!(blend == "over" && amount == 100);
-                        assert_eq!(want, body);
-                        let q = compile(body).unwrap();
-                        assert_eq!(frame(&p, 700, [ONE / 2; 3]), frame(&q, 700, [ONE / 2; 3]));
-                    }
-                    Some(text) => {
-                        let text = text.unwrap();
-                        assert_eq!(text, want, "{src:?}");
-                        assert_eq!(compile(&text).unwrap(), compile(&want).unwrap());
-                    }
-                }
+                let q = compile(body).unwrap();
+                assert_eq!(frame(&p, 700, [ONE / 2; 3]), frame(&q, 700, [ONE / 2; 3]));
+                let mut l = Program::default();
+                opendmd_psi::compile_look(&src, &mut l).unwrap();
+                let mut lc = Program::default();
+                opendmd_psi::compile_look(
+                    &opendmd_psi::look::set(body, blend, amount).unwrap(),
+                    &mut lc,
+                )
+                .unwrap();
+                assert_eq!(l, lc, "{src:?}");
             }
         }
     }

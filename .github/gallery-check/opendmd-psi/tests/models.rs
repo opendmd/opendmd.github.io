@@ -143,7 +143,7 @@ fn the_reference_matches_the_language() {
 fn the_reference_names_every_built_in() {
     let values = [
         "x", "y", "px", "py", "i", "t", "hour", "minute", "second", "a", "b", "c", "w", "h", "ur",
-        "ug", "ub", "ul", "cx", "cy", "r", "angle", "ty",
+        "ug", "ub", "ul", "cx", "cy", "r", "angle", "py",
     ];
     assert!(DOC.contains("`seed`") && DOC.contains("`loop forever`"));
     compile("loop forever\ngray(frac(t + seed))").unwrap();
@@ -350,4 +350,54 @@ fn the_cost_table_is_the_estimates() {
             "{row}: one more step adds {got} µs, the table says {ns} ns a pixel ({want} µs)"
         );
     }
+}
+
+/// `docs/psi-card.md` (the short card for models): every ```psi block
+/// compiles and is light enough; every ```psi error block fails with its
+/// sentence; it stays short (≤ 3,000 tokens at ~4 characters a token).
+#[test]
+fn the_card_matches_the_language() {
+    const CARD: &str = include_str!("../../docs/psi-card.md");
+    assert!(
+        CARD.len() <= 12_000,
+        "the card is {} characters: keep it ≤ ~3,000 tokens",
+        CARD.len()
+    );
+    let mut cur: Option<(String, String)> = None;
+    let mut n = 0;
+    for line in CARD.lines() {
+        match &mut cur {
+            None => {
+                if let Some(info) = line.strip_prefix("```psi") {
+                    cur = Some((info.trim().to_string(), String::new()));
+                }
+            }
+            Some(b) if line.starts_with("```") => {
+                let (info, src) = (b.0.clone(), b.1.clone());
+                cur = None;
+                n += 1;
+                if info == "error" {
+                    let want = src
+                        .lines()
+                        .next()
+                        .and_then(|l| l.strip_prefix("-- error: "))
+                        .unwrap();
+                    let e = compile(&src).expect_err(&src);
+                    assert!(e.msg.contains(want), "got {:?}, want {want:?}", e.msg);
+                } else {
+                    let p = compile(&src).unwrap_or_else(|e| panic!("{}", e.render(&src)));
+                    assert!(
+                        p.esp32_us_still() <= 8_000,
+                        "~{} µs: {src}",
+                        p.esp32_us_still()
+                    );
+                }
+            }
+            Some(b) => {
+                b.1 += line;
+                b.1 += "\n";
+            }
+        }
+    }
+    assert!(n >= 5, "{n} blocks");
 }

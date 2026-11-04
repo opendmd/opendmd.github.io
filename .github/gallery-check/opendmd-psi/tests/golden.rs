@@ -407,8 +407,8 @@ fn digits_and_glyphs_are_the_fonts() {
             // Characters from `first` (some below 32 and above 126), a
             // quarter added (floored away).
             let src = format!(
-                "k = {first} + floor(px/{cw}) + floor((31 - py)/{ch})*{per}\n\
-                 gray(glyph(k + 0.25, px % {cw} - 1, (31 - py) % {ch} - 1{font}))"
+                "k = {first} + floor(px/{cw}) + floor(py/{ch})*{per}\n\
+                 gray(glyph(k + 0.25, px % {cw} - 1, py % {ch} - 1{font}))"
             );
             let got = lit(&src);
             for (r, row) in got.iter().enumerate() {
@@ -423,7 +423,7 @@ fn digits_and_glyphs_are_the_fonts() {
         // Digits: -1 to 10 (blank but 0..9), 0.75 less (floored).
         let src = format!(
             "n = floor(px/{cw}) % 12 - 1.75 + 1\n\
-             gray(digit(n, px % {cw} - 1, (31 - py) % {ch} - 1{font}))"
+             gray(digit(n, px % {cw} - 1, py % {ch} - 1{font}))"
         );
         for (r, row) in lit(&src).iter().enumerate() {
             for (c, &l) in row.iter().enumerate() {
@@ -438,7 +438,7 @@ fn digits_and_glyphs_are_the_fonts() {
         // frame (all constants: run, not folded).
         for n in [-1, 0, 7, 9, 10] {
             for x in -1..=w {
-                let src = format!("gray(digit({n}, {x}, 31 - py{font}))");
+                let src = format!("gray(digit({n}, {x}, py{font}))");
                 let src = src
                     .replace("digit(-1", "digit(0 - 1")
                     .replace(", -1,", ", 0 - 1,");
@@ -458,7 +458,7 @@ fn digits_and_glyphs_are_the_fonts() {
     // every pixel and around each cell, per pixel and once a row.
     let bold = FONT_BOLD.as_flattened();
     let src = "n = floor(px/6) % 12 - 1.75 + 1\n\
-               gray(digit(n, px % 6 - 1, (31 - py) % 8 - 1, bold))";
+               gray(digit(n, px % 6 - 1, py % 8 - 1, bold))";
     for (r, row) in lit(src).iter().enumerate() {
         for (c, &l) in row.iter().enumerate() {
             let (c, r) = (c as i32, r as i32);
@@ -470,7 +470,7 @@ fn digits_and_glyphs_are_the_fonts() {
     }
     for n in [-1, 0, 4, 9, 10] {
         for x in -1..=4 {
-            let src = format!("gray(digit({n}, {x}, 31 - py, bold))")
+            let src = format!("gray(digit({n}, {x}, py, bold))")
                 .replace("digit(-1", "digit(0 - 1")
                 .replace(", -1,", ", 0 - 1,");
             for (r, row) in lit(&src).iter().enumerate() {
@@ -498,7 +498,7 @@ fn bits_are_twos_complement() {
     };
     let got = lit("gray(bit(px*64.25 - 4096, py*0.75 - 4))");
     for (r, row) in got.iter().enumerate() {
-        let py = (H - 1 - r) as f64;
+        let py = r as f64;
         for (c, &l) in row.iter().enumerate() {
             let (n, i) = (c as f64 * 64.25 - 4096.0, py * 0.75 - 4.0);
             assert_eq!(l, reference(n, i), "bit({n}, {i})");
@@ -700,7 +700,7 @@ const PIECES: &[&str] = &[
     "cy",
     "r",
     "angle",
-    "ty",
+    "py",
     "r =",
     "draw {",
     "draw { for",
@@ -731,7 +731,7 @@ const PIECES: &[&str] = &[
     "sprite S {",
     "key . 0",
     "S[",
-    "S[px, ty]",
+    "S[px, py]",
     "palette P = #f00, #0f0,\n#00f",
     "palette",
     "pal(P,",
@@ -991,7 +991,7 @@ fn random_picks_and_colours_render_or_refuse() {
             "cy",
             "r",
             "angle",
-            "ty",
+            "py",
             "px/16",
             "y*3",
             "second % 5",
@@ -1122,7 +1122,7 @@ fn random_draw_blocks_render_or_refuse() {
             "rgb(ink, T[px % 4], x)",
         ][k % 5];
         let src = format!(
-            "loop {}\ntable T = 0.5, -2, 30, 100\nframe {{ f = t*{} }}\ndraw {{\n{}\nfor k < {n1} {{\n{body}}}\n}}\n{colour}",
+            "loop {}\ntable T = 0.5, -2, 30, 100\nf = t*{}\ndraw {{\n{}\nfor k < {n1} {{\n{body}}}\n}}\n{colour}",
             1 + k % 7,
             r.below(50),
             prim(&mut r, &[]),
@@ -1161,7 +1161,11 @@ fn scalar_cap_is_a_friendly_error() {
     let body: Vec<String> = (1..=120).map(|k| format!("x*{k}.{k}")).collect();
     let src = format!("gray(frac({}))", body.join(" + "));
     let e = compile(&src).unwrap_err();
-    assert!(e.msg.contains("too many numbers"), "{}", e.msg);
+    assert!(
+        e.msg.contains("numbers and once-a-frame values"),
+        "{}",
+        e.msg
+    );
 }
 
 #[test]
@@ -1188,7 +1192,7 @@ fn division_by_a_constant_floors_whole_numbers_right() {
     for k in [10u32, 60, 3, 7, 12] {
         // Once a frame: n = hour·3600 + minute·60 + second, 0..=3600.
         let src = format!(
-            "frame {{ n = hour*3600 + minute*60 + second; q = floor(n/{k}) }}\nrgb((q % 256)/255, floor(q/256)/255, n/{k} == q)"
+            "n = hour*3600 + minute*60 + second; q = floor(n/{k})\nrgb((q % 256)/255, floor(q/256)/255, n/{k} == q)"
         );
         let p = compile(&src).unwrap_or_else(|e| panic!("{}", e.render(&src)));
         let mut s = Scratch::<128>::new();
@@ -1516,7 +1520,7 @@ fn loop_forever_is_a_long_loop_where_it_fits() {
             ),
             // Once a frame, and per row.
             2 => format!(
-                "frame {{ f = {} }}\nq = noise({} + y*3, py, 0)\nrgb(f, q, {})",
+                "f = {}\nq = noise({} + y*3, py, 0)\nrgb(f, q, {})",
                 use_t(&mut r),
                 w(&mut r),
                 use_t(&mut r)
@@ -1618,7 +1622,7 @@ fn loop_forever_is_a_long_loop_where_it_fits() {
 /// month in differ from the start's, and a new `seed` is another drive.
 #[test]
 fn loop_forever_goes_on() {
-    let src = "loop forever\nfps 100\nframe { u = t*0.15 + seed*1000 }\nhz = noise(u + y, 0, 0)\nhsv(hz + x*0.1, 1, noise(x*8 + t, y*4, u))";
+    let src = "loop forever\nfps 100\nu = t*0.15 + seed*1000\nhz = noise(u + y, 0, 0)\nhsv(hz + x*0.1, 1, noise(x*8 + t, y*4, u))";
     let p = compile(src).unwrap();
     let mut under = vec![0u8; W * H * 3];
     picture(&mut under);
@@ -1664,7 +1668,7 @@ fn sprites_narrow_soundly() {
             })
             .collect();
         let u = ["px/4", "x*20", "a*8", "3", "px - 60"][r.below(5)];
-        let v = ["ty/4", "py", "b*5", "1", "t"][r.below(5)];
+        let v = ["py/4", "py", "b*5", "1", "t"][r.below(5)];
         let e = [
             "S[U, V]*x + a",
             "S[U, V]*S[V, U] - 2",
@@ -1726,7 +1730,7 @@ fn slots_used_again_draw_the_same() {
             s = "loop forever\n".into();
         }
         s += &format!(
-            "frame {{ f1 = {}; f2 = f1*{} + a; f3 = sin(f2 + t) }}\n",
+            "f1 = {}; f2 = f1*{} + a; f3 = sin(f2 + t)\n",
             ["t*0.5", "a + b", "hour/24", "t % 3"][r.below(4)],
             r.below(9)
         );
@@ -1992,7 +1996,7 @@ fn draw_loops_as_lanes_are_a_turn_at_a_time() {
             );
         }
         let src = format!(
-            "loop {}\ntable T = 0.5, -2, 30, 100, 7, 0.125\nframe {{ f = t*{}; g = a*3 - 1 }}\ndraw {{\n{draw}}}\n{}",
+            "loop {}\ntable T = 0.5, -2, 30, 100, 7, 0.125\nf = t*{}; g = a*3 - 1\ndraw {{\n{draw}}}\n{}",
             1 + k % 5,
             r.below(50),
             ["gray(ink)", "pal(fire, ink)", "#40c0ff * ink", "rgb(ink, ur, x)"][k % 4],
@@ -2038,13 +2042,21 @@ fn draw_loops_as_lanes_are_a_turn_at_a_time() {
 /// (`include_str!`): the wasm run has no file system.
 macro_rules! example {
     ($slug:literal) => {
-        strip_header(include_str!(concat!("../../opendmd-web/formulas/", $slug, ".psi")))
+        strip_header(include_str!(concat!(
+            "../../opendmd-web/formulas/",
+            $slug,
+            ".psi"
+        )))
     };
 }
 
 fn strip_header(text: &str) -> String {
     text.split_inclusive('\n')
-        .skip_while(|l| ["-- author:", "-- licence:", "-- license:", "-- bundle"].iter().any(|h| l.starts_with(h)))
+        .skip_while(|l| {
+            ["-- author:", "-- licence:", "-- license:", "-- bundle"]
+                .iter()
+                .any(|h| l.starts_with(h))
+        })
         .collect()
 }
 
@@ -2366,13 +2378,35 @@ fn what_changed_is_exactly_what_differs() {
         let mut was = vec![0u8; W * H * 3];
         for j in 0..6u32 {
             let ms = [0, 20, 40, 1000, 1020, 33_333][j as usize];
-            let rows = if j % 3 == 2 { r.next() as u32 } else { u32::MAX };
+            let rows = if j % 3 == 2 {
+                r.next() as u32
+            } else {
+                u32::MAX
+            };
             let mut want = was.clone();
-            render_rows_ink::<128>(&p, &mut s, Some(&mut ink), &inputs(ms), &OWN, Some(&under), rows, &mut want);
+            render_rows_ink::<128>(
+                &p,
+                &mut s,
+                Some(&mut ink),
+                &inputs(ms),
+                &OWN,
+                Some(&under),
+                rows,
+                &mut want,
+            );
             let mut got = was.clone();
             let mut ch = [0xdead_beefu32; H];
             opendmd_psi::render_rows_changed::<128>(
-                &p, &mut s, Some(&mut ink), None, &inputs(ms), &OWN, Some(&under), rows, &mut got, &mut ch,
+                &p,
+                &mut s,
+                Some(&mut ink),
+                None,
+                &inputs(ms),
+                &OWN,
+                Some(&under),
+                rows,
+                &mut got,
+                &mut ch,
             );
             assert!(got == want, "case {k} frame {j}: bytes differ");
             for (y, &bits) in ch.iter().enumerate() {
@@ -2383,10 +2417,154 @@ fn what_changed_is_exactly_what_differs() {
                 for g in 0..W / 4 {
                     let o = (y * W + 4 * g) * 3;
                     let differs = was[o..o + 12] != got[o..o + 12];
-                    assert_eq!(bits & (1 << g) != 0, differs, "case {k} frame {j}: row {y} group {g}");
+                    // (A `rate` formula drawn from nothing says every row it
+                    // drew changed: more than changed, never less.)
+                    if p.rate().is_some() {
+                        assert!(
+                            bits & (1 << g) != 0 || !differs,
+                            "case {k} frame {j}: row {y} group {g}"
+                        );
+                        continue;
+                    }
+                    assert_eq!(
+                        bits & (1 << g) != 0,
+                        differs,
+                        "case {k} frame {j}: row {y} group {g}"
+                    );
                 }
             }
             was = got;
         }
     }
+}
+
+/// `expr`'s leaves `ur` and `ul` (the picture under) as `x` and `y`.
+fn no_under(e: &str) -> String {
+    let b = e.as_bytes();
+    let mut o = String::new();
+    let mut k = 0;
+    while k < b.len() {
+        let word = k == 0 || !b[k - 1].is_ascii_alphanumeric();
+        let end = k + 2 >= b.len() || !b[k + 2].is_ascii_alphanumeric();
+        if word && end && (e[k..].starts_with("ur") || e[k..].starts_with("ul")) {
+            o.push(if b[k + 1] == b'r' { 'x' } else { 'y' });
+            k += 2;
+        } else {
+            o.push(b[k] as char);
+            k += 1;
+        }
+    }
+    o
+}
+
+/// `cycle` over random pictures and turns: the bytes of `pal` of the
+/// folded index (`frac` of each, the turn's whole 32nds), per frame and
+/// per row, at both lane widths.
+#[test]
+fn random_cycles_are_the_folded_palette() {
+    let mut r = Rng(0xc1c1_e5ee_d000_0001);
+    let pals = ["fire", "ice", "chrono", "amber", "rainbow"];
+    let mut ok = 0;
+    for k in 0..200 {
+        let v = no_under(&expr(&mut r, 3));
+        // A turn the same along a row: of t, the row, a slider, the clock.
+        let s = match r.below(4) {
+            0 => format!("t/{}", 1 + r.below(7)),
+            1 => format!("t*{} + py/{}", r.below(5), 8 + r.below(40)),
+            2 => format!("a*3 - y*{} + hour/24", r.below(4)),
+            _ => format!("frac(t/2)*{} - {}", r.below(9), r.below(3)),
+        };
+        let p = pals[r.below(pals.len())];
+        let a = format!("loop {}\ncycle({p}, {v}, {s})", 1 + k % 9);
+        let b = format!(
+            "loop {}\npal({p}, frac(frac({v}) + floor(frac({s})*32)/32))",
+            1 + k % 9
+        );
+        let (Ok(pa), Ok(pb)) = (compile(&a), compile(&b)) else {
+            continue;
+        };
+        ok += 1;
+        for ms in [0, 777, 3210] {
+            let fa = frame::<128>(&pa, ms);
+            assert!(fa == frame::<64>(&pa, ms), "{a}");
+            assert!(fa == frame::<128>(&pb, ms), "{a}\nvs\n{b}\nat {ms}");
+        }
+    }
+    assert!(ok > 150, "only {ok} compiled");
+}
+
+/// `layer rate N` over random layers: the held picture's frames are the
+/// frames drawn from nothing (frames skipped, sliders and the clock
+/// moving), at both lane widths; a slow layer without `t` draws what the
+/// formula without `rate` draws.
+#[test]
+fn random_rate_formulas_hold_the_same_frames() {
+    let mut r = Rng(0x5a7e_0f00_d00d_0002);
+    let blends = ["add", "multiply", "screen", "max", "min", "over"];
+    let mut ok = 0;
+    let mut held = opendmd_psi::Held::try_boxed().unwrap();
+    for k in 0..150 {
+        let n = [2, 3, 4, 7, 16, 33, 50][r.below(7)];
+        let slow = no_under(&expr(&mut r, 3));
+        let fps = ["", "fps 100\n", "fps 25\n"][r.below(3)];
+        let head = if k % 5 == 0 {
+            "loop forever\n".to_string()
+        } else {
+            format!("loop {}\n", 1 + k % 7)
+        };
+        let top = format!(
+            "layer {} {{ rgb({}, {}, {}, {}) }}",
+            blends[r.below(blends.len())],
+            no_under(&expr(&mut r, 2)),
+            no_under(&expr(&mut r, 2)),
+            no_under(&expr(&mut r, 2)),
+            no_under(&expr(&mut r, 1)),
+        );
+        let src =
+            format!("{head}{fps}layer rate {n} {{ hsv({slow}, 1, frac({slow}*0.5)) }}\n{top}");
+        let p = match compile(&src) {
+            Ok(p) => p,
+            // (Only a value of `t` where `loop forever` can't take it.)
+            Err(e) if e.msg.contains("grows without end") || e.msg.contains("a growing value") => {
+                continue
+            }
+            Err(e) => panic!("{src}\n{}", e.msg),
+        };
+        if p.rate().is_none() {
+            continue;
+        }
+        ok += 1;
+        held.forget();
+        let mut s = Scratch::<128>::new();
+        let mut out = vec![0u8; W * H * 3];
+        let mut ms = 0u64;
+        let mut i = inputs(0);
+        for step in 0..14u64 {
+            ms += 20 * (1 + (r.below(4) == 0) as u64 * r.below(6) as u64);
+            i.set_ms(&p, ms);
+            if step == 7 {
+                i.a = 1 << 13;
+                i.second = 31;
+            }
+            opendmd_psi::render_held::<128>(
+                &p, &mut s, None, None, &mut held, &i, &OWN, &mut out, None,
+            );
+            let mut want = vec![0u8; W * H * 3];
+            render_rows::<64>(
+                &p,
+                &mut Scratch::<64>::new(),
+                &i,
+                &OWN,
+                None,
+                u32::MAX,
+                &mut want,
+            );
+            assert!(out == want, "{src}\nat {ms} ms (step {step})");
+        }
+        if !slow.contains('t') {
+            let q = compile(&src.replace(&format!(" rate {n} "), " ")).unwrap();
+            assert!(frame::<128>(&p, 4321) == frame::<128>(&q, 4321), "{src}");
+        }
+    }
+    assert!(ok > 100, "only {ok} compiled");
 }

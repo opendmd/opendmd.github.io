@@ -56,6 +56,7 @@ pub(crate) const PICK_MAX: usize = 16;
 /// What a fused colour costs in the JIT's kernel, ns a pixel, when the
 /// kernel draws it in one piece (`pal_select`, `pal_pick`: a choice of
 /// colours worked out a row); `None`: its steps, one at a time.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub(crate) fn jit_ns(kind: u8) -> Option<u32> {
     match kind {
         F_SELPAL => Some(35),
@@ -66,6 +67,7 @@ pub(crate) fn jit_ns(kind: u8) -> Option<u32> {
 }
 
 /// A kind's name, for listings.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub(crate) fn name(kind: u8) -> &'static str {
     match kind {
         F_CHECKER => "checker",
@@ -80,17 +82,20 @@ pub(crate) fn name(kind: u8) -> &'static str {
 }
 
 #[inline]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn is_lane(v: u8) -> bool {
     v & LANE != 0
 }
 
 #[inline]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn is_reg(v: u8) -> bool {
     v & LANE != 0 && v & !LANE >= L_REG0
 }
 
 /// The register a pixel step writes, if it writes one.
 #[inline]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn writes(op: &Op) -> Option<u8> {
     (code::writes_scalar(op.code) && is_reg(op.d)).then_some(op.d)
 }
@@ -98,6 +103,7 @@ fn writes(op: &Op) -> Option<u8> {
 /// The bottom layer's palette colour reading `r` as its entry (and, scaled,
 /// a scale other than `r`; `scalar_k`: a scale that is a value for the
 /// lane).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn pal_of(op: &Op, r: u8, scalar_k: bool) -> bool {
     if op.code != code::OUT_PAL || op.a != r {
         return false;
@@ -111,6 +117,7 @@ fn pal_of(op: &Op, r: u8, scalar_k: bool) -> bool {
 /// The pattern at `ops[0..]`: its kind, length, the values it works out on
 /// the way (to be dead after it) and its kernel's destination (a register,
 /// or 0 for one that writes the pixels).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn pattern(ops: &[Op]) -> Option<(u8, usize, [u8; 3], u8)> {
     use code::*;
     let op = |k: usize| ops.get(k);
@@ -204,6 +211,7 @@ fn pattern(ops: &[Op]) -> Option<(u8, usize, [u8; 3], u8)> {
 /// Whether register `r` is read by nothing in `ops` before something
 /// writes it (registers carry nothing from one lane of pixels to the next
 /// but the column run's, which the compiler never writes again).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn dead(ops: &[Op], r: u8) -> bool {
     for op in ops {
         let (v, n) = code::operands(op);
@@ -223,6 +231,7 @@ fn dead(ops: &[Op], r: u8) -> bool {
 /// run's steps included, whose values are the same when kept or cached) is
 /// a `floor`. A fused run before it writes only its last step's register
 /// (its others are dead after it, so `r` is none of them).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn floored(prog: &Program, re: usize, k: usize) -> bool {
     let (fy, add) = (&prog.ops[k], &prog.ops[k + 1]);
     let r = if add.a == fy.d { add.b } else { add.a };
@@ -235,6 +244,7 @@ fn floored(prog: &Program, re: usize, k: usize) -> bool {
 
 /// Put a marker before each run the VM may fuse (see the module).
 #[inline(never)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub(crate) fn fuse(prog: &mut Program) {
     let (re, pe) = (prog.row_end as usize, prog.len().min(MAX_OPS));
     let mut start = re.max(prog.column_run().end);
@@ -242,11 +252,18 @@ pub(crate) fn fuse(prog: &mut Program) {
         start = start.max(k + 1 + prog.ops[k].a as usize);
     }
     let room = MAX_OPS - pe;
+    // (A run inside the slow layers' steps ends inside them.)
+    let slow = prog
+        .slow_marker()
+        .map_or(0..0, |m| m + 1..m + 1 + prog.ops[m].a as usize);
     let mut runs: Vec<(usize, u8, usize)> = Vec::new();
     let mut k = start;
     while k < pe && runs.len() < room {
         let ops = &prog.ops[k..pe];
-        if matches!(ops[0].code, code::STILL | code::COLUMN | code::FUSE) {
+        if matches!(
+            ops[0].code,
+            code::STILL | code::COLUMN | code::FUSE | code::SLOW
+        ) {
             k += 1;
             continue;
         }
@@ -254,7 +271,9 @@ pub(crate) fn fuse(prog: &mut Program) {
             |n: usize, mid: [u8; 3], dst: u8| mid.iter().all(|&r| r == dst || dead(&ops[n..], r));
         match pattern(ops) {
             Some((kind, n, mid, dst))
-                if ok(n, mid, dst) && (kind != F_CHECKER3 || floored(prog, re, k)) =>
+                if ok(n, mid, dst)
+                    && (kind != F_CHECKER3 || floored(prog, re, k))
+                    && slow.contains(&k) == slow.contains(&(k + n - 1)) =>
             {
                 runs.push((k, kind, n));
                 k += n;
@@ -285,12 +304,21 @@ pub(crate) fn fuse(prog: &mut Program) {
     }
     debug_assert_eq!(end, src);
     prog.pixel_end = (pe + runs.len()) as u16;
+    // The slow layers' marker counts the markers put among its steps.
+    if let Some(m) = prog.slow_marker() {
+        let inside = runs
+            .iter()
+            .filter(|&&(at, _, _)| at > m && at <= m + prog.ops[m].a as usize)
+            .count();
+        prog.ops[m].a += inside as u8;
+    }
 }
 
 /// What a fused run of kind `kind` saves, ns a pixel, against its steps'
 /// costs: s2probe-b's `fuse` rows on the spare (2026-10-28), each pattern
 /// alone (the multiply-add from s2probe-a and the two Rotozooms' change
 /// between the probes).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub(crate) fn saved(kind: u8) -> u32 {
     match kind {
         F_CHECKER => 74,
