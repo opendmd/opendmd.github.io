@@ -42,6 +42,25 @@ fn compose(src: &str, blend: &str, k: u8) -> opendmd_psi::Program {
     p
 }
 
+/// Whether `p` divides a pixel's value by a scalar: measured before the
+/// language review's A1 (psi-settle, 2026-11-04), when that compiled to a
+/// multiply by the reciprocal, and played since as a division (`div_s`
+/// narrowed; `div` here, unnarrowed). Such a row's program is not the one
+/// measured: it is printed, not held, until the spare measures it again.
+fn divides_per_pixel(p: &opendmd_psi::Program) -> bool {
+    p.listing().lines().any(|l| {
+        let l = l.trim_start();
+        let Some(rest) = l.split_once(" pixel ").map(|x| x.1) else {
+            return false;
+        };
+        let Some(args) = rest.split_once("= div(").map(|x| x.1) else {
+            return false;
+        };
+        let b = args.split(", ").nth(1).unwrap_or("").trim_end_matches(')');
+        !(b.starts_with('L') || matches!(b, "x" | "px" | "i"))
+    })
+}
+
 #[test]
 fn the_estimate_is_within_15_percent_of_the_device() {
     let mut bad = Vec::new();
@@ -50,11 +69,13 @@ fn the_estimate_is_within_15_percent_of_the_device() {
         let p = compile(src).unwrap();
         let est = p.esp32_us();
         let r = est as f64 / (us as f64 * 1.15);
+        let stale = divides_per_pixel(&p);
         rows.push(format!(
-            "{name:<26} measured {us:>5} est {est:>5} ({:+.0} %)",
-            (r - 1.0) * 100.0
+            "{name:<26} measured {us:>5} est {est:>5} ({:+.0} %){}",
+            (r - 1.0) * 100.0,
+            if stale { " (a division since A1: not held)" } else { "" }
         ));
-        if !(0.85..=1.15).contains(&r) {
+        if !stale && !(0.85..=1.15).contains(&r) {
             bad.push(name.to_string());
         }
     }
@@ -62,11 +83,13 @@ fn the_estimate_is_within_15_percent_of_the_device() {
         let p = compose(src, blend, k);
         let est = p.esp32_us();
         let r = est as f64 / (us as f64 * 1.15);
+        let stale = divides_per_pixel(&p);
         rows.push(format!(
-            "look {name} {blend} {k:<3} measured {us:>5} est {est:>5} ({:+.0} %)",
-            (r - 1.0) * 100.0
+            "look {name} {blend} {k:<3} measured {us:>5} est {est:>5} ({:+.0} %){}",
+            (r - 1.0) * 100.0,
+            if stale { " (a division since A1: not held)" } else { "" }
         ));
-        if !(0.85..=1.15).contains(&r) {
+        if !stale && !(0.85..=1.15).contains(&r) {
             bad.push(format!("{name} {blend} {k}"));
         }
     }
@@ -299,7 +322,9 @@ fn the_estimate_counts_two_scenes() {
 #[test]
 fn the_fused_compares_and_guards_as_measured() {
     use opendmd_psi::{golden, scene_rows, Inputs, Scratch, OWN};
-    let road = include_str!("../../opendmd-web/experiments/road-v2/road-v2.psi");
+    // (The road as it was measured, P0b-4; V2 has moved on since: its
+    // lamp posts and the real sun.)
+    let road = include_str!("road-v2-p0b4.psi");
     let mut bad = Vec::new();
     let mut rows = Vec::new();
     let mut ests = Vec::new();

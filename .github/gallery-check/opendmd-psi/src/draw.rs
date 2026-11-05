@@ -80,7 +80,7 @@ impl Ink {
     }
 
     /// The planes `prog` uses, or `None` when the heap hasn't them.
-    pub fn try_boxed_for(prog: &Program) -> Option<Box<Ink>> {
+    pub fn try_boxed_for(prog: &Prog) -> Option<Box<Ink>> {
         let mut k = Self::try_boxed()?;
         k.try_fit(prog).then_some(k)
     }
@@ -88,7 +88,7 @@ impl Ink {
     /// Hold the planes `prog` uses: the paint plane taken (zeroed) when it
     /// paints, let go when it doesn't. `false` when the heap hasn't the
     /// paint plane (the canvas is then ink only).
-    pub fn try_fit(&mut self, prog: &Program) -> bool {
+    pub fn try_fit(&mut self, prog: &Prog) -> bool {
         if !prog.paints() {
             self.1 = None;
         } else if self.1.is_none() {
@@ -135,7 +135,7 @@ impl Default for Ink {
 #[inline(never)]
 #[cfg_attr(target_os = "espidf", link_section = ".iram1.psi_draw")]
 pub(crate) fn run<const N: usize>(
-    prog: &Program,
+    prog: &Prog,
     s: &mut Scratch<N>,
     t: &Tables,
     ink: &mut Ink,
@@ -211,7 +211,7 @@ pub(crate) fn run<const N: usize>(
 #[cfg(not(target_arch = "wasm32"))]
 #[inline(never)]
 fn as_lanes<const N: usize>(
-    prog: &Program,
+    prog: &Prog,
     s: &mut Scratch<N>,
     t: &Tables,
     ink: &mut Ink,
@@ -231,7 +231,7 @@ fn as_lanes<const N: usize>(
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
 fn args_paint(
-    prog: &Program,
+    prog: &Prog,
     t: &Tables,
     ink: &mut Ink,
     pen: &mut Pen,
@@ -274,7 +274,7 @@ const PRIMS: usize = 6;
 #[allow(clippy::too_many_arguments)]
 #[cfg_attr(all(target_os = "espidf", feature = "sram1-iram"), link_section = ".iram1.s1")]
 fn run_lanes<const N: usize>(
-    prog: &Program,
+    prog: &Prog,
     s: &mut Scratch<N>,
     t: &Tables,
     ink: &mut Ink,
@@ -496,7 +496,7 @@ fn colour(v: i32) -> u8 {
 /// as the lines and dots are: a primitive counts one of the frame's, and
 /// every pixel it covers one of its line steps.
 fn paint_prim(
-    prog: &Program,
+    prog: &Prog,
     t: &Tables,
     p: &mut [u8; W * H],
     pen: &mut Pen,
@@ -624,9 +624,9 @@ fn paint_prim(
         }
         SPR => {
             // A sprite whose key gives colours (its keys' numbers paint
-            // indices): a[0] its header's place in the tables, a[3] flip
-            // (1 across, 2 down, 3 both).
-            let at = ((a[0] >> 16) as u32 & (MAX_TABLE as u32 - 1)) as u8;
+            // indices): a[0] its header's place in the tables (in fours:
+            // `store_at`), a[3] flip (1 across, 2 down, 3 both).
+            let at = (a[0] >> 16) as u8;
             let h = SprHead::new(&prog.tables, at);
             let (x0, y0) = (px(a[1]), py(a[2]));
             let flip = (a[3] >> 16) & 3;
@@ -661,7 +661,7 @@ fn paint_prim(
                     (a[1] >> 16).clamp(0, 32) as usize,
                 );
                 for (k, c) in chars.iter_mut().take(len).enumerate() {
-                    *c = prog.tables[(at + k) & (MAX_TABLE - 1)];
+                    *c = prog.tables[(at + k) & (prog.tables.len() - 1)];
                 }
                 len
             } else {
@@ -720,7 +720,7 @@ fn put(p: &mut [u8; W * H], x: i32, y: i32, c: u8) {
 /// has one: what [`paint_row`] lays over each row (`None`: nothing, and no
 /// call a row).
 #[inline]
-pub(crate) fn paint_of<'a>(prog: &Program, ink: Option<&'a Ink>) -> Option<&'a Plane> {
+pub(crate) fn paint_of<'a>(prog: &Prog, ink: Option<&'a Ink>) -> Option<&'a Plane> {
     ink.filter(|_| prog.paints()).and_then(|k| k.1.as_deref())
 }
 
@@ -728,7 +728,7 @@ pub(crate) fn paint_of<'a>(prog: &Program, ink: Option<&'a Ink>) -> Option<&'a P
 /// W × 3 bytes). Out of line, in flash; called only for a program that
 /// paints ([`paint_of`]).
 #[inline(never)]
-pub(crate) fn paint_row(prog: &Program, paint: &Plane, row: usize, out: &mut [u8]) {
+pub(crate) fn paint_row(prog: &Prog, paint: &Plane, row: usize, out: &mut [u8]) {
     let px = out.as_chunks_mut::<3>().0;
     overlay(prog, &paint[row * W..(row + 1) * W], px);
 }
@@ -737,7 +737,7 @@ pub(crate) fn paint_row(prog: &Program, paint: &Plane, row: usize, out: &mut [u8
 /// `paint`, `px` its pixels): wherever something was painted. (Out of the
 /// frame loop: in flash.)
 #[inline(never)]
-pub(crate) fn overlay(prog: &Program, paint: &[u8], px: &mut [[u8; 3]]) {
+pub(crate) fn overlay(prog: &Prog, paint: &[u8], px: &mut [[u8; 3]]) {
     for (o, &k) in px.iter_mut().zip(paint) {
         if k != 0 {
             let v = prog.paint[k as usize & (MAX_PAINT - 1)];

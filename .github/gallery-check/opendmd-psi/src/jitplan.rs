@@ -89,7 +89,7 @@ pub(crate) fn supported(c: u8) -> Result<(), Refusal> {
     match c {
         ADD | SUB | MUL | ADD_W | SUB_W | MUL_W | MUL_N | MASK | LT | LE | GT | GE | EQ | NE
         | AND | OR | MIN | MAX | STEP | NEG | NOT | ABS | FLOOR | FRAC | SIN | COS | TRI | SAW
-        | SQR | SHR | SELECT | CLAMP | SEL_LT..=CNT_GE => Ok(()),
+        | SQR | SHR | SELECT | CLAMP | SEL_LT..=CNT_GE | DIV_S => Ok(()),
         DIV | MOD | ATAN2 | HASH | LEN | BIT | SQRT | RECIP | PICK | TAB | SPR | MIX | SMOOTH
         | NOISE | MULR => Ok(()),
         DIGIT..=DIGIT_B | NOISE_O..=NOISE_O_LAST => Ok(()),
@@ -103,7 +103,7 @@ pub(crate) fn supported(c: u8) -> Result<(), Refusal> {
 
 /// The kernel's units, from `ops[start..pe]`.
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-pub(crate) fn items(prog: &Program, start: usize, pe: usize) -> Result<Vec<Item>, Refusal> {
+pub(crate) fn items(prog: &Prog, start: usize, pe: usize) -> Result<Vec<Item>, Refusal> {
     let ops = &prog.ops[..pe];
     let mut out = Vec::new();
     let mut k = start;
@@ -316,8 +316,6 @@ pub(crate) fn needs_call(hsv_call: bool, it: &Item) -> bool {
                     | SQRT
                     | RECIP
                     | PICK
-                    | TAB
-                    | SPR
                     | MIX
                     | SMOOTH
                     | NOISE
@@ -343,7 +341,7 @@ pub(crate) fn needs_call(hsv_call: bool, it: &Item) -> bool {
 /// refuse while it emits — temporaries, an operand's range, 255 words —
 /// the host tests check never happens for the bundled Formulas, the
 /// goldens and the fuzz: `jit_takes_is_lower`.)
-pub(crate) fn jit_takes(prog: &Program) -> bool {
+pub(crate) fn jit_takes(prog: &Prog) -> bool {
     let (pe, start) = (prog.len(), prog.kernel_start());
     if start >= pe
         || prog.ops[prog.row_end as usize..start]

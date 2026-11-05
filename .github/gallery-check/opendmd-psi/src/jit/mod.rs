@@ -152,7 +152,7 @@ pub(crate) unsafe fn eval_helper(id: u8, a: [u32; 5], ptr: &dyn Fn(u32) -> *mut 
             )
         }
         hid::TAB => {
-            let tabs = &*(ptr(a[1]) as *const [i32; MAX_TABLE]);
+            let tabs = core::slice::from_raw_parts(ptr(a[1]) as *const i32, a[4] as usize);
             tab(tabs, a[2] as u8, a[3] as u8, i(0))
         }
         hid::PICK => {
@@ -160,7 +160,7 @@ pub(crate) unsafe fn eval_helper(id: u8, a: [u32; 5], ptr: &dyn Fn(u32) -> *mut 
             pick(sc, a[2] as u8, a[3] as u8, i(0))
         }
         hid::SPR => {
-            let tabs = &*(ptr(a[2]) as *const [i32; MAX_TABLE]);
+            let tabs = core::slice::from_raw_parts(ptr(a[2]) as *const i32, a[4] as usize);
             SprHead::new(tabs, a[3] as u8).read(tabs, i(0), i(1))
         }
         hid::GLYPH => fixed::glyph(&*(ptr(a[3]) as *const Glyphs), i(0), i(1), i(2)),
@@ -185,7 +185,7 @@ struct Rows<'a> {
     row: usize,
     ink: Option<&'a Ink>,
     under: Option<&'a [u8]>,
-    prog: &'a Program,
+    prog: &'a Prog,
     scratch: &'a Scratch<128>,
     alias: &'a Alias,
     tables: &'a Tables<'a>,
@@ -216,6 +216,7 @@ static ZEROS: [u8; W * 3] = [0; W * 3];
 )]
 fn fill<T: Target>(t: &mut T, low: &Lowered, ctx: &mut [u32], st: &Rows<'_>, per_row: bool) {
     let s = st.scratch;
+    let mut div: Option<(i32, fixed::DivBy)> = None;
     for ((w, out), &row) in low.words.iter().zip(ctx.iter_mut()).zip(&low.per_row) {
         if row != per_row {
             continue;
@@ -237,11 +238,21 @@ fn fill<T: Target>(t: &mut T, low: &Lowered, ctx: &mut [u32], st: &Rows<'_>, per
                 t.addr(p as *const u8, W * 4)
             }
             Word::Scalar(k) => s.sc[k as usize] as u32,
+            Word::Div { v, part } => {
+                // (Its five parts in a row: the divisor's worked out once.)
+                let b = s.sc[v as usize];
+                let by = match div {
+                    Some((x, by)) if x == b => by,
+                    _ => fixed::DivBy::new(b),
+                };
+                div = Some((b, by));
+                lower::div_word(&by, part)
+            }
             Word::Pal(k) => t.addr(palette(st.tables, st.own, k).as_ptr() as *const u8, 96),
             Word::Sin => t.addr(st.tables.sin.as_ptr() as *const u8, 512),
             Word::Helper(id) => t.helper(id),
             Word::Sc => t.addr(s.sc.as_ptr() as *const u8, SC * 4),
-            Word::Tabs => t.addr(st.prog.tables.as_ptr() as *const u8, MAX_TABLE * 4),
+            Word::Tabs => t.addr(st.prog.tables.as_ptr() as *const u8, st.prog.tables.len() * 4),
             Word::Glyphs(c) => {
                 let g = &st.glyphs[(c.saturating_sub(code::DIGIT) as usize).min(4)];
                 t.addr(
@@ -311,7 +322,7 @@ pub(crate) fn frame<T: Target>(
     t: &mut T,
     low: &Lowered,
     ctx: &mut [u32],
-    prog: &Program,
+    prog: &Prog,
     scratch: &mut Scratch<128>,
     ink: Option<&mut Ink>,
     still: Option<&mut Still>,
@@ -327,17 +338,7 @@ pub(crate) fn frame<T: Target>(
     let mut clk = stats::Clock::start();
     let ns = prog.n_scalars as usize;
     scratch.sc[..ns].copy_from_slice(&prog.init[..ns]);
-    let sc = &mut scratch.sc;
-    sc[S_T as usize] = inputs.t;
-    sc[S_HOUR as usize] = (inputs.hour as i32) << 16;
-    sc[S_MINUTE as usize] = (inputs.minute as i32) << 16;
-    sc[S_SECOND as usize] = (inputs.second as i32) << 16;
-    sc[S_A as usize] = inputs.a;
-    sc[S_B as usize] = inputs.b;
-    sc[S_C as usize] = inputs.c;
-    if prog.uses & SEEDED != 0 {
-        sc[S_SEED as usize] = inputs.seed;
-    }
+    vm::frame_inputs(prog, &mut scratch.sc, inputs);
     let fe = prog.frame_end as usize;
     if prog.forever() {
         vm::wset(&mut scratch.lanes[REGS], 0, inputs.tw);
@@ -813,7 +814,7 @@ mod device {
     unsafe impl Send for Kernel {}
 
     /// The kernel for `prog`'s pixel stage, or why the VM draws it.
-    pub fn emit(prog: &Program) -> Result<Kernel, Refusal> {
+    pub fn emit(prog: &Prog) -> Result<Kernel, Refusal> {
         let mut low = lower::lower(prog)?;
         let n = low.code.len().div_ceil(4);
         // SAFETY: a plain allocation, freed by `Drop`.
@@ -856,7 +857,7 @@ mod device {
     #[inline(never)]
     #[allow(clippy::too_many_arguments)]
     fn vm_instead(
-        prog: &Program,
+        prog: &Prog,
         scratch: &mut Scratch<128>,
         ink: Option<&mut Ink>,
         still: Option<&mut Still>,
@@ -910,7 +911,7 @@ mod device {
         #[allow(clippy::too_many_arguments)]
         pub fn render(
             &mut self,
-            prog: &Program,
+            prog: &Prog,
             scratch: &mut Scratch<128>,
             ink: Option<&mut Ink>,
             still: Option<&mut Still>,
@@ -934,7 +935,7 @@ mod device {
         #[allow(clippy::too_many_arguments)]
         pub fn render_beam(
             &mut self,
-            prog: &Program,
+            prog: &Prog,
             scratch: &mut Scratch<128>,
             ink: Option<&mut Ink>,
             still: Option<&mut Still>,
@@ -963,7 +964,7 @@ mod device {
         #[allow(clippy::too_many_arguments)]
         fn render_inner(
             &mut self,
-            prog: &Program,
+            prog: &Prog,
             scratch: &mut Scratch<128>,
             ink: Option<&mut Ink>,
             still: Option<&mut Still>,
@@ -1021,7 +1022,7 @@ mod device {
         #[allow(clippy::too_many_arguments)]
         fn rate_raced(
             &mut self,
-            prog: &Program,
+            prog: &Prog,
             scratch: &mut Scratch<128>,
             ink: Option<&mut Ink>,
             still: Option<&mut Still>,
@@ -1068,7 +1069,7 @@ mod device {
         #[allow(clippy::too_many_arguments)]
         pub fn check(
             &mut self,
-            prog: &Program,
+            prog: &Prog,
             scratch: &mut Scratch<128>,
             ink: Option<&mut Ink>,
             inputs: &Inputs,
@@ -1126,6 +1127,6 @@ pub use device::{emit, Kernel};
 
 /// Why the VM would draw `prog` (`None`: a kernel can), without making one
 /// (the probe, tests).
-pub fn refusal(prog: &Program) -> Option<Refusal> {
+pub fn refusal(prog: &Prog) -> Option<Refusal> {
     lower::lower(prog).err()
 }

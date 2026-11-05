@@ -1,0 +1,460 @@
+-- author: OpenDMD
+-- licence: CC0-1.0
+name "Endless road V2"
+about "Desert, megacity, tunnel, forest: one road through four places, a day going by"
+loop forever
+fps 50
+
+-- Endless road V2 (docs/research/endless-road-v2.md): a shared road core,
+-- each place a `scene`, the road's profile and the colours tweened between
+-- places. P1 drew the Desert and the Megacity, the city rising out of the
+-- desert; P2 the Forest, the Tunnel, the mouth and the exit, the trees
+-- thinning to sand.
+
+-- ---- Colours: each place is 16 colours, by day and by night ----
+-- Every place keeps the road's entries in the same places: 0 glass, 1-4
+-- the sky from the top to the horizon, 5-6 road and its stripe, 7-8 the
+-- edge (kerb, barrier) and its stripe, 9 beyond the road, 10 lit (the
+-- headlights, the wet road's windows), 11 the car's body, 12 its lights;
+-- 13-15 the place's own (far and near silhouettes, windows or the sun).
+-- The palette's low half is the desert turning into the city, then the
+-- tunnel, then the forest's own 16 more (canopy, ferns, trunks, light);
+-- the high half the city, then the forest, turning into the desert: a
+-- transition has one place in each half.
+palette dDay = #000, #2c62c8, #4f86e0, #86aee8, #c8dcee, #403, #806, #ec0, #f00,
+  #c88a48, #b07438, #b00, #f50, #dca060, #a8682e, #f70
+palette dDusk = #000, #2a1660, #7a2a8a, #e0507a, #ff9858, #403, #806, #fa0, #f20,
+  #a04838, #8a3a30, #b00, #f50, #b04868, #6a2850, #f70
+palette dNight = #000, #04021a, #100a3a, #26105a, #521a78, #103, #126, #1ef, #f29,
+  #001, #403, #800, #f30, #1e0c40, #0c0624, #fff
+palette cDay = #5878a8, #8fb0e0, #a8c4ec, #c4d8f2, #dce6f6, #2a2a36, #343442, #6a6a7a, #a0a4b4,
+  #2a2e40, #3c4258, #a02060, #f23, #6a7090, #3e425c, #4c5472
+palette cNight = #405080, #05020c, #0c0420, #1c0832, #5a1450, #0e0a16, #151020, #3c3c50, #8090b0,
+  #04020a, #3a2a58, #a03aa0, #ff2a80, #3a1450, #0a0812, #90e8ff
+palette tun = #000, #2a241c, #221e18, #1a1814, #100e0c, #2a2218, #4a3a20, #c8b070, #ffe8a8,
+  #3a3228, #5a4630, #c05a20, #f80, #5a4a38, #3a3028, #7a5a30
+-- The forest's road palette (2-3: the canopy, dark and lit; 13-14 far
+-- and mid trunks; 15 fog), green and in autumn (some cycles), and night;
+-- then its own 16 more: 3 ferns, 4-5 a near trunk and its lit side, 6 a
+-- shaft of light, 7-8 the fog on the road and the verge, 13-15 what the
+-- dunes and the sun rise from as the trees thin
+palette fDay = #000, #7aa8c8, #1e4a1c, #4a8a34, #d8e8d0, #7a5a38, #6c4e30, #3c5a24, #4a3420,
+  #2a3c1a, #c8a85a, #a01818, #f50, #6a7a68, #4a3a2a, #a8b8a0
+palette fAut = #000, #8ab0c8, #6a2a10, #d07a20, #e8e0c0, #7a5a38, #6c4e30, #8a5a20, #4a3420,
+  #5a3a18, #e0b050, #a01818, #f50, #8a7a60, #4a3a2a, #c0b098
+palette fNight = #000, #0a1424, #06120a, #0e2414, #2a3c50, #2a2018, #261c14, #0e1a0c, #140e08,
+  #08100a, #3a4a5a, #501010, #f30, #1a2428, #140e0a, #2a3440
+palette f2Day = #0e2410, #1e4a1c, #4a8a34, #5a9a3a, #3a2818, #8a6a44, #e0e0b0, #8a8a70, #7a9070,
+  #34482e, #6a8a4a, #000, #000, #8aa090, #6a8070, #d8e8c8
+palette f2Night = #020604, #06120a, #0e2414, #102a16, #0a0806, #2a2a30, #1a2430, #1c2228, #182420,
+  #08100c, #10180c, #000, #000, #182028, #10181c, #24344a
+
+-- Rows (py 0 at the top): the depth (the sky's rows mirrored about the
+-- horizon), the road's flat half width, the sky's shade (9: the verge),
+-- the window row (above: every other row of a tower; below: the near
+-- windows mirrored in the wet road), the headlights' rows
+table depthAt = .008333, .009, .009783, .010714, .011842, .013235, .015, .017308, .020455, .025,
+  .032143, .045, .075, .075, .045, .032143, .025, .020455, .017308, .015, .013235, .011842,
+  .010714, .009783, .009, .008333, .007759, .007258, .006818, .006429, .006081, .005769
+table halfAt = 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3.9, 6.5, 9.1, 11.7, 14.3, 16.9, 19.5,
+  22.1, 24.7, 27.3, 29.9, 32.5, 35.1, 37.7, 40.3, 42.9, 45.5, 48.1, 50.7
+table skyAt = .03125, .03125, .03125, .03125, .0625, .0625, .0625, .09375, .09375, .09375, .125, .125, .125,
+  .28125, .28125, .28125, .28125, .28125, .28125, .28125, .28125, .28125, .28125, .28125, .28125,
+  .28125, .28125, .28125, .28125, .28125, .28125, .28125
+table winAt = 25, 5, 24, 4, 23, 3, 22, 2, 21, 1, 20, 0, 99, 0, 20, 1, 21, 2, 22, 3, 23, 4, 24, 5,
+  25, 6, 26, 7, 27, 8, 28, 9
+-- the hills' depth (below the horizon, x 2.6: the half width's rows)
+table hillAt = 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, .195, .117, .083571, .065, .053182, .045, .039,
+  .034412, .030789, .027857, .025435, .0234, .021667, .020172, .018871, .017727, .016714, .015811, .015
+table beamAt = 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, .5, .5, .5, .5, .5, .5, .5, .5, 0, 0, 0, 0, 0, 0, 0, 0, 0
+
+-- The car: 17 spans (from, to, then row from the top*32 + tag: 23 body,
+-- 24 glass, 25 lights)
+table carX0 = 8, 7, 8, 6, 7, 3, 1, 2, 7, 20, 1, 2, 7, 20, 1, 1, 0
+table carX1 = 17, 18, 17, 19, 18, 22, 24, 5, 18, 23, 24, 5, 18, 23, 24, 24, 25
+table carRow = 759, 791, 792, 823, 824, 855, 887, 889, 888, 889, 919, 921, 920, 921, 951, 983, 1016
+
+-- ---- The cycle's clock: 324 s, the boundaries jittered each cycle ----
+-- Desert to 75 s, into the city 75-105, the city to 180, the tunnel's
+-- mouth 180-188 (the road straight and flat from 172), the tunnel, its
+-- exit 210-216, the forest, then the thinning back to sand over the
+-- cycle's last 30 s. The clock runs from -40 so the wrap falls in the
+-- desert's dwell; each boundary moves by up to ±10 s by a hash of the
+-- cycle's number and the play's seed.
+cyc = t/324 + seed + .125
+cn = floor(cyc)
+tc = frac(cyc)*324 - 40
+tDC = tc - hash(cn, seed + 1)*20
+tCT = tc - hash(cn, seed + 2)*20
+tTF = tc - hash(cn, seed + 3)*20
+tFD = tc - hash(cn, seed + 4)*20
+pDC = smoothstep(65, 95, tDC)
+pFD = smoothstep(-40, -10, tFD)
+-- the tunnel's mouth (8 s) and exit (6 s): how far each has come
+mouthP = smoothstep(170, 178, tCT)
+exitP = smoothstep(200, 206, tTF)
+inMouth = (tCT >= 170) * (tCT < 178)
+inExit = (tTF >= 200) * (tTF < 206)
+tunnel = (tCT >= 170) * (tTF < 206)
+city = pDC * (tCT < 178)
+forest = 1 - pFD + (tTF >= 200)
+desert = pFD * (1 - pDC)
+-- the forest out of the tunnel (its draws, light and own colours)
+forestH = forest * (tunnel < 1)
+
+-- some cycles' forest is in autumn
+autumn = hash(cn, seed + 5) > .55
+-- the palette's high half: the city, then (from the tunnel on) the forest,
+-- turning into the desert while the trees thin
+fSide = max(tCT >= 178, tCT < 100)
+dBack = (tCT < 100) * pFD
+-- the road eases straight and flat into the mouth and out of the exit;
+-- half bends inside the tunnel
+straight = smoothstep(162, 170, tCT) * (1 - smoothstep(206, 214, tTF)) *
+  (1 - .5*smoothstep(180, 184, tCT)*(1 - smoothstep(194, 198, tTF)))
+
+-- ---- The road's profile, tweened by the places' weights ----
+-- (the city or the forest against the desert, the tunnel's weight over
+-- them through the mouth and the exit)
+tw = mouthP * (1 - exitP)
+widthK = mix(mix(mix(1, 1.15, city), .7, forest), .9, tw)
+edgeK = mix(mix(1.2, 1.1, max(city, tw)), 1.4, forest)
+bendAmp = mix(mix(2000, 1200, max(city, tw)), 1600, forest) * (1 - straight)
+hillAmp = desert*26667
+octave = .4*desert
+
+-- ---- The road: how far we have driven, its heading and height ----
+driven = t*.15 + seed*1000
+heading = noise(driven, 0, 0) + octave*noise(driven*3, 9, 0)
+height = noise(driven, 5, 0)
+slope = (noise(driven + .01, 5, 0) - height) * 38.4615
+carLeft = (heading - noise(driven + .03, 0, 0))*80 - 50.99999
+skyMid = 94 - heading*60
+roadMid = 64 - heading*bendAmp
+run = t*6
+
+-- ---- Day and night (V1's): a 4-minute day lingering at dusk ----
+sunPhase = sin(t/240 + hash(seed, 7))
+light = clamp(sunPhase*sunPhase*sunPhase*-3, -1, 1)
+night = clamp(-light, 0, 1)
+day = clamp(light, 0, 1)
+neon = night > .5
+sunRow = 7.5 + clamp(light*-24, -2.5, 20) + city*16
+
+-- The palette: the low half the desert (by day, dusk and night) turning
+-- into the city, then the tunnel, then the forest's own colours; the high
+-- half the city (the mouth's outside), then the forest (the road and what
+-- the exit shows), turning back into the desert as the trees thin
+palette S = tween(tween(tween(tween(tween(dDay, dDusk, 1 - day), dNight, night), tween(cDay, cNight, night), city), tun, tunnel),
+  tween(f2Day, f2Night, night), forestH),
+  tween(tween(tween(cDay, cNight, night), tween(tween(fDay, fAut, autumn), fNight, night), fSide),
+    tween(dDay, dNight, night), dBack)
+-- the road, the car and the forest's far things read the high half in
+-- the forest; the verge's stripes (the desert's by day); the headlights
+-- (by night, in the tunnel)
+hc = (forest > 0) * (tunnel < 1) * .5
+vergeK = (desert > .5) * (1 - neon)
+beamOn = max(neon, tunnel)
+
+-- ---- The horizon: dunes and a mesa, towers ----
+duneH = desert
+farDune = heading*-25
+nearDune = heading*-55
+farH = smoothstep(0, .55, city)*9
+nearH = smoothstep(.35, 1, city)*13
+nearShift = heading*-90
+farShift = heading*-40
+winEpoch = (city < .6) * floor(run%61) * 128
+lineOn = max(city > .5, tunnel) * 32
+
+-- The mouth and the exit: a portal standing on the road at its depth,
+-- growing down the road (its foot's row, its half width, its top's row);
+-- the mask: the tube inside the mouth, outside the exit, all through the
+-- tunnel; the pixels not the tube's read the palette's high half (the
+-- city outside the mouth, the forest inside the exit). The mouth is an
+-- underpass the road dives into: its top under the horizon (the city
+-- stays above and behind it), set in a concrete face that grows up over
+-- the sky as the car goes in, with retaining walls either side of the
+-- ramp down to it; the exit an arch the road climbs out through.
+portalP = inMouth ? mouthP : exitP
+portalOn = inMouth + inExit
+footRow = 19.5 - portalP*portalP*19.5
+portalW = (50.7 - 2.6*footRow) * 1.5 * widthK
+topRow = inMouth ? footRow + (19.5 - footRow)*.9 : 19.5 + (19.5 - footRow)*1.1
+faceTop = inMouth * (topRow + 1.5 + portalP*portalP*portalP*13)
+faceW = portalW*1.35 + 3
+mBase = tunnel - inMouth
+mSign = inMouth - inExit
+halfOther = portalOn*.5
+cityDraw = city * (tCT < 170)
+-- The tunnel: the tube's width against the road's; the car lit as it
+-- passes under each lamp
+tubeW = widthK*1.05
+strobe = tunnel * (frac(run) < .35) / 32
+-- The forest: trunks far (thin, dense, fogged) and mid (wider, sparser),
+-- turning with the road at their own rates; the canopy's leaves faster
+-- still; a clearing now and then and as the trees thin; light through
+-- the leaves by day; fog on the far road
+clearing = smoothstep(.6, .72, noise(driven, 13, 0))
+gapK = 1.3 + clearing*5 + (1 - forest)*12
+lightOn = forestH * (1 - night)
+-- as the trees thin: the canopy's rows go up, the ferns back to the car
+canFull = 8*forest
+rutOn = forest > .6
+
+canPart = 11*forest
+fernFrom = 31 - 18*forest + tunnel*99
+fSky = forest > .5
+
+-- For the draw stage, once a frame: the sun's size, where the roadside
+-- places are, the towers' first roof, what is lit
+sunR2 = 64 - day*39
+sunInk = (desert > 0) / 32
+starOn = night*1.4 - .4 - city*1.4
+placeRun = run/14
+palmOn = (desert > .3) * .53125
+octBendD = octave*bendAmp
+idBase = floor(nearShift/16)*2
+roofLeft = floor(.9999 - nearShift)
+roofInk = neon*.6875
+shaftInk = lightOn*.125
+forestNear = forest*.8
+gantryHW = 65.91*widthK
+
+draw {
+  -- Tags (ink k/32, read back as ink(32)): 3 the sun's glow or a shaft
+  -- of light, 4 stars, 5-7 the sun's bands (low to high); 17
+  -- palms or near trunks, 18 a trunk's lit side, 19 gantries and posts,
+  -- 20 sign lights, 21 lamps, 22 neon roof edges; 23-25 the car. Ink 0
+  -- draws nothing.
+  -- In the forest: near trunks with shafts of light; away from
+  -- the city (or as it rises): the sun, the stars, the palms; in it the
+  -- gantries and lamp posts
+  if forestH > .5 {
+    -- Near trunks either side, one place every 14 stripes, most places a
+    -- tree: a lit side and a dark body, as wide as the tree is near, up
+    -- out of the panel; a shaft of light slanting down beside it
+    for k < 4 {
+      place = placeRun + k*.25 + .13
+      along = frac(place)
+      ahead = 14.7 - along*14
+      size = 1.2/ahead
+      baseY = 11.5 + 12.5*size
+      side = (k%2)*2 - 1
+      roadX = 64 - (heading - noise(driven + ahead*.0075, 0, 0))*bendAmp
+      tree = place - along
+      tx = roadX + side*(40 + noise(tree, k*5 + 2, 0)*40)*size
+      there = (noise(tree, k*5 + 3, 0) < forestNear) * (ahead < 12) / 32
+      wd = side*size*1.2
+      for j < 4 {
+        line(tx + j*wd, baseY, tx + j*wd, -1, there * (17 + (j < 1)))
+      }
+      line(roadX + side*10*size + 8, -1, roadX + side*30*size, baseY, shaftInk)
+    }
+  } else {
+    if cityDraw < .99 {
+      -- The sun in its glow, a line a row (none below the horizon or away
+      -- from the desert)
+      for k < 12 {
+        e = 5 - k
+        rowY = sunRow + e
+        sunHalf = sqrt(max(sunR2 - e*e, 0))
+        shown = (rowY <= 11.5) * sunInk
+        glow = sunHalf*1.4 + 2
+        line(skyMid - sunHalf, rowY, skyMid + sunHalf, rowY, shown * (5 + floor(k*.238)))
+        line(skyMid - glow, rowY, skyMid + glow, rowY, shown*3)
+      }
+      -- The stars, by night
+      for k < 16 {
+        dot(k*96.627%128, 10.5 - k*6.2678%11, (k*.382%1 < starOn) * .125)
+      }
+      -- Roadside palms in the desert; three places, one every 14 stripes,
+      -- now and then a palm there
+      for k < 3 {
+        place = placeRun + k*.37
+        along = frac(place)
+        ahead = 14.7 - along*14
+        size = 1.2/ahead
+        baseY = 11.5 + 12.5*size
+        sideX = cos(k/2)*size
+        aheadD = driven + ahead*.0075
+        palmX = 64 - (heading - noise(aheadD, 0, 0))*bendAmp + noise(aheadD*3, 9, 0)*octBendD + sideX*47
+        there = noise(place - along, k*5, 0)
+        near = ahead < 11
+        palm = (there > .45) * near * palmOn
+        frondX = palmX - 5*sideX
+        frondY = baseY - 22*size
+        line(palmX, baseY, palmX, baseY - 28*size, palm)
+        line(frondX, frondY, palmX + 16*sideX, baseY - 17*size, palm)
+        line(frondX, frondY, frondX, baseY - 27*size, palm)
+      }
+    } else {
+      -- Gantries across the road (a sign light) and lamp posts beside it:
+      -- 4 places, a gantry at the first and the last
+      for k < 4 {
+        along = frac(placeRun + k*.25)
+        ahead = 14.7 - along*14
+        size = 1.2/ahead
+        baseY = 11.5 + 12.5*size
+        hw = size*gantryHW
+        roadX = 64 - (heading - noise(driven + ahead*.0075, 0, 0))*bendAmp
+        near = (ahead < 11) * .03125
+        gantry = near * (k%3 < 1)
+        left = roadX - hw
+        right = roadX + hw
+        topY = baseY - 26*size
+        line(left, topY, right, topY, gantry*19)
+        line(left, topY, left, baseY, gantry*19)
+        line(right, topY, right, baseY, gantry*19)
+        dot(roadX, topY, gantry*20)
+      }
+    }
+  }
+  -- Lit roof edges on every other near tower, by night
+  if cityDraw*neon > 0 {
+    for k < 9 {
+      id = idBase + k*2
+      left = id*8 + roofLeft
+      roofY = floor(12.0001 - hash(id, seed)*nearH)
+      line(left, roofY, left + 6, roofY, (roofY < 10) * roofInk)
+    }
+  }
+  -- The car, span by span
+  for k < 17 {
+    rowTag = carRow[k]/32
+    carY = floor(rowTag)
+    line(carX0[k] - carLeft, carY, carX1[k] - carLeft, carY, frac(rowTag))
+  }
+}
+
+-- ---- Rows: the core ----
+-- Each row looks ahead: below the horizon its depth (the sky's rows
+-- mirrored, so what is above the road follows it), the road's half width
+-- (the desert's hills warp it), its edge, the stripe, the road's middle
+-- at that depth, the headlights' reach
+below = py > 12
+belowF = below/32
+depth = depthAt[py]
+rowDriven = driven + depth
+scene desertRows when desert*below {
+  -- the hills; the bends' second octave; the heat shimmer on the far
+  -- rows (a pixel at most, under a hertz): the road's rows only
+  hd = hillAt[py]
+  hillW = clamp((noise(driven + depth, 5, 0) - height - hd*slope) * hd * hillAmp, -15.6, 5.2)
+  bendD = noise(rowDriven*3, 9, 0)*octBendD + floor((noise(py*1.7, t*.6, 0)*10 - 5)*hd + .5)
+}
+baseHW = halfAt[py] + hillW
+hw = baseHW*widthK
+ew = hw*edgeK
+phase = frac(39/max(below ? baseHW : halfAt[25 - py], 1.3) + run)
+stripe = (phase < .5) * belowF
+centre = noise(rowDriven, 0, 0)*bendAmp + roadMid + bendD
+beamRow = hw*beamAt[py]*beamOn
+lineRow = (hw*.02 + .6) * stripe * lineOn
+sky = skyAt[py]
+yuA = below*99 + 31 - py
+
+-- ---- Columns (once a column): the horizon's silhouettes ----
+-- the desert's dunes in two layers (sharp crests: 1 - |sin|) and a mesa,
+-- the city's two rows of towers, the forest's trunks on the towers'
+-- cells and hashes (far: 1-2 px in 6, most cells; mid: 2-4 px in 8,
+-- fewer); the far layer and the near, and
+-- the bits by row of the towers' windows or the forest's leaves and ferns
+dFar = duneH * (5.5 - 4*abs(sin((px + farDune) / 150)) + 1.2*sin((px + farDune) / 41))
+nearU = px + nearDune
+mesa = clamp((12 - abs(nearU%173 - 86)) * 2, 0, 8)
+dNear = duneH * max(3.5 - 4.5*abs(sin(nearU/110)) + .8*sin(nearU/29), mesa)
+nearAt = px + nearShift
+nh = hash(floor(nearAt/8), seed)
+tNear = (nearAt%8 < 7) * nh * nearH
+mo = nearAt%8 - frac(nh*7)*5
+nearTop = max(dNear, max(tNear, (frac(nh*3) < forest*.6) * (mo >= 0) * (mo < 2 + frac(nh*13)*2) * (forest*13)))
+farAt = px + farShift
+fh = hash(seed, floor(farAt/6))
+tFar = fh*farH
+fo = farAt%6 - frac(fh*7)*3.5
+farTop = max(max(dFar, tFar), (fh < forest*.85) * (fo >= 0) * (fo < 1 + (frac(fh*13) > .5)) * (forest*13))
+windows = forest > 0 ? floor(hash(floor((px + nearShift) / 2), 27) * 32767) :
+  (max(tNear, tFar) > dFar) * bit(42, nearAt%8) * floor(hash(floor(nearAt) + winEpoch, seed) * 127)
+nearTop = 19 + nearTop
+farTop = max(19 + farTop, nearTop)
+
+-- ---- Pixels ----
+-- offRoad: how far from the road's middle; k what the pixel shows (the
+-- largest wins): 0 road, 1 edge, 2 beyond or the sky; 3 the sun's glow,
+-- 4 a star (or the forest's gap of sky, the tunnel's lamp glow), 5-7 the
+-- sun; 8-11 the silhouettes (far, near, their windows; the tunnel's ribs);
+-- 12 the lane line, ruts or the tunnel's lamps; 13 lit (the headlights,
+-- the wet road, the city below); 14-15 the canopy, 16 ferns; then the
+-- tags drawn
+offRoad = abs(px - centre)
+k = max((offRoad >= hw) + (offRoad >= ew), (offRoad < beamRow) * 13)
+
+-- ---- Each place's own pixels, each folded in as soon as it is made:
+-- kO what is not the tube (the city, the silhouettes, the forest), kT the
+-- tube's ----
+scene megacity when city {
+  -- the window bit at this row (the wet road's and the city's below it
+  -- under the horizon); the dashed centre line
+  w = bit(windows, winAt[py])
+  cityK = max(w*(below*13), (offRoad < lineRow) * 12)
+}
+-- the silhouettes (dunes, towers and their windows, trunks)
+kO = max(max(k, cityK), (yuA < farTop)*(w*2 + 8) + (yuA < nearTop))
+scene tube when tunnel {
+  -- The tube: its half width at the row's depth (the ceiling's rows at
+  -- the depth mirrored), round the road's middle there, so the half bends
+  -- curve it whole; ribbed walls from the edge line out and up, at three
+  -- times the stripes' rate; the lane line dashed; on the ceiling a lamp
+  -- strip down its middle, lit in passing bands, with a glow either side.
+  tHW = halfAt[below ? py : 25 - py] * tubeW
+  ribK = 8 + (frac(phase*3) < .5)
+  lampRow = (1 - below) * (phase < .35) * 1.6
+  glowRow = (1 - below) * (3 + (phase < .35)*2)
+  tubeK = max(max((offRoad > tHW) * ribK, (offRoad < lineRow) * 12),
+    max((offRoad < lampRow) * 12, (offRoad < glowRow) * 4))
+}
+kT = max(k, tubeK)
+scene canopy when forest * (1 - below) {
+  -- The canopy, over the sky's rows: full over the top rows, ragged (its
+  -- leaf bits) over the three under them, a V of sky over the road (wider
+  -- in a clearing); lit and dark leaves by the bits, two rows a clump
+  lb = bit(windows, floor(py*.5))
+  canA = py < canFull ? 1 : (py < canPart) * 15
+  canB = (py < canFull) * 14
+  gapRow = (11.5 - py) * gapK
+  treeK = offRoad > gapRow ? lb*canA + canB : 4*fSky
+}
+kO = max(kO, treeK)
+scene ground when forest*below {
+  -- Over the road's rows: ferns over the verge, lit where the leaf bits
+  -- say (not through the exit's arch: their colour is the low half's);
+  -- ruts either side of the middle. (The light on the road is the near
+  -- trees' shafts, drawn: each tied to its tree.)
+  fern = bit(windows, floor(py*.5))
+  fernRow = (py > fernFrom) * 16
+  rutC = hw*.42
+  rutW = max(hw*.05, .5)*rutOn
+  groundK = max(fern * (offRoad >= hw) * fernRow, (abs(offRoad - rutC) < rutW) * 12)
+}
+kO = max(kO, groundK)
+scene portal when portalOn * (31 - py < max(topRow, faceTop)) {
+  -- inside the portal's rectangle; round it the mouth's concrete face,
+  -- and on the ramp's rows the retaining walls from the road's edge out,
+  -- wider toward the face (one scene: each guard costs every frame)
+  inRow = 31 - py > footRow
+  inP = inRow * (31 - py < topRow) * (offRoad < portalW)
+  wallOut = inRow ? faceW : ew + (faceW - ew)*clamp((31 - py) / max(footRow, .5), 0, 1)
+  faceK = inMouth * (offRoad < wallOut) * (offRoad >= (1 - inRow) * ew) * 26
+}
+kO = max(kO, faceK)
+m = mBase + mSign*inP
+k = max(m ? kT : kO, ink(32))
+pal(S, pick(k,
+    stripe + (5/32 + hc), stripe + (7/32 + hc),
+    below ? 9/32 + stripe*vergeK + hc : fSky ? 9/32 : sky + hc,
+    min(sky + 1/32, 4/32), fSky ? 4/32 + hc : 15/32, 8/32, 15/32, 7/32,
+    13/32 + hc, 14/32 + hc, 15/32, 15/32, 8/32 + hc, 10/32 + hc,
+    2/32 + hc, 3/32 + hc, 3/32,
+    forestH > 0 ? 4/32 : neon*8/32, 5/32, 7/32, 12/32, neon ? 15/32 : 7/32, 12/32,
+    11/32 + hc - strobe, hc, 12/32 + hc, 7/32 + py%2/32) + halfOther - m*halfOther)

@@ -151,7 +151,8 @@ pub(crate) mod code {
     pub const MUL_N: u8 = 24;
     // `NAME[u, v]`, a sprite's pixel (`sprite NAME { … }`): `d = the key's
     // number at column floor(u), row floor(v)` of the sprite whose header
-    // is `tables[c]` (`c` an immediate), 0 outside it ([`super::SprHead`]).
+    // is `tables[4c]` (`c` an immediate: `super::store_at`), 0 outside it
+    // ([`super::SprHead`]).
     // Any level; never folded (a constant u, v: once a frame).
     pub const SPR: u8 = 25;
     pub const LAST_BIN: u8 = 25;
@@ -190,7 +191,8 @@ pub(crate) mod code {
     // constant slots holding the slots of the choices (all per frame or per
     // row); 0 where floor(k) is outside 0..c ([`super::pick`]). One operand.
     pub const PICK: u8 = 44;
-    // `NAME[k]`, a table's entry: `d = tables[b + floor(k)]` where floor(k)
+    // `NAME[k]`, a table's entry: `d = tables[4b + floor(k)]` (`b` the
+    // table's place in fours, `super::store_at`) where floor(k)
     // is 0..=c (the table's length less one), else 0 ([`super::tab`]). Any
     // level; one operand.
     pub const TAB: u8 = 45;
@@ -345,6 +347,20 @@ pub(crate) mod code {
     pub const CNT_GE: u8 = 0xf5;
     pub const CMP_FIRST: u8 = SEL_LT;
     pub const CMP_LAST: u8 = CNT_GE;
+    // `div(a, b)` per pixel where `b` is the same across the lane (a
+    // constant, a frame's or a row's value): written by `range::narrow`
+    // over a laid-out program (never in a `.psb`), the same value as `DIV`
+    // by [`crate::fixed::DivBy`] (multiplies, no division). `c`: what the
+    // ranges say of `b` for inputs in range ([`DIV_BIG`], [`DIV_POS`]).
+    pub const DIV_S: u8 = 0xf6;
+    /// `DIV_S`'s `c`: |b| > 1 (no quotient reaches the ends, `E ≥ 32`).
+    pub const DIV_BIG: u8 = 1;
+    /// `DIV_S`'s `c`: b > 0.
+    pub const DIV_POS: u8 = 2;
+    /// `DIV_S`'s `c`: a ≥ 0 (the JIT skips the magnitude and the sign).
+    pub const DIV_NONNEG: u8 = 4;
+    /// `DIV_S`'s `c`: |b| may be under 1 (the VM's slow case: the costs).
+    pub const DIV_SMALL: u8 = 8;
 
     /// A step that reads a table (the sine, a font): never folded, run once
     /// a frame when its operands are constants.
@@ -425,6 +441,7 @@ pub(crate) mod code {
             LINE_FROM..=DOT => 3,
             STILL | COLUMN | FUSE => 0,
             CMP_FIRST..=CMP_LAST => 3,
+            DIV_S => 2,
             _ => match colour_parts(c).0 {
                 OUT_RGB | OUT_HSV => 3,
                 _ => 1,
@@ -538,6 +555,7 @@ pub(crate) mod code {
             SLOW => "slow",
             CMP_FIRST..=CMP_LAST => ["sel_lt", "sel_le", "cnt_lt", "cnt_le", "cnt_gt", "cnt_ge"]
                 [(c - CMP_FIRST) as usize],
+            DIV_S => "div_s",
             FOR..=FUSE => [
                 "for",
                 "end",
@@ -612,8 +630,56 @@ pub(crate) const SEEDED: u8 = 16;
 /// A colour step reads a palette of the formula's own.
 pub(crate) const OWNPAL: u8 = 32;
 
-/// `table` entries a formula may hold in all.
-pub const MAX_TABLE: usize = 256;
+/// `table` entries a formula may hold in all: the store of tables, sprites
+/// and texts (1,024 numbers since psb ABI 3; 256 before).
+pub const MAX_TABLE: usize = 1024;
+
+/// Numbers one `table` may hold (a `TAB` step's `c` is its last index).
+pub const MAX_TABLE_LEN: usize = 256;
+
+/// A table's or a sprite's place in the store as a step holds it (`TAB`'s
+/// `b`, `SPR`'s `c`, one byte): in fours, the compiler laying each out at
+/// a multiple of [`STORE_ALIGN`] ([`store_at`]).
+pub(crate) const STORE_ALIGN: usize = 4;
+
+/// The store index of a step's place byte ([`STORE_ALIGN`]).
+#[inline(always)]
+pub(crate) const fn store_at(b: u8) -> usize {
+    (b as usize) * STORE_ALIGN
+}
+
+/// Built-in input reads a formula may have (`crate::world`: a key's
+/// value, `since` or `was`, each one), each a scalar slot the player
+/// writes once a frame.
+pub const MAX_INS: usize = 24;
+
+/// The built-in inputs a program reads ([`crate::world`]): `n` reads, in
+/// the scalar slots from `base`, read `keys[k]` (`world::input_byte`: the
+/// key's number and what of it). No reads: `n` 0.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(C)]
+pub struct Ins {
+    pub(crate) n: u8,
+    pub(crate) base: u8,
+    pub(crate) keys: [u8; MAX_INS],
+}
+
+impl Ins {
+    /// The reads: (slot, input byte).
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (u8, u8)> + '_ {
+        let n = (self.n as usize).min(MAX_INS);
+        self.keys[..n]
+            .iter()
+            .enumerate()
+            .map(move |(k, &b)| (self.base.wrapping_add(k as u8), b))
+    }
+
+    /// Whether scalar slot `v` is one of the reads'.
+    #[inline]
+    pub(crate) fn holds(&self, v: u8) -> bool {
+        self.n != 0 && v >= self.base && ((v - self.base) as usize) < (self.n as usize).min(MAX_INS)
+    }
+}
 
 /// The program paints (`draw { }` with colours: the paint canvas, laid
 /// over every layer).
@@ -694,7 +760,7 @@ fn rgb_of(v: u32) -> [u8; 3] {
 /// frame's values: their weights are). Out of line, in flash: once a
 /// frame, and only for a formula with some (`OWNPAL`).
 #[inline(never)]
-pub(crate) fn own_palettes(prog: &Program, sc: &Sc, own: &mut Pals) {
+pub(crate) fn own_palettes(prog: &Prog, sc: &Sc, own: &mut Pals) {
     for (j, p) in own.iter_mut().enumerate() {
         for (k, c) in p.iter_mut().enumerate() {
             *c = rgb_of(prog.pals[32 * j + k]);
@@ -773,18 +839,21 @@ pub(crate) fn turn(t: &crate::tables::Tables, own: &mut Pals, sc: &Sc, op: &Op) 
     feature = "docs",
     all(feature = "jit", target_arch = "xtensa", target_os = "espidf")
 ))]
-pub(crate) fn turn_rows(prog: &Program, t: &crate::tables::Tables, own: &mut Pals, sc: &Sc) {
+pub(crate) fn turn_rows(prog: &Prog, t: &crate::tables::Tables, own: &mut Pals, sc: &Sc) {
     for op in &prog.ops[prog.turns()] {
         turn(t, own, sc, op);
     }
 }
 
-/// A compiled formula. Plain data (every field an integer or an array of
-/// them), so an all-zero value is valid (an empty program) and
-/// [`crate::compile_into`] can fill one in place.
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// A compiled formula with a store of `S` (its tables, sprites and texts:
+/// [`Program`]'s holds [`MAX_TABLE`] numbers, the player's [`Prog`] only
+/// what its formula needs). Plain data (every field an integer or an array
+/// of them), so an all-zero value is valid (an empty program) and
+/// [`crate::compile_into`] can fill one in place. `repr(C)`, the store
+/// last: a [`Prog`] of `n` numbers is the same fields and `n` of them
+/// ([`Prog::try_boxed`]).
 #[repr(C)]
-pub struct Program {
+pub struct ProgramOf<S: ?Sized> {
     pub(crate) ops: [Op; MAX_OPS],
     /// The scalar slots' values at the start of a frame: the constants.
     pub(crate) init: [i32; MAX_SCALARS],
@@ -805,8 +874,6 @@ pub struct Program {
     pub(crate) frame_ms: u8,
     /// The loop, ms (`loop N`, default 8 s); 0 for `loop forever`.
     pub(crate) loop_ms: u32,
-    /// The `table` constants (Q16.16), each table's entries in a row.
-    pub(crate) tables: [i32; MAX_TABLE],
     /// What the formula declares (its controls, whether it is a look).
     pub(crate) meta: crate::meta::Meta,
     /// The paint palette: colour `k` (0x00RRGGBB) of index `k` (0 none).
@@ -815,13 +882,179 @@ pub struct Program {
     /// entries (0x00RRGGBB) a slot ([`MAX_PALETTES`]); live slot `j` is
     /// slot `j` unless a tween or a turn writes it.
     pub(crate) pals: [u32; MAX_PALETTES * 32],
+    /// The built-in inputs it reads ([`Ins`]).
+    pub(crate) ins: Ins,
+    /// The store: the `table` constants (Q16.16, each table's entries in a
+    /// row), the sprites and the texts. Its length is a power of two (the
+    /// steps' reads are masked into it, whatever the program).
+    pub(crate) tables: S,
+}
+
+/// A whole program: the compiler's, with the whole store
+/// ([`MAX_TABLE`]); a value (`Copy`, `Default`).
+pub type Program = ProgramOf<[i32; MAX_TABLE]>;
+
+/// A program with the store its formula needs (a power of two of numbers,
+/// [`MIN_STORE`] at least): the player's, on the heap
+/// ([`Prog::try_boxed`], [`crate::psb::load_boxed`]). Every function that
+/// plays a program takes one; a [`Program`] is one too (it derefs).
+pub type Prog = ProgramOf<[i32]>;
+
+/// The fewest numbers a [`Prog`]'s store holds.
+pub const MIN_STORE: usize = STORE_ALIGN;
+
+/// The store a formula of `used` numbers plays with: the power of two at
+/// or above it, [`MIN_STORE`] at least.
+pub const fn store_words(used: usize) -> usize {
+    let n = if used < MIN_STORE { MIN_STORE } else { used };
+    n.next_power_of_two()
 }
 
 // (The budget: 6.3 KB at P0's limits, `docs/research/endless-road-v2.md`
-// §5; +1.3 KB for 768 steps, P2.)
-const _: () = assert!(core::mem::size_of::<Program>() <= 7_600);
+// §5; +1.3 KB for 768 steps, P2; the store out of the fixed part, sized
+// by the formula (ABI 3), and 26 B for the inputs.)
+const _: () = assert!(core::mem::size_of::<ProgramOf<[i32; 0]>>() <= 6_500);
+
+impl Clone for Program {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl Copy for Program {}
+
+impl PartialEq for Prog {
+    fn eq(&self, o: &Prog) -> bool {
+        self.ops == o.ops
+            && self.init == o.init
+            && self.frame_end == o.frame_end
+            && self.draw_end == o.draw_end
+            && self.row_end == o.row_end
+            && self.pixel_end == o.pixel_end
+            && self.n_scalars == o.n_scalars
+            && self.regs == o.regs
+            && self.uses == o.uses
+            && self.frame_ms == o.frame_ms
+            && self.loop_ms == o.loop_ms
+            && self.meta == o.meta
+            && self.paint == o.paint
+            && self.pals == o.pals
+            && self.ins == o.ins
+            && self.used() == o.used()
+            && self.tables[..self.used()] == o.tables[..o.used()]
+    }
+}
+
+impl PartialEq for Program {
+    fn eq(&self, o: &Program) -> bool {
+        let (a, b): (&Prog, &Prog) = (self, o);
+        a == b
+    }
+}
+
+impl Eq for Program {}
 
 impl core::fmt::Debug for Program {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let p: &Prog = self;
+        p.fmt(f)
+    }
+}
+
+impl core::ops::Deref for Program {
+    type Target = Prog;
+    #[inline(always)]
+    fn deref(&self) -> &Prog {
+        self
+    }
+}
+
+impl core::ops::DerefMut for Program {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Prog {
+        self
+    }
+}
+
+impl Prog {
+    /// The memory a [`Prog`] of `words` numbers takes.
+    pub fn layout(words: usize) -> core::alloc::Layout {
+        let head = core::alloc::Layout::new::<ProgramOf<[i32; 0]>>();
+        let (l, _) = head
+            .extend(core::alloc::Layout::array::<i32>(words).unwrap_or(head))
+            .unwrap_or((head, 0));
+        l.pad_to_align()
+    }
+
+    /// An empty program with a store of [`store_words`]`(used)` numbers on
+    /// the heap, or `None` when the heap has no block for it.
+    pub fn try_boxed(used: usize) -> Option<alloc::boxed::Box<Prog>> {
+        let words = store_words(used.min(MAX_TABLE));
+        let l = Self::layout(words);
+        // SAFETY: a non-zero-sized layout (the fixed part is ~6 KB);
+        // `ProgramOf` is `repr(C)` with the store last, so the fixed part's
+        // fields sit where `ProgramOf<[i32; 0]>`'s do and the `words`
+        // numbers follow (the layout above, which is `Layout::for_value`'s
+        // for the result: the box frees it with the same one). Integers all
+        // the way down: the zeroed memory is a valid value.
+        unsafe {
+            let p = alloc::alloc::alloc_zeroed(l);
+            if p.is_null() {
+                return None;
+            }
+            let fat = core::ptr::slice_from_raw_parts_mut(p.cast::<i32>(), words) as *mut Prog;
+            let mut b = alloc::boxed::Box::from_raw(fat);
+            b.clear();
+            Some(b)
+        }
+    }
+
+    /// A copy of this program in a store of its own size, or `None` when
+    /// the heap has no block for it.
+    pub fn try_boxed_copy(&self) -> Option<alloc::boxed::Box<Prog>> {
+        let mut b = Self::try_boxed(self.tables.len())?;
+        b.copy_from(self).then_some(b)
+    }
+
+    /// Become `src` (the store's numbers included); false when this
+    /// store is too small for them (nothing changes then).
+    pub fn copy_from(&mut self, src: &Prog) -> bool {
+        let n = src.used();
+        if n > self.tables.len() {
+            return false;
+        }
+        self.ops = src.ops;
+        self.init = src.init;
+        self.frame_end = src.frame_end;
+        self.draw_end = src.draw_end;
+        self.row_end = src.row_end;
+        self.pixel_end = src.pixel_end;
+        self.n_scalars = src.n_scalars;
+        self.regs = src.regs;
+        self.uses = src.uses;
+        self.frame_ms = src.frame_ms;
+        self.loop_ms = src.loop_ms;
+        self.meta = src.meta;
+        self.paint = src.paint;
+        self.pals = src.pals;
+        self.ins = src.ins;
+        self.tables.fill(0);
+        self.tables[..n].copy_from_slice(&src.tables[..n]);
+        true
+    }
+
+    /// The store's numbers in use: up to the last that isn't 0.
+    pub fn used(&self) -> usize {
+        self.tables.iter().rposition(|&v| v != 0).map_or(0, |k| k + 1)
+    }
+
+    /// Numbers the store holds (a power of two).
+    pub fn store_len(&self) -> usize {
+        self.tables.len()
+    }
+}
+
+impl core::fmt::Debug for Prog {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let (fr, row, px) = self.counts();
         let dr = self.draw_steps();
@@ -838,7 +1071,7 @@ impl core::fmt::Debug for Program {
 
 impl Default for Program {
     fn default() -> Self {
-        Program {
+        ProgramOf {
             ops: [Op::default(); MAX_OPS],
             init: [0; MAX_SCALARS],
             frame_end: 0,
@@ -850,15 +1083,16 @@ impl Default for Program {
             uses: 0,
             frame_ms: 0,
             loop_ms: 8000,
-            tables: [0; MAX_TABLE],
             meta: crate::meta::Meta::default(),
             paint: [0; MAX_PAINT],
             pals: [0; MAX_PALETTES * 32],
+            ins: Ins::default(),
+            tables: [0; MAX_TABLE],
         }
     }
 }
 
-impl Program {
+impl Prog {
     /// Steps in all, the colours included (≤ [`MAX_OPS`]).
     pub fn len(&self) -> usize {
         self.pixel_end as usize
@@ -1010,11 +1244,19 @@ impl Program {
     /// Which inputs the steps read: bits 0-2 the sliders `a`, `b`, `c`
     /// (the web app's editor shows a slider for each), bit 3 `t`, bit 4
     /// the wall clock (`hour`, `minute` or `second`), bit 5 the picture
-    /// under the formula ([`Program::over`]), bit 6 `seed`.
+    /// under the formula ([`Program::over`]), bit 6 `seed`, bit 7 a
+    /// built-in input (`crate::world`; a `since` also counts as `t`, bit 3:
+    /// it moves with time).
     pub fn inputs(&self) -> u8 {
         let mut m = if self.over() { 32 } else { 0 };
         if self.uses & SEEDED != 0 {
             m |= 64;
+        }
+        if self.ins.n != 0 {
+            m |= 128;
+        }
+        if self.ins.iter().any(|(_, b)| b >> 6 == crate::world::SINCE) {
+            m |= 8;
         }
         for op in &self.ops[..self.len()] {
             // A wide step reads `t` (every wide value is made from it).
@@ -1362,6 +1604,32 @@ impl Program {
             // (Counted by its scene's rows: `estimate_with`.)
             return 0;
         }
+        if op.code == DIV_S {
+            // Fitted to paint80-ab8b5's div4 rows on the spare (2026-11-05,
+            // each over `div4 mul`'s shifts, four a pixel): a constant's
+            // magic number 34-39 ns (±2^j, whole numbers), the general
+            // steps 89 for a divisor past ±1, 113 at ±1 or more, 115 where
+            // it may be under 1. Of a dividend never below 0 (no magnitude
+            // or sign: a shift alone for ±2^j, the multiply and its
+            // shift): instruction counts.
+            let nonneg = op.c & DIV_NONNEG != 0;
+            return match self.const_value(op.b, self.len()) {
+                Some(b) if nonneg && crate::fixed::DivBy::shift(b).is_some() => 6,
+                Some(b) if crate::fixed::DivBy::magic(b).is_some() => {
+                    if nonneg {
+                        15
+                    } else {
+                        37
+                    }
+                }
+                Some(b) if b.unsigned_abs() > ONE as u32 => 89,
+                Some(b) if b.unsigned_abs() == ONE as u32 => 113,
+                Some(_) => 115,
+                _ if op.c & DIV_BIG != 0 => 89,
+                _ if op.c & DIV_SMALL == 0 => 113,
+                _ => jit_value_ns(op.code),
+            };
+        }
         if !is_colour(op.code) {
             return jit_value_ns(op.code);
         }
@@ -1467,6 +1735,12 @@ impl Program {
             // A whole constant `z`: four corners, not eight (a guess until
             // psi-probe measures it).
             NOISE if self.const_value(op.c, at).is_some_and(|z| z & 0xffff == 0) => NOISE_FLAT_NS,
+            // By a constant ±2^j: a shift towards zero, `shr`'s and a few
+            // more (a guess until psi-probe measures it).
+            DIV_S if self.const_value(op.b, self.len()).and_then(crate::fixed::DivBy::shift).is_some() => DIV_SHIFT_NS,
+            // (paint80-ab8b5: 136 ns a pixel for a constant or a divisor of
+            // ±1 or more, 253 for one that may be under 1.)
+            DIV_S if op.c & DIV_SMALL != 0 && self.const_value(op.b, self.len()).is_none() => DIV_SMALL_NS,
             c => value_ns(c),
         }
     }
@@ -1483,8 +1757,9 @@ impl Program {
             let o = &self.ops[k];
             !is_colour(o.code) && !matches!(o.code, STILL | COLUMN | FUSE) && o.d == v
         });
-        // (A shift of a stepped value, `floor(q)/8`, is stepped.)
-        if let Some(k) = w.filter(|&k| self.ops[k].code == SHR) {
+        // (A shift of a stepped value, or a division by a scalar,
+        // `floor(q)/8`, is stepped.)
+        if let Some(k) = w.filter(|&k| matches!(self.ops[k].code, SHR | DIV_S)) {
             return self.stepped(k, self.ops[k].a);
         }
         w.map(|k| &self.ops[k]).is_some_and(|o| {
@@ -1916,7 +2191,7 @@ impl Program {
                 (box_, rows, disc.min(box_))
             }),
             SPR => v[0].map(|at| {
-                let hd = SprHead::new(&self.tables, (at as u32 & (MAX_TABLE as u32 - 1)) as u8);
+                let hd = SprHead::new(&self.tables, at as u8);
                 (hd.w as u64 * hd.h as u64, hd.h as u64, 0)
             }),
             PRINT => v[1].zip(v[2]).map(|(len, font)| {
@@ -1980,6 +2255,15 @@ impl Program {
         self.meta = crate::meta::Meta::default();
         self.paint.fill(0);
         self.pals.fill(0);
+        self.ins = Ins::default();
+    }
+
+    /// The built-in inputs it reads, as (key, what: `world::VALUE`,
+    /// `SINCE` or `WAS`), in slot order.
+    pub fn builtins(&self) -> impl Iterator<Item = (&'static crate::world::Key, u8)> + '_ {
+        self.ins
+            .iter()
+            .filter_map(|(_, b)| Some((crate::world::key_by_id(b & 63)?, b >> 6)))
     }
 
     /// What the formula declares: its controls (defaults for the slots a
@@ -2004,6 +2288,13 @@ impl Program {
                 ["t", "hour", "minute", "second", "a", "b", "c", "y", "py"][v as usize].into()
             } else if v == S_SEED && self.uses & SEEDED != 0 {
                 "seed".into()
+            } else if let Some((_, b)) = self.ins.iter().find(|&(s, _)| s == v) {
+                let name = crate::world::key_by_id(b & 63).map_or("?", |k| k.name);
+                match b >> 6 {
+                    crate::world::SINCE => alloc::format!("since({name})"),
+                    crate::world::WAS => alloc::format!("was({name})"),
+                    _ => name.into(),
+                }
             } else if (v as usize) < MAX_SCALARS && self.is_const_slot(v, n) {
                 alloc::format!("{}", self.init[v as usize] as f64 / ONE as f64)
             } else {
@@ -2225,14 +2516,19 @@ impl Program {
     /// narrowed steps (`narrow`), the fused runs (`fuse`), and the draw
     /// loops that run as lanes, decided once.
     #[inline(never)]
-    pub(crate) fn finish(&mut self, narrow: bool, fuse: bool) {
+    /// False when the heap had no room for the narrowing's working memory
+    /// (4 KB: nothing changed then).
+    pub(crate) fn finish(&mut self, narrow: bool, fuse: bool) -> bool {
         if narrow {
-            crate::range::narrow(self);
+            if !crate::range::narrow(self) {
+                return false;
+            }
             if fuse {
                 crate::fuse::fuse(self);
             }
         }
         self.mark_lane_loops();
+        true
     }
 
     /// Mark each draw loop that may run as lanes (its FOR's `c`,
@@ -2357,6 +2653,7 @@ impl Program {
 
     pub(crate) fn is_const_slot(&self, v: u8, at: usize) -> bool {
         (v != S_SEED || self.uses & SEEDED == 0)
+            && !self.ins.holds(v)
             && !self.ops[..at.min(self.len())].iter().any(|op| {
                 // END counts its loop's counter (which the FOR writes too).
                 (op.code == code::END && op.a == v) || (code::writes_scalar(op.code) && op.d == v)
@@ -2541,6 +2838,12 @@ pub(crate) fn value_ns(c: u8) -> u32 {
         // ±15 %; RECIP (`1 / v` since fast-div) is `128 / v`'s less the
         // 52 cycles the micro rows saw it save.
         DIV => 360,
+        // `fixed::DivBy` along the lane: two multiplies, a compare and the
+        // shifts, and the divisor's own once a lane. paint80-ab8b5 on the
+        // spare (2026-11-05): four a pixel over `div4 mul`'s shifts, 136 ns
+        // each for whole numbers, fractions, a frame's and a row's
+        // divisor (`DIV_SMALL_NS` where it may be under ±1).
+        DIV_S => 136,
         RECIP => 230,
         ATAN2 => 384,
         LEN => 472,
@@ -2550,9 +2853,15 @@ pub(crate) fn value_ns(c: u8) -> u32 {
         TRI | SAW | SQR => 60,
         SQRT => 229,
         SELECT | CLAMP => 60,
-        PICK | TAB => 100,
-        // A sprite's pixel: a table read, a shift and a mask (a guess until
-        // psi-probe measures it, as the design guessed).
+        PICK => 100,
+        // A table's entry and a sprite's pixel (a header decoded, a word
+        // read, a shift and a mask, the key's number read): Neon city's
+        // rows fit these. (paint80-3e6de's `store low`, one `T[…]` and two
+        // `s[…, …]` a pixel and little else, drew 3,297 µs against 2,604
+        // estimated: −21 %, left as it is, since raising them puts Neon
+        // city 16 % over. The store's place, its first numbers or past
+        // 900, changes nothing.)
+        TAB => 100,
         SPR => 120,
         MIX => 130,
         SMOOTH => 214,
@@ -2577,6 +2886,13 @@ pub(crate) fn value_ns(c: u8) -> u32 {
         _ => 0,
     }
 }
+
+/// A pixel's `div_s` by a constant ±2^j on the VM, ns (`shr`'s 33 and two
+/// instructions: a guess until psi-probe measures it).
+pub(crate) const DIV_SHIFT_NS: u32 = 53;
+/// A pixel's `div_s` on the VM by a divisor that may be under ±1
+/// (paint80-ab8b5's `div4 any`: 253 ns over `div4 mul`'s shift).
+pub(crate) const DIV_SMALL_NS: u32 = 253;
 
 /// The JIT's loop around a pixel (its counter, output pointer, branch),
 /// ns: jit1-b's `gray(x)` kernel 107 ns a pixel less its colour (27).
@@ -2627,42 +2943,68 @@ pub(crate) fn jit_value_ns(c: u8) -> u32 {
         // (paint80-f6aa6): 3, 6 and 12 steps 2,306 / 4,052 / 7,505 µs a
         // frame, pixelate 2,645 on the real path: within -3..+12 %.
         UAT => 75,
+        // Inline since paint80-3e6de showed the helper calls slower than
+        // the VM's lane loops (3,607 µs a frame against 3,259 for one table
+        // and two sprite reads a pixel): a table's entry ~9 instructions
+        // (the index against its length, the load), a sprite's pixel ~25
+        // (its shape known when the kernel is made: both bounds, the
+        // row's word, the pixel's bits by `ssr`/`src`, the key's number).
+        // Instruction counts until the spare measures them.
+        TAB => 40,
+        SPR => 110,
+        // `fixed::DivBy`'s steps inline (~18 instructions where the ranges
+        // say the divisor is past ±1, ~27 where they don't; a constant's:
+        // `jit_step_ns`). Instruction counts until the spare measures them.
+        DIV_S => 115,
         c => value_ns(c).saturating_sub(60).max(60),
     }
 }
 
-/// `NAME[k]`: entry floor(k) of the table at `start` of `last` + 1
-/// entries, 0 outside it. Indices are masked into the tables, whatever the
-/// program.
+/// `NAME[k]`: entry floor(k) of the table at place `start` ([`store_at`])
+/// of `last` + 1 entries, 0 outside it. Indices are masked into the
+/// tables, whatever the program.
 #[inline(always)]
-pub(crate) fn tab(tables: &[i32; MAX_TABLE], start: u8, last: u8, k: i32) -> i32 {
+pub(crate) fn tab(tables: &[i32], start: u8, last: u8, k: i32) -> i32 {
     let i = k >> 16;
     if i < 0 || i > last as i32 {
         return 0;
     }
-    tables[(start as usize + i as usize) & (MAX_TABLE - 1)]
+    word(tables, store_at(start) + i as usize)
+}
+
+/// Store word `i` masked into `tabs`, without a bounds check: every store
+/// is a power of two of numbers (`Program`'s 1,024, `Prog::try_boxed`'s
+/// `store_words`), so the mask keeps any index inside it. On the VM's and
+/// the kernel's per-pixel path (a bounds check there cost the draw stage
+/// and the row steps a compare and a branch a read).
+#[inline(always)]
+pub(crate) fn word(tabs: &[i32], i: usize) -> i32 {
+    debug_assert!(tabs.len().is_power_of_two());
+    // SAFETY: `tabs.len()` is a power of two (above), so `i & (len − 1)`
+    // is below it.
+    unsafe { *tabs.get_unchecked(i & (tabs.len() - 1)) }
 }
 
 /// A sprite's shape (`sprite NAME { … }`), from its header word in the
-/// tables at `at`: `w | h << 8 | lb << 16 | keys << 20` (lb the log2 of
+/// tables at place `at` ([`store_at`]): `w | h << 8 | lb << 16 | keys << 20` (lb the log2 of
 /// its bits a pixel: 1, 2 or 4 bits), then its keys' numbers, then its
 /// rows, each `wpr` words of `32 >> lb` pixels, the first in the low bits.
 #[derive(Clone, Copy)]
 pub(crate) struct SprHead {
     pub(crate) w: u32,
     pub(crate) h: u32,
-    lb: u32,
-    lg: u32,
-    wpr: usize,
-    at: usize,
-    data: usize,
+    pub(crate) lb: u32,
+    pub(crate) lg: u32,
+    pub(crate) wpr: usize,
+    pub(crate) at: usize,
+    pub(crate) data: usize,
 }
 
 impl SprHead {
     #[inline(always)]
-    pub(crate) fn new(tabs: &[i32; MAX_TABLE], at: u8) -> SprHead {
-        let at = at as usize;
-        let hd = tabs[at] as u32;
+    pub(crate) fn new(tabs: &[i32], at: u8) -> SprHead {
+        let at = store_at(at) & (tabs.len() - 1);
+        let hd = word(tabs, at) as u32;
         let (w, h, lb, keys) = (hd & 0xff, (hd >> 8) & 0xff, (hd >> 16) & 3, (hd >> 20) & 31);
         // Pixels a word: 32, 16 or 8 (as its log2).
         let lg = 5 - lb.min(2);
@@ -2681,17 +3023,15 @@ impl SprHead {
     /// key's number, 0 outside. Indices are masked into the tables,
     /// whatever the program.
     #[inline(always)]
-    pub(crate) fn read(&self, tabs: &[i32; MAX_TABLE], u: i32, v: i32) -> i32 {
+    pub(crate) fn read(&self, tabs: &[i32], u: i32, v: i32) -> i32 {
         let (x, y) = ((u >> 16) as u32, (v >> 16) as u32);
         // (Negative columns and rows are huge as u32: outside too.)
         if x >= self.w || y >= self.h {
             return 0;
         }
-        let word = tabs
-            [(self.data + y as usize * self.wpr + (x >> self.lg) as usize) & (MAX_TABLE - 1)]
-            as u32;
-        let k = (word >> ((x & ((1 << self.lg) - 1)) << self.lb)) & ((1 << (1 << self.lb)) - 1);
-        tabs[(self.at + 1 + k as usize) & (MAX_TABLE - 1)]
+        let w = word(tabs, self.data + y as usize * self.wpr + (x >> self.lg) as usize) as u32;
+        let k = (w >> ((x & ((1 << self.lg) - 1)) << self.lb)) & ((1 << (1 << self.lb)) - 1);
+        word(tabs, self.at + 1 + k as usize)
     }
 
     /// The words it takes in the tables, its header first.
@@ -2726,7 +3066,7 @@ pub(crate) fn eval(c: u8, a: i32, b: i32, x: i32, t: Option<&Tables>) -> i32 {
         ADD | ADD_W => fixed::add(a, b),
         SUB | SUB_W => fixed::sub(a, b),
         MUL | MUL_W | MUL_N => fixed::mul(a, b),
-        DIV => fixed::div(a, b),
+        DIV | DIV_S => fixed::div(a, b),
         MOD => fixed::modulo(a, b),
         MASK => fixed::mask(a, b),
         LT => fixed::lt(a, b),

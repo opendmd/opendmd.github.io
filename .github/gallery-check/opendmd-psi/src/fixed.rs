@@ -212,8 +212,146 @@ pub(crate) fn lz32(v: u32) -> u32 {
     }
 }
 
-/// `1 / a`, what a division by a per-frame or per-row value becomes (one
-/// division per frame or row, then a multiply per pixel).
+/// [`div`] by one divisor `b` for a whole lane (a row of pixels): worked
+/// out once for `b`, then exactly `div(a, b)` for every `a` with two
+/// multiplies, a compare and a few shifts (no division). What a pixel's
+/// `x / s` runs when `s` is the same across the row (a constant, a frame's
+/// or a row's value): `code::DIV_S`, the VM's lane loop and the JIT's
+/// template, in the same steps.
+///
+/// On magnitudes `n = |a|` (≤ 2^31) and `d = |b|`, `div` is the
+/// truncation `q = floor(n·2^16 / d)` with the sign put back, held to the
+/// ends from `q ≥ 2^31` on, which is `n ≥ d·2^15` (`t`). Below that, with
+/// `E = 15 + ceil(log2 d)` and `m = floor(2^(16+E) / d)` (in [2^31, 2^32)),
+/// `q' = floor(n·m / 2^E)` is `q` or `q − 1`: `m` is short of `2^(16+E)/d`
+/// by less than one, so `n·m/2^E` is short of the quotient by less than
+/// `n / 2^E`, and `n < 2^E` there (`n < 2^31 ≤ 2^E`, or `n < d·2^15 ≤
+/// 2^E` where `d ≤ 2^16`). The remainder `n·2^16 − q'·d` is then below
+/// `2d ≤ 2^32`, so its low 32 bits are it: one more when it is `d` or
+/// more. (`E < 32` only where `d ≤ 2^16`: there `n < 2^E`, so `n << (32 −
+/// E)` fits 32 bits and `q'` is the high word of its product with `m`;
+/// else the high word of `n·m` shifted right by `E − 32`.) `b = 0`: `d =
+/// 1`, `t = 1` and `m = 0`, so 0 gives 0 and the rest the ends of `a`'s
+/// sign, as [`div`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DivBy {
+    pub d: u32,
+    pub m: u32,
+    /// `32 − E` where `E < 32`, else 0 (the left shift of `n`).
+    pub l: u32,
+    /// `E − 32` where `E ≥ 32`, else 0 (the right shift of the high word).
+    pub r: u32,
+    /// The magnitudes from which the quotient is held to the ends.
+    pub t: u32,
+    /// −1 for a negative `b`, else 0.
+    pub bs: i32,
+}
+
+impl DivBy {
+    #[inline]
+    pub fn new(b: i32) -> DivBy {
+        if b == 0 {
+            return DivBy {
+                d: 1,
+                m: 0,
+                l: 0,
+                r: 0,
+                t: 1,
+                bs: 0,
+            };
+        }
+        let d = b.unsigned_abs();
+        let c = 32 - lz32(d - 1);
+        let e = 15 + c;
+        // (2^(16+E) ≤ 2^62: a 64-bit division, once a lane.)
+        let m = ((1u64 << (16 + e)) / u64::from(d)) as u32;
+        let (l, r) = if e < 32 { (32 - e, 0) } else { (0, e - 32) };
+        DivBy {
+            d,
+            m,
+            l,
+            r,
+            t: if d <= 1 << 16 { d << 15 } else { u32::MAX },
+            bs: b >> 31,
+        }
+    }
+
+    /// For a divisor ±2^j (j 1..=15, a whole power of two): `(j, b < 0)`;
+    /// then `div(a, b)` is [`shr_trunc`]`(a, j)`, negated for a negative
+    /// `b`.
+    #[inline]
+    pub fn shift(b: i32) -> Option<(u32, bool)> {
+        let d = b.unsigned_abs();
+        (d.is_power_of_two() && d > 1 << 16).then(|| (d.trailing_zeros() - 16, b < 0))
+    }
+
+    /// `E` (15..=46): `q' = floor(n·m / 2^E)`.
+    pub fn e(&self) -> u32 {
+        if self.l > 0 {
+            32 - self.l
+        } else {
+            32 + self.r
+        }
+    }
+
+    /// For a divisor known when a kernel is made: `(m, s)` with
+    /// `floor(n·2^16 / |b|) = (n·m >> 32) >> s` for every `n ≤ 2^31` — a
+    /// quotient with no correction (Granlund and Montgomery's "magic
+    /// number": for a whole-number `b` there always is one) — if one fits
+    /// 32 bits; `None` for `|b| ≤ 1` (whose quotients can reach the ends)
+    /// and for some fractions.
+    pub fn magic(b: i32) -> Option<(u32, u32)> {
+        let d = b.unsigned_abs();
+        if d <= 1 << 16 {
+            return None;
+        }
+        // floor(n·2^16 / d) = floor(n·2^p / k): 2^16 and d's common twos
+        // taken out.
+        let tz = d.trailing_zeros().min(16);
+        let (k, p) = (u64::from(d >> tz), 16 - tz);
+        // (m < 2^32 needs 2^(s+p) < k < 2^32: every power here fits 64
+        // bits, and no 128-bit division is linked.)
+        for s in 0..32 - p {
+            let big = 1u64 << (32 + s + p);
+            let m = big.div_ceil(k);
+            if m >> 32 != 0 {
+                return None;
+            }
+            // m·k = 2^(32+s+p) + e; then n·m / 2^(32+s) is the quotient
+            // plus n·e / (k·2^(32+s)), under the 1/k a fraction's
+            // remainder leaves when n·e < 2^(32+s) (n ≤ 2^31).
+            let e = m * k - big;
+            if (e << 31) < (1u64 << (32 + s)) {
+                return Some((m as u32, s));
+            }
+        }
+        None
+    }
+
+    /// `div(a, b)`.
+    #[inline(always)]
+    pub fn div(&self, a: i32) -> i32 {
+        let sg = a >> 31;
+        let n = (a ^ sg).wrapping_sub(sg) as u32;
+        let s = sg ^ self.bs;
+        if n >= self.t {
+            return i32::MAX ^ s;
+        }
+        let mut q = ((u64::from(n << self.l) * u64::from(self.m)) >> 32) as u32 >> self.r;
+        if (n << 16).wrapping_sub(q.wrapping_mul(self.d)) >= self.d {
+            q += 1;
+        }
+        ((q as i32) ^ s).wrapping_sub(s)
+    }
+}
+
+/// `a / 2^j` truncated towards zero (j 1..=15): `div(a, 2^j)`.
+#[inline(always)]
+pub fn shr_trunc(a: i32, j: u32) -> i32 {
+    a.wrapping_add(((a >> 31) as u32 >> (32 - j)) as i32) >> j
+}
+
+/// `1 / a` (what `1 / x` compiles to).
 #[inline(always)]
 pub fn recip(a: i32) -> i32 {
     #[cfg(target_arch = "xtensa")]
@@ -246,18 +384,6 @@ pub(crate) fn recip_u32(a: i32) -> i32 {
     } else {
         q as i32
     }
-}
-
-/// `1 / k` for the compiler's `x / k` (k a positive constant, x per pixel),
-/// rounded up instead of down: then a whole number divided by a whole
-/// number that divides it comes out exactly that or a hair above, never
-/// below, so `floor(px/10)` is right at 20, 30, … (rounded down, 20/10 was
-/// 1.99998). A negative k keeps `recip`.
-pub fn recip_up(k: i32) -> i32 {
-    if k <= 0 {
-        return recip(k);
-    }
-    sat(((1i64 << 32) + k as i64 - 1) / k as i64)
 }
 
 /// Floored modulo (the result takes the divisor's sign, as GLSL's `mod`):

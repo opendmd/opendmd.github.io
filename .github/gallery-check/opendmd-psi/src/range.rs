@@ -17,7 +17,11 @@
 //!   scalar kept in `b` so out of range it is `mul(v, b)` again;
 //! - `add`/`sub`/`mul` whose exact result always fits an i32 as `add_w`,
 //!   `sub_w`, `mul_w` (no saturation test), and a `mul` whose 64-bit
-//!   product always fits an i32 as `mul_n` (one 32-bit multiply).
+//!   product always fits an i32 as `mul_n` (one 32-bit multiply);
+//! - `div(v, s)` with `s` a scalar (the same across the lane) as `div_s`:
+//!   the same value for *any* inputs ([`crate::fixed::DivBy`]), with what
+//!   the ranges say of `s` in its `c` (`DIV_BIG`, `DIV_POS`) for the JIT,
+//!   which runs only in range.
 //!
 //! In range those give exactly what the checked steps give (saturation
 //! only ever acts outside i32). A frame whose inputs are outside the
@@ -33,6 +37,9 @@ use crate::vm::Inputs;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Iv(pub i64, pub i64);
 
+#[cfg(feature = "syntax")]
+pub(crate) const FULL_IV: Iv = FULL;
+
 const LO: i64 = i32::MIN as i64;
 const HI: i64 = i32::MAX as i64;
 const FULL: Iv = Iv(LO, HI);
@@ -41,7 +48,7 @@ const SIGNED: Iv = Iv(-(ONE as i64), ONE as i64);
 
 impl Iv {
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
-    fn point(v: i32) -> Iv {
+    pub(crate) fn point(v: i32) -> Iv {
         Iv(v as i64, v as i64)
     }
 
@@ -52,7 +59,7 @@ impl Iv {
     }
 
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
-    fn fits(self) -> bool {
+    pub(crate) fn fits(self) -> bool {
         self.0 >= LO && self.1 <= HI
     }
 
@@ -78,7 +85,7 @@ fn t_max(loop_ms: u32) -> i32 {
 /// Whether a frame's inputs are within the ranges [`narrow`] assumed for
 /// `prog` (else the VM runs the checked steps).
 #[inline]
-pub(crate) fn inputs_in_range(prog: &Program, i: &Inputs) -> bool {
+pub(crate) fn inputs_in_range(prog: &Prog, i: &Inputs) -> bool {
     let unit = |v: i32| (0..=ONE).contains(&v);
     // (A `loop forever` formula reads `tw`, never `t`; its wide values
     // come back to Q16.16 only through steps whose ranges hold for any
@@ -104,6 +111,7 @@ pub(crate) fn checked(c: u8) -> u8 {
         // (A shift keeps the scalar it stands for in `b`: its constant may
         // be one only for inputs in range.)
         code::MUL_W | code::MUL_N | code::SHR => code::MUL,
+        code::DIV_S => code::DIV,
         c => c,
     }
 }
@@ -115,19 +123,19 @@ fn mul_corners(a: Iv, b: Iv) -> Iv {
 }
 
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-fn add_iv(a: Iv, b: Iv) -> Iv {
+pub(crate) fn add_iv(a: Iv, b: Iv) -> Iv {
     Iv(a.0 + b.0, a.1 + b.1)
 }
 
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-fn sub_iv(a: Iv, b: Iv) -> Iv {
+pub(crate) fn sub_iv(a: Iv, b: Iv) -> Iv {
     Iv(a.0 - b.1, a.1 - b.0)
 }
 
 /// `mul`'s exact result (before saturation): the corners' products, each
 /// shifted down (floor, monotonic).
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-fn mul_iv(a: Iv, b: Iv) -> Iv {
+pub(crate) fn mul_iv(a: Iv, b: Iv) -> Iv {
     let p = mul_corners(a, b);
     Iv(p.0 >> 16, p.1 >> 16)
 }
@@ -135,14 +143,14 @@ fn mul_iv(a: Iv, b: Iv) -> Iv {
 /// What a step's value can be, from its operands'. `tabs` for `tab`.
 #[inline(never)]
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-fn value(op: &Op, a: Iv, b: Iv, c: Iv, tabs: &[i32; MAX_TABLE]) -> Iv {
+pub(crate) fn value(op: &Op, a: Iv, b: Iv, c: Iv, tabs: &[i32]) -> Iv {
     use code::*;
     match op.code {
         ADD | ADD_W => add_iv(a, b).sat(),
         SUB | SUB_W => sub_iv(a, b).sat(),
         MUL | MUL_W | MUL_N => mul_iv(a, b).sat(),
         SHR => Iv(a.0 >> (op.c & 31), a.1 >> (op.c & 31)),
-        DIV => div_iv(a, b),
+        DIV | DIV_S => div_iv(a, b),
         RECIP => div_iv(Iv::point(ONE), a),
         MOD => mod_iv(b),
         MASK => {
@@ -197,18 +205,20 @@ fn value(op: &Op, a: Iv, b: Iv, c: Iv, tabs: &[i32; MAX_TABLE]) -> Iv {
         SIN | COS | TRI | SAW | SQR => SIGNED,
         SPR => {
             // 0 outside, else one of its keys' numbers.
-            let at = op.c as usize;
+            let at = crate::program::store_at(op.c);
             let keys = (tabs[at] as u32 >> 20) & 31;
             let mut r = Iv::point(0);
             for k in 0..keys as usize {
-                r = r.union(Iv::point(tabs[(at + 1 + k) & (MAX_TABLE - 1)]));
+                r = r.union(Iv::point(tabs[(at + 1 + k) & (tabs.len() - 1)]));
             }
             r
         }
         TAB => {
             let mut r = Iv::point(0);
             for k in 0..=op.c as usize {
-                r = r.union(Iv::point(tabs[(op.b as usize + k) & (MAX_TABLE - 1)]));
+                r = r.union(Iv::point(
+                    tabs[(crate::program::store_at(op.b) + k) & (tabs.len() - 1)],
+                ));
             }
             r
         }
@@ -268,9 +278,15 @@ fn div_iv(a: Iv, b: Iv) -> Iv {
 /// ESP32.
 #[inline(never)]
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-pub(crate) fn narrow(prog: &mut Program) {
+pub(crate) fn narrow(prog: &mut Prog) -> bool {
     use code::*;
-    let mut sc = alloc::vec![FULL; SC];
+    // (Fallibly: the player loads on a short heap, where a refusal is the
+    // answer, never an abort.)
+    let mut sc = alloc::vec::Vec::new();
+    if sc.try_reserve_exact(SC).is_err() {
+        return false;
+    }
+    sc.resize(SC, FULL);
     for (k, v) in sc
         .iter_mut()
         .enumerate()
@@ -295,6 +311,12 @@ pub(crate) fn narrow(prog: &mut Program) {
     sc[S_PY as usize] = Iv(0, ((H - 1) * ONE as usize) as i64);
     if prog.uses & SEEDED != 0 {
         sc[S_SEED as usize] = UNIT;
+    }
+    // The built-in inputs: their keys' ranges (the player holds each read
+    // to it: `World::read`).
+    for (slot, b) in prog.ins.iter() {
+        let (lo, hi) = crate::world::range(b & 63, b >> 6);
+        sc[slot as usize] = Iv(lo as i64, hi as i64);
     }
     let (fe, de, re, pe) = (
         (prog.frame_end as usize).min(MAX_OPS),
@@ -386,6 +408,14 @@ pub(crate) fn narrow(prog: &mut Program) {
         let (a, b) = (lane(&regs, &sc, op.a), lane(&regs, &sc, op.b));
         let lanes = is_lane;
         match op.code {
+            DIV if !lanes(op.b) => {
+                op.code = DIV_S;
+                let one = ONE as i64;
+                op.c = if b.0 > one || b.1 < -one { DIV_BIG } else { 0 }
+                    | if b.0 > 0 { DIV_POS } else { 0 }
+                    | if a.0 >= 0 { DIV_NONNEG } else { 0 }
+                    | if b.0 >= one || b.1 <= -one { 0 } else { DIV_SMALL };
+            }
             ADD if add_iv(a, b).fits() => op.code = ADD_W,
             SUB if sub_iv(a, b).fits() => op.code = SUB_W,
             MUL => {
@@ -430,4 +460,5 @@ pub(crate) fn narrow(prog: &mut Program) {
         regs[di.min(REGS)] = r;
         *slot = op;
     }
+    true
 }

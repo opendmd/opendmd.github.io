@@ -1028,6 +1028,16 @@ const K_COUNTER: u8 = 252;
 const K_SPLIT: u8 = 253;
 /// A `K_INPUT`'s `val` for `t` in a `loop forever` formula: wide slot 0.
 const WIDE_T: i32 = 0x100;
+/// A `K_INPUT`'s `val` for a built-in input (`crate::world`): this, with
+/// the input's byte (`world::input_byte`) in bits 8-15 (its low byte 0, so
+/// no slot or lane test mistakes it for one); given a slot of the
+/// program's inputs when laid out ([`Program`]'s `ins`).
+const KEY_TAG: i32 = 0x1_0000;
+
+/// A built-in input node's byte (`world::input_byte`), if it is one.
+fn key_byte(n: &Node) -> Option<u8> {
+    (n.code == K_INPUT && n.val & KEY_TAG != 0).then_some((n.val >> 8) as u8)
+}
 
 /// E301, E708, E931, each followed by what makes the value vary
 /// (`Parser::varies_err`).
@@ -1065,10 +1075,6 @@ struct Dag {
     /// formula quadratic (~0.2-0.35 ms on the host, tens of ms on the
     /// ESP32, per live edit).
     index: Vec<Id>,
-    /// The multiplies that per-pixel divisions by a constant became, as
-    /// (the multiply, the dividend, the divisor): a `floor` of one is
-    /// rebuilt with 1/k rounded up ([`fixed::recip_up`]).
-    divs: Vec<(Id, Id, i32)>,
     /// Each `pick`'s choices (a `PICK` node's `b` is its index here).
     picks: Vec<Vec<Id>>,
     /// A `loop forever` formula: `t` is wide ([`WIDE_T`]).
@@ -1199,6 +1205,23 @@ impl Dag {
         )
     }
 
+    /// A built-in input's read (`world::input_byte`): a frame value.
+    #[inline(never)]
+    fn key(&mut self, byte: u8, at: (usize, usize)) -> Result<Id, Error> {
+        self.push(
+            Node {
+                code: K_INPUT,
+                a: 0,
+                b: 0,
+                c: 0,
+                val: KEY_TAG | i32::from(byte) << 8,
+                level: LV_FRAME,
+                why: 0,
+            },
+            at,
+        )
+    }
+
     #[inline(never)]
     fn input(&mut self, inp: Input, at: (usize, usize)) -> Result<Id, Error> {
         let why = INPUTS.iter().position(|e| e.1 == inp).unwrap_or(0) as u8;
@@ -1284,38 +1307,13 @@ impl Dag {
             }
             (code::ADD, Some(0), _) | (code::MUL, Some(ONE), _) => return Ok(b),
             (code::MUL, Some(0), _) | (code::MUL, _, Some(0)) => return self.constant(0, at),
-            // x / k, x per pixel: x · (1/k), exact for powers of two. Once a
-            // frame or a row it stays a true division (exact, and it costs
-            // nothing per pixel), so `floor(minute/10)` is 5 at 50.
-            (code::DIV, None, Some(k)) if k != 0 && self.level(a) == LV_PIXEL => {
-                let r = self.constant(fixed::recip(k), at)?;
-                let m = self.op(code::MUL, [a, r, 0], at)?;
-                if self.konst(m).is_none() && !self.divs.iter().any(|d| d.0 == m) {
-                    self.divs.push((m, a, k));
-                }
-                return Ok(m);
-            }
-            // floor(x / k) per pixel: 1/k rounded up instead, so a whole
-            // number over a whole number that divides it floors to exactly
-            // that (rounded down, floor(px/10) was 1 at px = 20).
-            (code::FLOOR, None, _) if self.divs.iter().any(|d| d.0 == a) => {
-                let &(_, x, k) = self.divs.iter().find(|d| d.0 == a).unwrap();
-                let r = self.constant(fixed::recip_up(k), at)?;
-                let m = self.op(code::MUL, [x, r, 0], at)?;
-                if m != a {
-                    return self.op(code::FLOOR, [m, 0, 0], at);
-                }
-            }
             // 1 / x: `recip`, exactly `div(1, x)` (on the ESP32 one 32-bit
             // division where `div`'s general path takes two and a Knuth
             // digit).
             (code::DIV, Some(ONE), None) => return self.op(code::RECIP, [b, 0, 0], at),
-            // x / s, s per frame or per row: one division there, a multiply
-            // per pixel.
-            (code::DIV, None, None) if self.level(a) == LV_PIXEL && self.level(b) < LV_PIXEL => {
-                let r = self.op(code::RECIP, [b, 0, 0], at)?;
-                return self.op(code::MUL, [a, r, 0], at);
-            }
+            // (`x / k` and `x / s` per pixel stay divisions: the same value
+            // at every level. The player divides a lane by one divisor
+            // without dividing, `range::narrow`'s `div_s`.)
             // x % 2^k: a mask.
             (code::MOD, None, Some(k)) if k > 0 && (k as u32).is_power_of_two() => {
                 let m = self.constant(k - 1, at)?;
@@ -1385,7 +1383,8 @@ impl Dag {
             Node {
                 code: code::TAB,
                 a: k,
-                b: start as Id,
+                // (Its place in fours: `store_at`.)
+                b: (start / STORE_ALIGN) as Id,
                 c: (len - 1) as Id,
                 val: 0,
                 level: m.level,
@@ -1487,6 +1486,9 @@ fn cause(dag: &Dag, id: Id, named: &dyn Fn(Id) -> Option<usize>) -> (Option<usiz
 fn input_word(n: &Node) -> (&'static str, &'static str) {
     if n.code == K_INPUT && n.val == S_SEED as i32 {
         return ("seed", "a new number each play");
+    }
+    if let Some(b) = key_byte(n) {
+        return crate::world::key_by_id(b & 63).map_or(("", ""), |k| (k.name, crate::world::about(k.id)));
     }
     let e = INPUTS[n.why as usize];
     (e.0, e.2)
@@ -2148,6 +2150,15 @@ const NO_CH: u8 = 3;
 /// Inside `rgb(r, g, b)`'s values (for the error a colour there gets).
 const IN_RGB: u8 = 4;
 
+/// A built-in function's name (a call of it), which a `fn` may not take
+/// (language review A2).
+fn is_builtin_function(name: &str) -> bool {
+    FUNCS.iter().any(|e| e.0 == name)
+        || COLOURS.iter().any(|e| e.0 == name)
+        || PRIMITIVES.contains(&name)
+        || matches!(name, "since" | "was" | "under" | "ink" | "tween")
+}
+
 /// What a name is being set as ([`Parser::new_name`]): a value (set
 /// again, or shadowing one from outside, as often as you like), a loop
 /// counter (may shadow a value), a control, or a part, table, sprite or
@@ -2497,7 +2508,7 @@ impl<'s> Parser<'s> {
                 Tok::Name if self.peek().tok == Tok::LParen && self.text(t) == "pick" => {
                     self.pick(t)?
                 }
-                Tok::Name if self.env.ch < NO_CH && self.text(t) == "under" && self.lookup_local("under").is_none() && self.func_named("under").is_none() => {
+                Tok::Name if self.env.ch < NO_CH && self.text(t) == "under" && (self.peek().tok == Tok::LParen || self.lookup_local("under").is_none()) => {
                     self.under_atom(t)?
                 }
                 Tok::Name => self.name(t)?,
@@ -2546,7 +2557,11 @@ impl<'s> Parser<'s> {
             self.next();
             #[cfg(feature = "syntax")]
             let rs = self.peek().start;
+            let mid = self.peek().start;
             let rhs = self.expr(rbp)?;
+            if lbp == 5 && infix_bp(self.peek().tok).is_some_and(|b| b.0 == 5) {
+                return Err(self.chained(t.start, op, mid));
+            }
             #[cfg(feature = "syntax")]
             let span = (rs, self.toks[self.pos - 1].get().end);
             #[cfg(feature = "syntax")]
@@ -2565,6 +2580,33 @@ impl<'s> Parser<'s> {
             }
         }
         Ok(lhs)
+    }
+
+    /// E218: `a < b < c` (the cursor on the second comparison): Psi
+    /// refuses to chain comparisons rather than read it as `(a < b) < c`.
+    #[cold]
+    #[inline(never)]
+    fn chained(&mut self, start: usize, op: Token, mid: usize) -> Error {
+        let mid_end = self.toks[self.pos.saturating_sub(1)].get().end;
+        let op2 = self.next();
+        let third = self.peek().start;
+        let end = match self.expr(6) {
+            Ok(_) => self.toks[self.pos.saturating_sub(1)].get().end,
+            Err(_) => op2.end,
+        };
+        let (a, o1, b, o2) = (
+            sub(self.src, start, op.start).trim(),
+            self.text(op),
+            sub(self.src, mid, mid_end).trim(),
+            self.text(op2),
+        );
+        let c = if end > third { sub(self.src, third, end).trim() } else { "…" };
+        // E218.
+        Error::new(
+            op2.start,
+            op2.end,
+            format!("comparisons don't chain: write `{a} {o1} {b} and {b} {o2} {c}` (`{a} {o1} {b} {o2} {c}` would compare `{a} {o1} {b}`, 1 or 0, with {c})"),
+        )
     }
 
     /// Whether names set in `scope` can be seen here: this scope's and its
@@ -2625,6 +2667,9 @@ impl<'s> Parser<'s> {
             if let Some(k) = self.func_named(name) {
                 return self.call_value(t, k);
             }
+            if matches!(name, "since" | "was") {
+                return self.since_was(t, name == "since");
+            }
             if name == "rgb" && self.env.ch < NO_CH {
                 return self.rgb_channel();
             }
@@ -2663,6 +2708,80 @@ impl<'s> Parser<'s> {
         Err(self.unknown(t))
     }
 
+    /// `sun.alt` at `t` (the group's name, the cursor on its `.`): the
+    /// built-in key and where its name ends. E975 when the group has no
+    /// such key.
+    #[inline(never)]
+    fn dotted_key(&mut self, t: Token) -> Result<(&'static crate::world::Key, usize), Error> {
+        self.next();
+        let w = self.expect(Tok::Name, "the name of a built-in input after the `.`, as in `sun.alt`")?;
+        let (g, wn) = (self.text(t), self.text(w));
+        let found = crate::world::KEYS.iter().find(|k| {
+            k.name
+                .split_once('.')
+                .is_some_and(|(kg, kw)| kg == g && kw == wn)
+        });
+        match found {
+            Some(k) => Ok((k, w.end)),
+            None => {
+                let names: Vec<&str> = crate::world::KEYS
+                    .iter()
+                    .filter(|k| k.name.split_once('.').is_some_and(|(kg, _)| kg == g))
+                    .map(|k| k.name)
+                    .collect();
+                let has = names.join(", ");
+                // E975.
+                Err(self.fail_at(
+                    w,
+                    format!("`{g}.{wn}` is not a built-in input: `{g}` has {has}"),
+                ))
+            }
+        }
+    }
+
+    /// `since(KEY)` or `was(KEY)` at `t`: a built-in input's seconds since
+    /// it last changed, or its value before that (`crate::world`): a frame
+    /// value. E976 when the name is not a built-in input.
+    #[inline(never)]
+    fn since_was(&mut self, t: Token, since: bool) -> Result<Id, Error> {
+        let f = if since { "since" } else { "was" };
+        self.next();
+        let n = self.peek();
+        let key = if n.tok == Tok::Name {
+            self.next();
+            let name = self.text(n);
+            if self.peek().tok == Tok::Dot && crate::world::is_group(name) {
+                Some(self.dotted_key(n)?.0)
+            } else if crate::world::key(name).is_some() && self.lookup_local(name).is_some() {
+                // E217 (the formula's own names win everywhere).
+                return self.err(
+                    n,
+                    format!("`{name}` is this formula's own value here: `{f}(…)` reads a built-in input, so give yours another name"),
+                );
+            } else {
+                crate::world::key(name)
+            }
+        } else {
+            None
+        };
+        let Some(k) = key else {
+            let all = crate::world::KEYS.map(|k| k.name).join(", ");
+            // E976.
+            return self.err(
+                n,
+                format!("`{f}(…)` takes a built-in input's name, as in `{f}(replay.game)`: {all}"),
+            );
+        };
+        let close = self.expect(Tok::RParen, "`)`")?;
+        let what = if since {
+            crate::world::SINCE
+        } else {
+            crate::world::WAS
+        };
+        self.dag
+            .key(crate::world::input_byte(k.id, what), (t.start, close.end))
+    }
+
     /// E903: `seed` in a formula that loops, unless the formula set its
     /// own (out of line: the recursive parser's frames stay small).
     #[inline(never)]
@@ -2682,12 +2801,15 @@ impl<'s> Parser<'s> {
         let msg = if self.peek().tok == Tok::LParen {
             if self.env.ch < NO_CH && COLOURS.iter().any(|e| e.0 == name) {
                 format!(
-                    "`{name}(…)` is a whole colour: it can't be added to others (only `#…` and `rgb(r, g, b)` can)"
+                    "`{name}(…)` is a whole colour: it can't be combined with others by `+`, `*`, `? :` or a function (only `#…` and `rgb(r, g, b)` can, as `c ? #f80 : #000`)"
                 )
             } else if COLOURS.iter().any(|e| e.0 == name) {
                 format!(
                     "`{name}(…)` is a whole colour: it can only be the last line (of the formula or a layer)"
                 )
+            } else if name == "under" {
+                // E302 (`under(x, y)` where a number goes).
+                format!("`{name}(x, y)` is a colour, not a number: use it on the last line, as `under(px + 2, py)` or `under(px, py) * 0.5`")
             } else if PRIMITIVES.contains(&name) {
                 format!("`{name}(…)` draws: it goes on a line of its own inside `draw {{ }}`")
             } else if self.lookup_value(name).is_some() {
@@ -2724,12 +2846,19 @@ impl<'s> Parser<'s> {
     #[inline(never)]
     fn special(&mut self, t: Token, name: &str) -> Option<Result<Id, Error>> {
         match self.peek().tok {
-            Tok::LParen if name == "ink" && self.lookup_local(name).is_none() => {
-                Some(self.ink_levels(t))
-            }
+            Tok::LParen if name == "ink" => Some(self.ink_levels(t)),
             Tok::Dot => {
-                let k = self.palette_named(name)?;
-                Some(self.palette_entry(t, k))
+                if let Some(k) = self.palette_named(name) {
+                    return Some(self.palette_entry(t, k));
+                }
+                if crate::world::is_group(name) && self.lookup_local(name).is_none() {
+                    let r = self.dotted_key(t).and_then(|(k, _)| {
+                        let byte = crate::world::input_byte(k.id, crate::world::VALUE);
+                        self.dag.key(byte, (t.start, t.end))
+                    });
+                    return Some(r);
+                }
+                None
             }
             _ => None,
         }
@@ -2782,6 +2911,13 @@ impl<'s> Parser<'s> {
         }
         if let Some(&(_, inp, _)) = INPUTS.iter().find(|e| e.0 == name) {
             return Some(self.input(inp));
+        }
+        if let Some(k) = crate::world::key(name) {
+            // (A dotted key is read in `special`.)
+            return Some(
+                self.dag
+                    .key(crate::world::input_byte(k.id, crate::world::VALUE), (0, 0)),
+            );
         }
         if let Some(&(_, v)) = CONSTS.iter().find(|e| e.0 == name) {
             return Some(self.dag.constant(v, (0, 0)));
@@ -3227,7 +3363,11 @@ impl<'s> Parser<'s> {
                 Tok::Name if self.toks[k + 1].get().tok == Tok::LParen && self.text(t) == "rgb" => {
                     return true
                 }
-                Tok::Name if self.text(t) == "under" && self.lookup_local("under").is_none() => {
+                Tok::Name
+                    if self.text(t) == "under"
+                        && (self.toks[k + 1].get().tok == Tok::LParen
+                            || self.lookup_local("under").is_none()) =>
+                {
                     return true
                 }
                 Tok::Name
@@ -3400,9 +3540,11 @@ impl<'s> Parser<'s> {
     /// not a name already set here (E203).
     fn new_name(&self, t: Token, kind: Naming) -> Result<&'s str, Error> {
         let name = self.text(t);
-        // A built-in value or function's name may be the formula's own (it
-        // then reads as the formula's; a call is still the function): only
-        // the keywords are not names.
+        // A built-in value's name, or a built-in function's, may be the
+        // formula's own value (it then reads as the formula's everywhere; a
+        // call `name(…)` is still the function): only the keywords, the
+        // palettes and the dotted inputs' groups are not names (and a `fn`
+        // takes no built-in function's: `fn_def`).
         if KEYWORDS.contains(&name) {
             return self.err(
                 t,
@@ -3413,6 +3555,19 @@ impl<'s> Parser<'s> {
             return self.err(
                 t,
                 format!("`{name}` is a palette's name; pick another name"),
+            );
+        }
+        if crate::world::is_group(name) {
+            let keys: Vec<&str> = crate::world::KEYS
+                .iter()
+                .filter(|k| k.name.split_once('.').is_some_and(|(g, _)| g == name))
+                .map(|k| k.name)
+                .collect();
+            let has = keys.join(", ");
+            // E216.
+            return self.err(
+                t,
+                format!("`{name}` is the built-in inputs' name ({has}); pick another name"),
             );
         }
         let local = self.lookup_local(name);
@@ -4329,7 +4484,7 @@ impl<'s> Parser<'s> {
         l
     }
 
-    /// E924: the tables and sprites would pass the 256 numbers.
+    /// E924: the tables and sprites would pass the store's numbers.
     #[cold]
     #[inline(never)]
     fn too_full(&self, kw: Token, more: usize) -> Error {
@@ -4337,9 +4492,32 @@ impl<'s> Parser<'s> {
             kw,
             format!(
                 "tables and sprites hold {MAX_TABLE} numbers in all — this would make {}",
-                self.tables.len() + more
+                self.tables.len().next_multiple_of(STORE_ALIGN) + more
             ),
         )
+    }
+
+    /// Where `words` (a table's or a sprite's) go in the store: a run
+    /// already holding them at a place a step can name (a multiple of
+    /// [`STORE_ALIGN`]: a part read again, two tables alike), else after
+    /// the rest at the next such place (zeros between); `None` when that
+    /// would pass [`MAX_TABLE`].
+    #[inline(never)]
+    fn place(&mut self, words: &[i32]) -> Result<Option<usize>, Error> {
+        let n = self.tables.len();
+        if let Some(k) = (0..n)
+            .step_by(STORE_ALIGN)
+            .find(|&k| self.tables.get(k..k + words.len()) == Some(words))
+        {
+            return Ok(Some(k));
+        }
+        let at = n.next_multiple_of(STORE_ALIGN);
+        if at + words.len() > MAX_TABLE {
+            return Ok(None);
+        }
+        try_extend(&mut self.tables, &[0; STORE_ALIGN][..at - n])?;
+        try_extend(&mut self.tables, words)?;
+        Ok(Some(at))
     }
 
     /// Whether `name` at the cursor reads a table or a sprite (`[` after
@@ -4457,7 +4635,8 @@ impl<'s> Parser<'s> {
                 code: code::SPR,
                 a: u,
                 b: v,
-                c: start as Id,
+                // (Its place in fours: `store_at`.)
+                c: (start / STORE_ALIGN) as Id,
                 val: 0,
                 level,
                 why,
@@ -4615,20 +4794,9 @@ impl<'s> Parser<'s> {
             }
             words.extend(row.iter().map(|&v| v as i32));
         }
-        let start = match self
-            .tables
-            .windows(words.len())
-            .position(|win| win == words.as_slice())
-        {
-            Some(k) => k,
-            None => {
-                if self.tables.len() + words.len() > MAX_TABLE {
-                    // E917.
-                    return Err(self.too_full(kw, words.len()));
-                }
-                try_extend(&mut self.tables, &words)?;
-                self.tables.len() - words.len()
-            }
+        let Some(start) = self.place(&words)? else {
+            // E917.
+            return Err(self.too_full(kw, words.len()));
         };
         try_push(
             &mut self.sprites,
@@ -4643,7 +4811,8 @@ impl<'s> Parser<'s> {
     }
 
     /// `table NAME = n, n, …` at `kw`: numbers only (a `,` may end a line
-    /// and the numbers go on), 256 in all.
+    /// and the numbers go on), [`MAX_TABLE_LEN`] at most, [`MAX_TABLE`] in
+    /// the store in all.
     #[inline(never)]
     fn table(&mut self, kw: Token) -> Result<(), Error> {
         self.next();
@@ -4664,7 +4833,7 @@ impl<'s> Parser<'s> {
             let Tok::Num(x) = v.tok else {
                 return self.err(
                     v,
-                    "a table holds numbers only, up to 256 in all, as in `table T = 1, -2, 0.5`",
+                    "a table holds numbers only, as in `table T = 1, -2, 0.5`",
                 );
             };
             self.next();
@@ -4675,27 +4844,20 @@ impl<'s> Parser<'s> {
             self.next();
             self.skip_newlines();
         }
+        if vals.len() > MAX_TABLE_LEN {
+            // E974.
+            return self.err(
+                kw,
+                format!(
+                    "a table holds {MAX_TABLE_LEN} numbers at most — this one has {}: split it in two",
+                    vals.len()
+                ),
+            );
+        }
         // The same numbers already held (a part read again, or two tables
         // alike): stored once.
-        let start = match self
-            .tables
-            .windows(vals.len())
-            .position(|w| w == vals.as_slice())
-        {
-            Some(k) => k,
-            None => {
-                if self.tables.len() + vals.len() > MAX_TABLE {
-                    return self.err(
-                        kw,
-                        format!(
-                            "a table holds numbers only, up to {MAX_TABLE} in all — this would make {}",
-                            self.tables.len() + vals.len()
-                        ),
-                    );
-                }
-                try_extend(&mut self.tables, &vals)?;
-                self.tables.len() - vals.len()
-            }
+        let Some(start) = self.place(&vals)? else {
+            return Err(self.too_full(kw, vals.len()));
         };
         try_push(
             &mut self.table_names,
@@ -5065,7 +5227,14 @@ impl<'s> Parser<'s> {
         if n.tok != Tok::Name || self.tok(self.pos).tok != Tok::LParen {
             return self.err(kw, "a function is `fn name(a, b) = value`, or `fn name(a, b) { … }` for lines that draw");
         }
-        let name = self.new_name(n, Naming::Value)?;
+        let name = self.new_name(n, Naming::Thing)?;
+        if is_builtin_function(name) {
+            // E215.
+            return self.err(
+                n,
+                format!("`{name}(…)` is a built-in function: a `fn` takes a name of its own"),
+            );
+        }
         self.next();
         let mut params = Vec::new();
         while self.peek().tok != Tok::RParen {
@@ -5604,7 +5773,8 @@ impl<'s> Parser<'s> {
                     "`spr` draws a sprite: `spr(name, x, y)`, its name a `sprite name { … }`'s",
                 );
             };
-            let at_tab = self.sprites[k].start;
+            // (Its place in fours, as `SPR` steps name it: `store_at`.)
+            let at_tab = self.sprites[k].start / STORE_ALIGN;
             v[0] = self.dag.constant((at_tab as i32) << 16, at)?;
             n = 1;
             for _ in 0..3 {
@@ -5640,7 +5810,7 @@ impl<'s> Parser<'s> {
                     Some(k) if !vals.is_empty() => k,
                     _ => {
                         if self.tables.len() + vals.len() > MAX_TABLE {
-                            return self.err(st, "this text doesn't fit: tables, sprites and texts hold 256 numbers in all");
+                            return self.err(st, format!("this text doesn't fit: tables, sprites and texts hold {MAX_TABLE} numbers in all"));
                         }
                         try_extend(&mut self.tables, &vals)?;
                         self.tables.len() - vals.len()
@@ -6533,7 +6703,6 @@ fn compile_inner<'s>(
         dag: Dag {
             nodes,
             index,
-            divs: Vec::new(),
             picks: Vec::new(),
             forever: false,
             ctx: Vec::new(),
@@ -6846,7 +7015,6 @@ fn finish(
     p.palette_names = Vec::new();
     p.pnodes = Vec::new();
     p.dag.index = Vec::new();
-    p.dag.divs = Vec::new();
     // A limit hit while laying out the steps is the formula's as a whole:
     // point at its (top) colour line.
     #[cfg(feature = "syntax")]
@@ -7718,6 +7886,11 @@ fn split_slow(dag: &mut Dag, steps: &mut [Step], n: usize) -> Result<u8, Error> 
                 1..=3 => crate::rate::READS_CLOCK,
                 4..=6 => crate::rate::READS_SLIDERS,
                 v if v == S_SEED as i32 => crate::rate::READS_SEED,
+                // (`since` moves with time, as `t` does.)
+                v if v & KEY_TAG != 0 && (v >> 14) & 3 == i32::from(crate::world::SINCE) => {
+                    crate::rate::READS_WORLD | crate::rate::READS_T
+                }
+                v if v & KEY_TAG != 0 => crate::rate::READS_WORLD,
                 _ => 0,
             };
             continue;
@@ -7950,6 +8123,32 @@ fn emit(
     if nctx > 0 {
         next_slot = noise_slot(nctx, 0);
     }
+    // The built-in inputs read, after those: a slot each, in the order of
+    // their bytes (`world::input_byte`), which the player fills once a
+    // frame (`Program::ins`).
+    let mut keys: Vec<u8> = (0..n)
+        .filter(|&i| live(i))
+        .filter_map(|i| key_byte(&nodes[i]))
+        .collect();
+    keys.sort_unstable();
+    keys.dedup();
+    if keys.len() > MAX_INS {
+        // E977.
+        return Err(Error::new(
+            0,
+            0,
+            format!(
+                "a formula can read {MAX_INS} built-in inputs at most (each `since` and `was` one more) — this one reads {}",
+                keys.len()
+            ),
+        ));
+    }
+    prog.ins = Ins::default();
+    prog.ins.n = keys.len() as u8;
+    prog.ins.base = if keys.is_empty() { 0 } else { next_slot as u8 };
+    prog.ins.keys[..keys.len()].copy_from_slice(&keys);
+    let key_base = next_slot;
+    next_slot += keys.len();
     // Wide slots: 0 is `t`.
     let mut next_wide = 1usize;
     fn new_slot(vs: &mut Vec<VSlot>, v: Option<i32>) -> Result<u16, Error> {
@@ -7965,6 +8164,9 @@ fn emit(
     for i in 0..n {
         if live(i) && nodes[i].code == K_CONST {
             loc[i] = new_slot(&mut vs, Some(nodes[i].val))?;
+            set[i] = true;
+        } else if let Some(b) = key_byte(&nodes[i]).filter(|_| live(i)) {
+            loc[i] = (key_base + keys.binary_search(&b).unwrap_or(0)) as u16;
             set[i] = true;
         } else if live(i) && nodes[i].code == K_INPUT {
             loc[i] = if nodes[i].val == WIDE_T {

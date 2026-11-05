@@ -227,14 +227,14 @@ pub const ERRORS: &[ErrorDoc] = &[
         code: 203,
         title: "a name that is already a function, table, sprite, palette or control",
         sentence: "`…` is already the name of a … (line …) — pick another name",
-        fix: "Give it a name of its own. (A value may be set again, `v = v*2`, and a layer or function may set a name from outside: only functions, tables, sprites, palettes and controls keep theirs.)",
+        fix: "Give it a name of its own. (A value may be set again, `v = v*2`, and a layer or function may set a name from outside: only functions, tables, sprites, palettes and controls keep theirs, and none of them takes a value's name.)",
         matches: &["is already the name of a "],
     },
     ErrorDoc {
         code: 204,
         title: "a word of the language as a name",
         sentence: "`…` is a word of the language; pick another name",
-        fix: "Pick another name: `loop`, `layer`, `part`, `use`, `draw`, `for`, `table` and `fn` are the language's own words (any built-in value or function's name may be yours).",
+        fix: "Pick another name: `loop`, `layer`, `part`, `use`, `draw`, `for`, `table` and `fn` are the language's own words (any built-in value's name may be yours, and a built-in function's as a value; not a palette's or `sun`, `moon` or `replay`).",
         matches: &["is a word of the language; pick another name"],
     },
     ErrorDoc {
@@ -308,6 +308,34 @@ pub const ERRORS: &[ErrorDoc] = &[
         matches: &["`ink(n)` takes a whole number from 1 to 255"],
     },
     ErrorDoc {
+        code: 215,
+        title: "a function named as a built-in one",
+        sentence: "`…(…)` is a built-in function: a `fn` takes a name of its own",
+        fix: "Name the function something else, as `fn wave(a) = …`. (A value may take a built-in function's name: `sin = 0.5`, and `sin(…)` is still the function.)",
+        matches: &["is a built-in function: a `fn` takes a name of its own"],
+    },
+    ErrorDoc {
+        code: 216,
+        title: "a name that is the dotted inputs' group",
+        sentence: "`…` is the built-in inputs' name (…); pick another name",
+        fix: "Pick another name: `sun`, `moon` and `replay` are the start of the built-in inputs `sun.alt`, `moon.phase`, `replay.game` and the rest.",
+        matches: &["is the built-in inputs' name ("],
+    },
+    ErrorDoc {
+        code: 217,
+        title: "`since(…)` or `was(…)` of the formula's own value",
+        sentence: "`…` is this formula's own value here: `…(…)` reads a built-in input, so give yours another name",
+        fix: "Rename your value (`light = …`): the formula's own names win everywhere, so `since(daylight)` would otherwise mean two things on one line.",
+        matches: &["is this formula's own value here: `"],
+    },
+    ErrorDoc {
+        code: 218,
+        title: "a chained comparison",
+        sentence: "comparisons don't chain: write `… and …` (`…` would compare `…`, 1 or 0, with …)",
+        fix: "Join two comparisons with `and`: `0 < x and x < 0.5` (a comparison gives 1 or 0, so `0 < x < 0.5` would compare that with 0.5).",
+        matches: &["comparisons don't chain: write `"],
+    },
+    ErrorDoc {
         code: 301,
         title: "a `frame { }` block",
         sentence: "there are no `frame { }` blocks: a value is worked out once a frame by itself when it reads only the time, the clock and the controls; write its lines without the block",
@@ -331,9 +359,9 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 304,
         title: "a colour function in a sum of colours",
-        sentence: "`…(…)` is a whole colour: it can't be added to others (only `#…` and `rgb(r, g, b)` can)",
+        sentence: "`…(…)` is a whole colour: it can't be combined with others by `+`, `*`, `? :` or a function (only `#…` and `rgb(r, g, b)` can, as `c ? #f80 : #000`)",
         fix: "Use `#…` or `rgb(…)` in the sum, or give the function its own line.",
-        matches: &["is a whole colour: it can't be added to others"],
+        matches: &["is a whole colour: it can't be combined with others"],
     },
     ErrorDoc {
         code: 305,
@@ -492,7 +520,7 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 707,
         title: "a table that is not numbers",
-        sentence: "a table holds numbers only, up to 256 in all, as in `table T = 1, -2, 0.5`",
+        sentence: "a table holds numbers only, as in `table T = 1, -2, 0.5`",
         fix: "Write only numbers in the table.",
         matches: &["a table holds numbers only"],
     },
@@ -597,7 +625,7 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 725,
         title: "no room for a text",
-        sentence: "this text doesn't fit: tables, sprites and texts hold 256 numbers in all",
+        sentence: "this text doesn't fit: tables, sprites and texts hold 1024 numbers in all",
         fix: "Use shorter texts, or fewer tables and sprites.",
         matches: &["this text doesn't fit"],
     },
@@ -870,7 +898,7 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 924,
         title: "too many numbers in tables and sprites",
-        sentence: "tables and sprites hold 256 numbers in all — this would make …",
+        sentence: "tables and sprites hold 1024 numbers in all — this would make …",
         fix: "Make the tables and sprites smaller.",
         matches: &["tables and sprites hold"],
     },
@@ -1167,6 +1195,34 @@ pub const ERRORS: &[ErrorDoc] = &[
         sentence: "a `rate` layer can't read a scene's per-pixel values: work them out outside the scene, or leave `rate` out",
         fix: "Work the value out outside the scene, or leave `rate` out.",
         matches: &["a `rate` layer can't read a scene's per-pixel values"],
+    },
+    ErrorDoc {
+        code: 974,
+        title: "a table too long",
+        sentence: "a table holds 256 numbers at most — this one has …: split it in two",
+        fix: "Split the table in two and read the second half from the other.",
+        matches: &["numbers at most — this one has"],
+    },
+    ErrorDoc {
+        code: 975,
+        title: "a built-in input that doesn't exist",
+        sentence: "`….…` is not a built-in input: `…` has …",
+        fix: "Use one of the names listed, as `sun.alt` or `replay.game`.",
+        matches: &["is not a built-in input: `"],
+    },
+    ErrorDoc {
+        code: 976,
+        title: "`since` or `was` of something that isn't a built-in input",
+        sentence: "`…(…)` takes a built-in input's name, as in `…(replay.game)`: …",
+        fix: "Give it one of the built-in inputs listed (`since` and `was` follow the panel's own values, not the formula's).",
+        matches: &["takes a built-in input's name"],
+    },
+    ErrorDoc {
+        code: 977,
+        title: "too many built-in inputs",
+        sentence: "a formula can read … built-in inputs at most (each `since` and `was` one more) — this one reads …",
+        fix: "Read fewer built-in inputs, or fewer `since` and `was` of them.",
+        matches: &["built-in inputs at most"],
     },
 ];
 

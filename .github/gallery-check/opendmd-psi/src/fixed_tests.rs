@@ -380,3 +380,150 @@ fn the_tables_are_the_ones_measured() {
     assert_eq!(SQRT.len(), 193);
     assert_eq!(ATAN.len(), 257);
 }
+
+// --- DivBy (a lane's division by one divisor, branch psi-settle) -----------
+
+#[test]
+fn div_by_is_div_at_every_edge() {
+    let e = edges();
+    for &b in &e {
+        let p = fixed::DivBy::new(b);
+        for &a in &e {
+            assert_eq!(p.div(a), div_ref(a, b), "div({a}, {b})");
+        }
+    }
+}
+
+#[test]
+fn div_by_is_div_on_random_pairs() {
+    let mut r = Rng(0x1234_5679);
+    for _ in 0..2_000_000 {
+        let (a, b) = (r.next() as i32, r.next() as i32);
+        // Every magnitude of both, not only huge ones.
+        let (a, b) = (a >> (r.next() % 32), b >> (r.next() % 32));
+        assert_eq!(fixed::DivBy::new(b).div(a), div_ref(a, b), "div({a}, {b})");
+    }
+}
+
+#[test]
+fn div_by_is_div_for_the_divisors_formulas_write() {
+    // Whole numbers and tenths up to 300 and their negatives, against
+    // every pixel-sized dividend and windows round the ends.
+    let mut bs = Vec::new();
+    for k in 1..=3000 {
+        bs.push(fixed::div(k << 16, 10 << 16));
+        bs.push(k << 16);
+    }
+    let mut r = Rng(0x0bad_cafe);
+    for &b in &bs {
+        for b in [b, -b] {
+            let p = fixed::DivBy::new(b);
+            for a in (-300 * ONE..=300 * ONE).step_by(997) {
+                assert_eq!(p.div(a), div_ref(a, b), "div({a}, {b})");
+            }
+            for _ in 0..64 {
+                let a = r.next() as i32;
+                assert_eq!(p.div(a), div_ref(a, b), "div({a}, {b})");
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore]
+fn exhaustive_div_by() {
+    // Every dividend for divisors round the edges of the method: raw 1..4
+    // and 2^15..2^17 (where the quotient saturates or E crosses 32), the
+    // whole numbers formulas divide by most, and the ends.
+    let bs: Vec<i32> = vec![
+        1, 2, 3, 5, 0x7fff, 0x8000, 0x8001, 0xffff, 0x10000, 0x10001, 0x1ffff, 0x20000, 0x20001,
+        3 << 16, 7 << 16, 10 << 16, 255 << 16, 0x7fff_ffff, i32::MIN,
+    ];
+    let hs: Vec<_> = bs
+        .into_iter()
+        .flat_map(|b| [b, b.wrapping_neg()])
+        .map(|b| {
+            std::thread::spawn(move || {
+                let p = fixed::DivBy::new(b);
+                for a in i32::MIN..=i32::MAX {
+                    assert_eq!(p.div(a), div_ref(a, b), "div({a}, {b})");
+                }
+            })
+        })
+        .collect();
+    for h in hs {
+        h.join().unwrap();
+    }
+}
+
+/// The kernel's form for a constant divisor: `(n·m >> 32) >> s` on the
+/// magnitude, the sign put back.
+fn magic_div(a: i32, b: i32, (m, s): (u32, u32)) -> i32 {
+    let n = a.unsigned_abs();
+    let q = (((u64::from(n) * u64::from(m)) >> 32) as u32 >> s) as i32;
+    if (a < 0) != (b < 0) {
+        -q
+    } else {
+        q
+    }
+}
+
+#[test]
+fn magic_divisors_are_div() {
+    let mut r = Rng(0x5eed_1234);
+    let mut found = 0;
+    let mut bs: Vec<i32> = (2..=2000).map(|k| k << 16).collect();
+    bs.extend((11..=3000).map(|k| fixed::div(k << 16, 10 << 16)));
+    bs.extend(edges().into_iter().filter(|b| b.unsigned_abs() > 1 << 16));
+    for &b in &bs {
+        for b in [b, b.wrapping_neg()] {
+            let Some(mg) = fixed::DivBy::magic(b) else {
+                assert!(b.unsigned_abs() & 0xffff != 0, "a whole {b} has a magic number");
+                continue;
+            };
+            found += 1;
+            for a in edges().into_iter().chain((0..200).map(|_| r.next() as i32)) {
+                assert_eq!(magic_div(a, b, mg), div_ref(a, b), "div({a}, {b}) by {mg:?}");
+            }
+        }
+    }
+    assert!(found > 4000, "{found}");
+}
+
+#[test]
+#[ignore]
+fn exhaustive_magic_divisors() {
+    let bs: Vec<i32> = vec![3 << 16, 7 << 16, 10 << 16, 255 << 16, 641 << 16, 0x7fff_ffff, 0x18000, 0x28000, 0x10001];
+    let hs: Vec<_> = bs
+        .into_iter()
+        .flat_map(|b| [b, b.wrapping_neg()])
+        .filter_map(|b| fixed::DivBy::magic(b).map(|m| (b, m)))
+        .map(|(b, mg)| {
+            std::thread::spawn(move || {
+                for a in i32::MIN..=i32::MAX {
+                    assert_eq!(magic_div(a, b, mg), div_ref(a, b), "div({a}, {b})");
+                }
+            })
+        })
+        .collect();
+    for h in hs {
+        h.join().unwrap();
+    }
+}
+
+#[test]
+fn shifts_are_div_by_powers_of_two() {
+    let e = edges();
+    for j in 1..=15u32 {
+        for b in [1i32 << (16 + j), (1i32 << (16 + j)).wrapping_neg()] {
+            let (k, neg) = fixed::DivBy::shift(b).unwrap();
+            assert_eq!(k, j);
+            for &a in &e {
+                let q = fixed::shr_trunc(a, j);
+                assert_eq!(if neg { -q } else { q }, div_ref(a, b), "div({a}, {b})");
+            }
+        }
+    }
+    assert_eq!(fixed::DivBy::shift(1 << 16), None);
+    assert_eq!(fixed::DivBy::shift(3 << 16), None);
+}

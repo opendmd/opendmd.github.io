@@ -170,11 +170,14 @@ fn spec_names() -> String {
     let pals: Vec<&str> = builtins::PALETTES.iter().map(|e| e.0).collect();
     let fonts: Vec<&str> = builtins::FONTS.iter().map(|e| e.0).collect();
     let blends: Vec<&str> = builtins::BLENDS.iter().map(|e| e.0).collect();
+    let keys: Vec<&str> = opendmd_psi::world::KEYS.iter().map(|k| k.name).collect();
     let mut s = format!("<!-- psi-builtins: names ({MD_HOW}) -->\n");
     s.push_str("| kind | names |\n| --- | --- |\n");
     for (kind, names) in [
         ("values", code_list(&values)),
         ("values about the middle", code_list(&builtins::LATER)),
+        ("built-in inputs (the panel's own values)", code_list(&keys)),
+        ("their events", code_list(&["since(KEY)", "was(KEY)"])),
         ("constants", code_list(&consts)),
         ("functions (how many values)", funcs.join(", ")),
         (
@@ -191,14 +194,21 @@ fn spec_names() -> String {
             "words that are keywords in one place only",
             code_list(&builtins::CONTEXT_WORDS),
         ),
+        (
+            "words of the draw stage and scenes (names elsewhere)",
+            code_list(&["if", "else", "when", "scene", "tween"]),
+        ),
+        ("the picture under", code_list(&["under", "under(x, y)"])),
+        (
+            "the built-in inputs' groups (never a name)",
+            code_list(&["sun", "moon", "replay"]),
+        ),
     ] {
         s.push_str(&format!("| {kind} | {} |\n", cell(&names)));
     }
-    s.push_str(&format!(
-        "\nA formula may set a name added after people had saved formulas, and then it is the formula's own: {}, {} and `seed`, `ink`, `line`, `dot`, `forever`.\n",
-        code_list(&builtins::LATER),
-        code_list(&builtins::LATER_FUNCS)
-    ));
+    s.push_str(
+        "\n**The name rule.** A formula's own names win. Any built-in value's name, and any built-in function's or drawing call's, may be set as a value of the formula's (`t = 0.5`, `sin = 0.25`, `line = 3`): from the line that sets it, the name reads as the formula's value wherever a value is read, and a call `name(…)` is still the built-in function (`since`, `was`, `under` and `ink(n)` as `sin`). Not names: the keywords (E204), the palettes (E208) and `sun`, `moon` and `replay` (E216). A `fn`, table, sprite or palette of the formula's takes a name of its own: no built-in function's (E215) and no value's it has set (E203). `since(k)` and `was(k)` read the built-in inputs only: of a name the formula set they are refused (E217), never read two ways on one line. A built-in added later is read only where a formula has not set its name, so a formula saved before it means what it meant.\n",
+    );
     s.push_str("<!-- psi-builtins end -->\n");
     s
 }
@@ -264,6 +274,11 @@ fn spec_limits() -> String {
             n(p::MAX_DEPTH),
         ),
         ("`table` and `sprite` numbers, in all", n(p::MAX_TABLE)),
+        ("numbers in one `table`", n(p::MAX_TABLE_LEN)),
+        (
+            "built-in inputs read (each `since` and `was` one more)",
+            n(p::MAX_INS),
+        ),
         ("palettes of your own (of colours)", n(p::MAX_PALETTES)),
         ("palettes `pal` and `cycle` read", n(p::USER_PALETTES)),
         ("loop turns a frame in `draw { }`", n(p::TURNS as usize)),
@@ -376,6 +391,10 @@ fn the_guide_and_the_models_name_every_built_in() {
         for n in names.filter(|&n| n != "fract") {
             assert!(words.contains(n), "{doc} never names `{n}`");
         }
+        // The built-in inputs, dotted names whole, and their events.
+        for k in opendmd_psi::world::KEYS.iter().map(|k| k.name).chain(["since(", "was("]) {
+            assert!(text.contains(k), "{doc} never names `{k}`");
+        }
     }
 }
 
@@ -465,6 +484,9 @@ fn every_call_in_the_cheat_sheet_is_a_built_in() {
                     || head == "ink"
                     // `tween(P, Q, w)`: a palette line's (a special form)
                     || head == "tween"
+                    // `since(KEY)`, `was(KEY)`: a built-in input's events
+                    || head == "since"
+                    || head == "was"
                     // a function the row itself defines (`fn ring(cx, r) = …`)
                     || label.starts_with(&format!("fn {head}("));
                 assert!(

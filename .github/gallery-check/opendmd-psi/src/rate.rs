@@ -49,7 +49,7 @@ pub(crate) const FAST: u8 = 2;
 /// line, in flash: once a frame. (A branch for the marker in the frame
 /// loop cost 266 B of IRAM.)
 #[inline(never)]
-pub(crate) fn steps(prog: &Program, part: u8) -> (usize, usize) {
+pub(crate) fn steps(prog: &Prog, part: u8) -> (usize, usize) {
     let (re, pe) = (prog.row_end as usize, prog.len().min(MAX_OPS));
     match prog.slow_marker() {
         Some(m) if part == SLOW => (m + 1, (m + 1 + prog.ops[m].a as usize).min(pe)),
@@ -67,6 +67,9 @@ pub(crate) const READS_T: u8 = 1;
 pub(crate) const READS_CLOCK: u8 = 2;
 pub(crate) const READS_SLIDERS: u8 = 4;
 pub(crate) const READS_SEED: u8 = 8;
+/// A built-in input (`crate::world`): the picture is drawn again when one
+/// the program reads moves.
+pub(crate) const READS_WORLD: u8 = 16;
 
 /// The largest `rate`.
 pub const MAX_RATE: usize = 200;
@@ -75,7 +78,7 @@ pub const MAX_RATE: usize = 200;
 /// `inputs` (see the module), and whether the slow layers read `t` at all
 /// (else every row is drawn at `inputs` as they are).
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-fn plan(prog: &Program, m: usize, inputs: &Inputs) -> ([i64; H], bool) {
+fn plan(prog: &Prog, m: usize, inputs: &Inputs) -> ([i64; H], bool) {
     let mut at = [0i64; H];
     let op = &prog.ops[m];
     if op.c & READS_T == 0 {
@@ -106,7 +109,7 @@ fn plan(prog: &Program, m: usize, inputs: &Inputs) -> ([i64; H], bool) {
 }
 
 /// `inputs` at time `ms` (the slow rows' time; the rest as they are).
-fn inputs_at(prog: &Program, inputs: &Inputs, ms: i64) -> Inputs {
+fn inputs_at(prog: &Prog, inputs: &Inputs, ms: i64) -> Inputs {
     let mut i = *inputs;
     i.set_ms(prog, ms.max(0) as u64);
     i
@@ -118,7 +121,7 @@ fn inputs_at(prog: &Program, inputs: &Inputs, ms: i64) -> Inputs {
 #[allow(clippy::too_many_arguments)]
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn slow_rows<const N: usize>(
-    prog: &Program,
+    prog: &Prog,
     m: usize,
     scratch: &mut Scratch<N>,
     inputs: &Inputs,
@@ -185,7 +188,7 @@ fn slow_rows<const N: usize>(
 #[doc(hidden)]
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn draw_slow<const N: usize>(
-    prog: &Program,
+    prog: &Prog,
     scratch: &mut Scratch<N>,
     inputs: &Inputs,
     tables: &Tables,
@@ -205,7 +208,7 @@ pub fn draw_slow<const N: usize>(
 #[allow(clippy::too_many_arguments)]
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub(crate) fn render_scratch<const N: usize>(
-    prog: &Program,
+    prog: &Prog,
     scratch: &mut Scratch<N>,
     ink: Option<&mut Ink>,
     still: Option<&mut Still>,
@@ -241,6 +244,14 @@ pub(crate) fn render_scratch<const N: usize>(
     }
 }
 
+/// The built-in inputs `prog` reads as they are in `inputs`, hashed (the
+/// slow layers' picture is drawn again when one moves).
+fn world_key(prog: &Prog, inputs: &Inputs) -> i32 {
+    prog.ins.iter().fold(0x811c_9dc5u32, |h, (_, b)| {
+        (h ^ inputs.world.read(b) as u32).wrapping_mul(0x0100_0193)
+    }) as i32
+}
+
 /// The slow layers' picture between frames (12 KB and a little): a
 /// player's, for a `rate` formula ([`Program::rate`]). All-zero is a valid
 /// empty one (nothing held). Give it back to [`Held::forget`] whenever the
@@ -253,7 +264,7 @@ pub struct Held {
     valid: u32,
     /// The inputs besides `t` the slow layers read, as drawn, and the
     /// program's shape.
-    key: [i32; 7],
+    key: [i32; 8],
     shape: u32,
 }
 
@@ -291,7 +302,7 @@ impl Held {
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn update<const N: usize>(
         &mut self,
-        prog: &Program,
+        prog: &Prog,
         scratch: &mut Scratch<N>,
         inputs: &Inputs,
         tables: &Tables,
@@ -309,6 +320,7 @@ impl Held {
             pick(READS_SLIDERS, inputs.b),
             pick(READS_SLIDERS, inputs.c),
             pick(READS_SEED, inputs.seed),
+            pick(READS_WORLD, world_key(prog, inputs)),
         ];
         let shape = shape(prog, m);
         if key != self.key || shape != self.shape {
@@ -335,7 +347,7 @@ impl Held {
 /// A program's shape, cheaply: enough that a held picture is not used for
 /// another formula's by mistake (the player forgets it at a live edit).
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-fn shape(prog: &Program, m: usize) -> u32 {
+fn shape(prog: &Prog, m: usize) -> u32 {
     let op = &prog.ops[m];
     let mut h: u32 = 0x811c_9dc5;
     for v in [
@@ -361,7 +373,7 @@ fn shape(prog: &Program, m: usize) -> u32 {
 /// without `rate`: its whole frame, `held` untouched.
 #[allow(clippy::too_many_arguments)]
 pub fn render_held<const N: usize>(
-    prog: &Program,
+    prog: &Prog,
     scratch: &mut Scratch<N>,
     ink: Option<&mut Ink>,
     still: Option<&mut Still>,
@@ -420,7 +432,7 @@ pub fn render_held<const N: usize>(
 #[doc(hidden)]
 #[allow(clippy::too_many_arguments)]
 pub fn render_fast<const N: usize>(
-    prog: &Program,
+    prog: &Prog,
     scratch: &mut Scratch<N>,
     ink: Option<&mut Ink>,
     still: Option<&mut Still>,

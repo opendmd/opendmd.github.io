@@ -227,6 +227,7 @@ impl Emu {
                     (0, 2) => wr = Some((r_, as__ | at_)),
                     (0, 3) => wr = Some((r_, as__ ^ at_)),
                     (0, 4) if r == 4 => sar = s | (t & 1) << 4,
+                    (0, 4) if r == 0 && t == 0 => sar = as__ & 31,
                     (0, 6) if s == 0 => wr = Some((r_, (at_ as i32).wrapping_neg() as u32)),
                     (0, 6) if s == 1 => wr = Some((r_, (at_ as i32).wrapping_abs() as u32)),
                     (0, 8) => wr = Some((r_, as__.wrapping_add(at_))),

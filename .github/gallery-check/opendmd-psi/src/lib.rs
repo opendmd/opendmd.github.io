@@ -67,6 +67,7 @@ mod still;
 pub mod syntax;
 mod tables;
 mod vm;
+pub mod world;
 
 #[cfg(feature = "compiler")]
 pub use compile::{
@@ -79,8 +80,10 @@ pub use compile::{
 pub use draw::{Ink, Plane, FRAME_STEPS, LINE_STEPS, PRIMITIVES, TURNS};
 pub use meta::{Control, Meta, BLENDS};
 pub use program::{
-    Op, Program, SceneFrame, H, MAX_OPS, MAX_STEPS, MAX_PALETTES, MAX_SCALARS, MAX_TABLE, REGS, USER_PALETTES, W,
+    Op, Prog, Program, ProgramOf, SceneFrame, H, MAX_INS, MAX_OPS, MAX_STEPS, MAX_PALETTES, MAX_SCALARS, MAX_TABLE,
+    MAX_TABLE_LEN, MIN_STORE, REGS, USER_PALETTES, W, store_words,
 };
+pub use world::World;
 pub use rate::{draw_slow, render_fast, render_held, Held, MAX_RATE};
 pub use still::{Still, StillLane, STILL_LANES};
 /// (psi-probe's references for `fixed::sqrt` and `len`.)
@@ -194,7 +197,7 @@ pub fn build_with(src: &str, cmp: bool) -> Result<alloc::vec::Vec<u8>, Error> {
         }
         _ => None,
     };
-    Ok(psb::encode(name, &play, look.as_deref()))
+    Ok(psb::encode(name, &play, look.as_deref().map(|l| -> &Prog { l })))
 }
 
 #[cfg(feature = "compiler")]
@@ -210,7 +213,7 @@ pub fn compile_plain(src: &str) -> Result<Program, Error> {
 
 /// [`render_with`] at the default lane width, [`LANES`].
 pub fn render(
-    prog: &Program,
+    prog: &Prog,
     scratch: &mut Scratch<LANES>,
     inputs: &Inputs,
     tables: &Tables,
@@ -274,6 +277,7 @@ pub mod golden {
             c: 3 << 14,
             tw: Inputs::wide_ms(ms as u64),
             seed: SEED,
+            world: Default::default(),
         }
     }
 
@@ -291,9 +295,9 @@ pub mod golden {
     }
 
     pub const FRAMES: &[(&str, &str, u32, u64)] = &[
-        ("plasma", super::sketches::PLASMA, 0, 0xd13d7d76b48ba711),
-        ("plasma", super::sketches::PLASMA, 2500, 0x62b0afc2f23d8e82),
-        ("plasma", super::sketches::PLASMA, 7980, 0x9f3965d9de3db1d5),
+        ("plasma", super::sketches::PLASMA, 0, 0xab24cddf5c7967cb),
+        ("plasma", super::sketches::PLASMA, 2500, 0xa9bfa837e59c89c8),
+        ("plasma", super::sketches::PLASMA, 7980, 0x4dbc961b217bc066),
         ("fire", super::sketches::FIRE, 0, 0x26f4a06a29ff088d),
         ("fire", super::sketches::FIRE, 1230, 0xd8e523beb45f8c37),
         ("ring-clock", super::sketches::RING_CLOCK, 0, 0xdef90f39b4011ef1),
@@ -302,7 +306,7 @@ pub mod golden {
         // of atan2, a constant colour, `i`, hash, sliders, comparisons.
         ("saturate", "gray(t*t*t*1000 - 5 + x*30000)", 3000, 0xfe4ec469d4f39325),
         ("div0", "v = x / (y - y)\nw2 = (x - 0.5) / 0\nrgb(v, w2 + 0.5, 0 / 0 + 0.25)", 0, 0xb8aafd09b9ba0b25),
-        ("mod", "rgb((x*10 - 5) % 3 / 3, (px - 64) % -7 / -7, (y - 0.5) % 0.25 * 4)", 0, 0x1e7b2f0cf22f7af1),
+        ("mod", "rgb((x*10 - 5) % 3 / 3, (px - 64) % -7 / -7, (y - 0.5) % 0.25 * 4)", 0, 0xd970023ebb7c3b7d),
         ("atan2", "hsv(atan2(y - 0.5, x - 0.5) + 0.5, 1, len(x - 0.5, y - 0.5)*2)", 0, 0x194326ee958e751a),
         ("const", "rgb(1, 0.5, 0.25)", 0, 0x2433c930830b3325),
         ("index", "hsv(i / 4096, hash(i, 7), 1)", 0, 0xdf6cffa94510c228),
@@ -316,8 +320,8 @@ pub mod golden {
         // The fonts and bits: every glyph of both fonts, digits out of
         // range (-1, 10, 11), coordinates outside the cell, the steps once
         // a frame and once a row, bit() of negative and fractional values.
-        ("glyphs", "ch = 32 + floor(px/5) + floor((31 - py)/8)*25\nhsv(ch/95, 1, glyph(ch, px % 5, (31 - py) % 8))", 0, 0x727c433374f60d03),
-        ("glyphs-small", "ch = 32 + floor(px/4) + floor((31 - py)/6)*32\nhsv(ch/95, 0.5, glyph(ch, px % 4 - 0.5, (31 - py) % 6 + 0.75, small))", 0, 0xc8b1fd414e209480),
+        ("glyphs", "ch = 32 + floor(px/5) + floor((31 - py)/8)*25\nhsv(ch/95, 1, glyph(ch, px % 5, (31 - py) % 8))", 0, 0x2b656aa1e30a75fa),
+        ("glyphs-small", "ch = 32 + floor(px/4) + floor((31 - py)/6)*32\nhsv(ch/95, 0.5, glyph(ch, px % 4 - 0.5, (31 - py) % 6 + 0.75, small))", 0, 0x13f6d322dfff033),
         ("digits", "rgb(digit(floor(px/5) % 12 - 1, px % 5, 31 - py), digit(floor(px/4) % 12 - 1, px % 4 - 1, 24 - py, small), bit(px, py % 8))", 0, 0x5d8dd69817c2ad40),
         ("digit-levels", "d = second % 10\nr = 31 - py\nrgb(digit(d, 2, r), glyph('A', 1, r - 8)*0.5 + digit(7, 1, 1)*0.25, glyph(':', px % 5, r - 16, small))", 0, 0x284487414908fc89),
         ("digits-bold", "rgb(digit(floor(px/5) % 12 - 1, px % 5 - 1, (31 - py) % 7 - 1, bold), digit(second % 10, floor(px/8) % 4, floor((31 - py)/6), bold), 0.2)", 0, 0xf75ce1f25201139b),
@@ -327,14 +331,14 @@ pub mod golden {
         // per-pixel values (compares and selects), k out of range both
         // ways and fractional; colour literals, mixes of them, nested.
         ("centred", "loop 4\nhsv(angle + t/4, frac(r*2), 1 - py/40 + cx*cy*0.1)", 1000, 0x6eddca84c430ae2b),
-        ("pick", "s = second/60; m = minute/60\nk = px/16 - 1.5\nrgb(pick(k, s, m, 0.25, 1), pick(py/8, y, 1 - y, 0.5) + pick(minute % 3, 0.1, 0.2), pick(px/40, x, y, ur + 0.5))", 0, 0x6293d01fd9a8d815),
+        ("pick", "s = second/60; m = minute/60\nk = px/16 - 1.5\nrgb(pick(k, s, m, 0.25, 1), pick(py/8, y, 1 - y, 0.5) + pick(minute % 3, 0.1, 0.2), pick(px/40, x, y, ur + 0.5))", 0, 0x75163221dd870125),
         ("colours", "loop 2\nk = sin(t/2)*0.5 + 0.5\nmix(mix(#000, #f80, x), mix(#123456, rgb(y, k, 1 - y), x), smoothstep(0.2, 0.8, y))", 500, 0x1c2b208300d57219),
         ("colour-rgb", "rgb(mix(#fff, #08c, cy*2 + 1), r*0.6)", 0, 0x872e0a76ebdba8f5),
         // A palette times a value (`pal(P, v) * k`, a layer's with coverage
         // too); noise at a whole z (its four-corner path); values for the
         // still cache (`psi-probe` draws these with it as well).
         ("pal-lit", "loop 2\nlayer { pal(chrono, frac(x + t/2)) * y }\nlayer screen { pal(fire, y, 0.5) * (1 - x) * 1.5 }", 700, 0xd9de37c92532fb64),
-        ("noise-flat", "gray(noise(x*8, y*4, 0)*0.5 + noise(px/9, py/5, 3)*0.5 - noise(x, y, -2)*0.1)", 0, 0x36b78ba53e1bdd9e),
+        ("noise-flat", "gray(noise(x*8, y*4, 0)*0.5 + noise(px/9, py/5, 3)*0.5 - noise(x, y, -2)*0.1)", 0, 0xf2b3fce19507bdf7),
         // `loop forever`: `t` growing without end (past the Q16.16 range at
         // 9.1 hours: frames at 11 hours and 46 days), its sums and
         // products, fractions, waves, noises (per pixel, per row, in the
@@ -350,11 +354,11 @@ pub mod golden {
         // Palettes of a formula's own: plain, scaled, covered, in a part,
         // indexed by a sprite.
         ("palettes", PALETTES_OWN, 700, 0x185a3fdd072f78f),
-        ("still", "loop 4.8\nd = len(px - 63.5, (15.5 - py)*2)\nk = 64/(d + 0.5)\nu = frac(atan2(15.5 - py, px - 63.5)*2 + t/4.8 + k/64)\nv = frac(k/16 + t/2.4)\ncell = (floor(u*8) + floor(v*4)) % 2\npal(chrono, frac(mix(0.28, 0.78, cell) + t/4.8)) * clamp((d - 6)/12, 0, 1)", 1900, 0x5d783e5cccc4066b),
+        ("still", "loop 4.8\nd = len(px - 63.5, (15.5 - py)*2)\nk = 64/(d + 0.5)\nu = frac(atan2(15.5 - py, px - 63.5)*2 + t/4.8 + k/64)\nv = frac(k/16 + t/2.4)\ncell = (floor(u*8) + floor(v*4)) % 2\npal(chrono, frac(mix(0.28, 0.78, cell) + t/4.8)) * clamp((d - 6)/12, 0, 1)", 1900, 0x220dbed231f24409),
         // `cycle` (console-b): turned once a frame (the still cache's
         // index), once a row, a palette of its own, scaled and covered.
-        ("cycle", CYCLE, 0, 0xd15cc1473a95a69d),
-        ("cycle", CYCLE, 3330, 0x8ef0ef6fb334fe9d),
+        ("cycle", CYCLE, 0, 0x29f9a2953849a61f),
+        ("cycle", CYCLE, 3330, 0x5f8c2dc99de13d0b),
         ("cycle-rows", CYCLE_ROWS, 1250, 0x4c938ea3065f7d5f),
         // `layer rate N` (console-b): bands at their times (looping, fps
         // 100, past the 32 rows, forever), a slow layer of the clock only.

@@ -42,6 +42,9 @@ pub struct Inputs {
     /// A `loop forever` formula's `seed`, Q16.16 in 0..1: the same for a
     /// whole play, a new one each time it plays.
     pub seed: i32,
+    /// The built-in inputs (`daylight`, `since(replay.game)` …: the
+    /// [`crate::world`]); the default is every key's default.
+    pub world: crate::world::World,
 }
 
 impl Inputs {
@@ -63,10 +66,31 @@ impl Inputs {
 
     /// Both clocks for `ms` since `prog` started: `t` at `ms` into its loop
     /// and, for a `loop forever` formula, `tw` at `ms`.
-    pub fn set_ms(&mut self, prog: &Program, ms: u64) {
+    pub fn set_ms(&mut self, prog: &Prog, ms: u64) {
         let lp = u64::from(prog.loop_ms().max(1));
         self.t = Self::at_ms((ms % lp) as u32);
         self.tw = Self::wide_ms(ms);
+    }
+}
+
+/// The frame's inputs into their slots: the fixed ones (`t`, the clock,
+/// the sliders, `seed`) and the built-in inputs the program reads, each
+/// held to its key's range (`crate::world`). Once a frame, before its
+/// steps (the VM's and the JIT's driver).
+#[inline]
+pub(crate) fn frame_inputs(prog: &Prog, sc: &mut Sc, inputs: &Inputs) {
+    sc[S_T as usize] = inputs.t;
+    sc[S_HOUR as usize] = (inputs.hour as i32) << 16;
+    sc[S_MINUTE as usize] = (inputs.minute as i32) << 16;
+    sc[S_SECOND as usize] = (inputs.second as i32) << 16;
+    sc[S_A as usize] = inputs.a;
+    sc[S_B as usize] = inputs.b;
+    sc[S_C as usize] = inputs.c;
+    if prog.uses & SEEDED != 0 {
+        sc[S_SEED as usize] = inputs.seed;
+    }
+    for (slot, byte) in prog.ins.iter() {
+        sc[slot as usize] = inputs.world.read(byte);
     }
 }
 
@@ -580,7 +604,7 @@ macro_rules! outt {
 /// read 0; a layer that lets something show through shows black). Writes
 /// every byte.
 pub fn render_with<const N: usize>(
-    prog: &Program,
+    prog: &Prog,
     scratch: &mut Scratch<N>,
     inputs: &Inputs,
     tables: &Tables,
@@ -598,7 +622,7 @@ pub fn render_with<const N: usize>(
 /// ([`Program::draws`]) draws nothing here (`ink` reads 0): give it a
 /// canvas with [`render_rows_ink`].
 pub fn render_rows<const N: usize>(
-    prog: &Program,
+    prog: &Prog,
     scratch: &mut Scratch<N>,
     inputs: &Inputs,
     tables: &Tables,
@@ -619,7 +643,7 @@ pub fn render_rows<const N: usize>(
 /// program that does not draw: `ink` reads 0.
 #[allow(clippy::too_many_arguments)]
 pub fn render_rows_ink<const N: usize>(
-    prog: &Program,
+    prog: &Prog,
     scratch: &mut Scratch<N>,
     ink: Option<&mut Ink>,
     inputs: &Inputs,
@@ -648,7 +672,7 @@ enum Cache<'a> {
 /// a program without cached values: every step runs.
 #[allow(clippy::too_many_arguments)]
 pub fn render_rows_still<const N: usize>(
-    prog: &Program,
+    prog: &Prog,
     scratch: &mut Scratch<N>,
     ink: Option<&mut Ink>,
     still: Option<&mut Still>,
@@ -691,7 +715,7 @@ pub fn render_rows_still<const N: usize>(
 /// its held way) says every row drawn changed.
 #[allow(clippy::too_many_arguments)]
 pub fn render_rows_changed<const N: usize>(
-    prog: &Program,
+    prog: &Prog,
     scratch: &mut Scratch<N>,
     ink: Option<&mut Ink>,
     still: Option<&mut Still>,
@@ -821,7 +845,7 @@ impl<const N: usize> Drop for BeamGuard<'_, N> {
 /// reads `under` as [`render_rows_still`] does.
 #[allow(clippy::too_many_arguments)]
 pub fn render_rows_beam<const N: usize>(
-    prog: &Program,
+    prog: &Prog,
     scratch: &mut Scratch<N>,
     ink: Option<&mut Ink>,
     still: Option<&mut Still>,
@@ -895,7 +919,7 @@ pub fn render_rows_beam<const N: usize>(
 #[doc(hidden)]
 #[allow(clippy::too_many_arguments)]
 pub fn render_rows_ink_turns<const N: usize>(
-    prog: &Program,
+    prog: &Prog,
     scratch: &mut Scratch<N>,
     ink: Option<&mut Ink>,
     inputs: &Inputs,
@@ -934,7 +958,7 @@ pub fn render_rows_ink_turns<const N: usize>(
 #[inline(never)]
 #[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
 pub(crate) fn frame<const N: usize>(
-    prog: &Program,
+    prog: &Prog,
     scratch: &mut Scratch<N>,
     ink: Option<&mut Ink>,
     still: Option<&mut Still>,
@@ -955,17 +979,7 @@ pub(crate) fn frame<const N: usize>(
     }
     let ns = prog.n_scalars as usize;
     scratch.sc[..ns].copy_from_slice(&prog.init[..ns]);
-    let sc = &mut scratch.sc;
-    sc[S_T as usize] = inputs.t;
-    sc[S_HOUR as usize] = (inputs.hour as i32) << 16;
-    sc[S_MINUTE as usize] = (inputs.minute as i32) << 16;
-    sc[S_SECOND as usize] = (inputs.second as i32) << 16;
-    sc[S_A as usize] = inputs.a;
-    sc[S_B as usize] = inputs.b;
-    sc[S_C as usize] = inputs.c;
-    if prog.uses & SEEDED != 0 {
-        sc[S_SEED as usize] = inputs.seed;
-    }
+    frame_inputs(prog, &mut scratch.sc, inputs);
     let fe = prog.frame_end as usize;
     #[cfg(not(target_arch = "wasm32"))]
     let pe = prog.pixel_end as usize;
@@ -1238,7 +1252,7 @@ pub(crate) fn fetch<const N: usize>(al: &mut Alias, st: &Still, regs: [u8; 2], n
 /// (its values outside loops worked out; its lines not drawn).
 /// [`Program::tier_us_frame`] costs a frame by it.
 pub fn scene_rows<const N: usize>(
-    prog: &Program,
+    prog: &Prog,
     scratch: &mut Scratch<N>,
     inputs: &Inputs,
     tables: &Tables,
@@ -1250,17 +1264,7 @@ pub fn scene_rows<const N: usize>(
     }
     let ns = prog.n_scalars as usize;
     scratch.sc[..ns].copy_from_slice(&prog.init[..ns]);
-    let sc = &mut scratch.sc;
-    sc[S_T as usize] = inputs.t;
-    sc[S_HOUR as usize] = (inputs.hour as i32) << 16;
-    sc[S_MINUTE as usize] = (inputs.minute as i32) << 16;
-    sc[S_SECOND as usize] = (inputs.second as i32) << 16;
-    sc[S_A as usize] = inputs.a;
-    sc[S_B as usize] = inputs.b;
-    sc[S_C as usize] = inputs.c;
-    if prog.uses & SEEDED != 0 {
-        sc[S_SEED as usize] = inputs.seed;
-    }
+    frame_inputs(prog, &mut scratch.sc, inputs);
     let fe = prog.frame_end as usize;
     if prog.forever() {
         wset(&mut scratch.lanes[REGS], 0, inputs.tw);
@@ -1342,7 +1346,7 @@ pub fn scene_rows<const N: usize>(
 #[inline(never)]
 #[cfg_attr(all(target_os = "espidf", feature = "sram1-iram"), link_section = ".iram1.s1")]
 pub(crate) fn row_steps<const N: usize>(
-    prog: &Program,
+    prog: &Prog,
     scratch: &mut Scratch<N>,
     tables: &Tables,
     own: &mut Pals,
@@ -1441,7 +1445,7 @@ impl<'a> Rows<'a> {
     #[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
     fn begin<const N: usize>(
         &mut self,
-        prog: &Program,
+        prog: &Prog,
         scratch: &mut Scratch<N>,
         tables: &Tables,
         out: &[u8],
@@ -1513,14 +1517,14 @@ impl<'a> Rows<'a> {
 }
 
 #[inline(always)]
-pub(crate) fn scalar(sc: &mut Sc, op: &Op, t: &Tables, tabs: &[i32; MAX_TABLE]) {
+pub(crate) fn scalar(sc: &mut Sc, op: &Op, t: &Tables, tabs: &[i32]) {
     let v = scalar_value(sc, op, t, tabs);
     sc[op.d as usize] = v;
 }
 
 /// What a scalar step works out (`scalar` stores it in its `d`).
 #[inline(always)]
-pub(crate) fn scalar_value(sc: &Sc, op: &Op, t: &Tables, tabs: &[i32; MAX_TABLE]) -> i32 {
+pub(crate) fn scalar_value(sc: &Sc, op: &Op, t: &Tables, tabs: &[i32]) -> i32 {
     // Operands of scalar steps are always scalar slots (< LANE).
     let g = |v: u8| sc[v as usize];
     match op.code {
@@ -1545,7 +1549,7 @@ fn noise_o(x: i32, y: i32, z: i32, sc: &Sc, c: u8) -> i32 {
 /// A sprite's pixel once a frame or a row (out of line: the frame loop is
 /// in IRAM).
 #[inline(never)]
-fn spr(tabs: &[i32; MAX_TABLE], at: u8, u: i32, v: i32) -> i32 {
+fn spr(tabs: &[i32], at: u8, u: i32, v: i32) -> i32 {
     SprHead::new(tabs, at).read(tabs, u, v)
 }
 
@@ -1657,7 +1661,7 @@ pub(crate) fn lane_draw<const N: usize>(
     s: &mut Scratch<N>,
     op: &Op,
     t: &Tables,
-    tabs: &[i32; MAX_TABLE],
+    tabs: &[i32],
 ) {
     use code::*;
     let al: Alias = [core::ptr::null(); REGS + 1];
@@ -1730,7 +1734,7 @@ pub(crate) fn lane_draw<const N: usize>(
 /// turn by turn ([`lane_draw`]).
 #[cfg(not(target_arch = "wasm32"))]
 #[inline(never)]
-fn value_of(op: &Op, x: i32, y: i32, z: i32, sc: &Sc, t: &Tables, tabs: &[i32; MAX_TABLE]) -> i32 {
+fn value_of(op: &Op, x: i32, y: i32, z: i32, sc: &Sc, t: &Tables, tabs: &[i32]) -> i32 {
     use code::*;
     match op.code {
         SHR => x >> (op.c & 31),
@@ -1762,7 +1766,7 @@ fn cos_lane<const N: usize>(d: &mut [i32; N], a: Arg, t: &Tables) {
 /// `T[k]` along a lane of `k` (a table read of one value is a scalar step,
 /// worked out before: nothing here).
 #[inline(always)]
-fn tab_lane<const N: usize>(d: &mut [i32; N], a: Arg, tabs: &[i32; MAX_TABLE], op: &Op) {
+fn tab_lane<const N: usize>(d: &mut [i32; N], a: Arg, tabs: &[i32], op: &Op) {
     if let Arg::Lane(p) = a {
         run1(d, L(p), |k| tab(tabs, op.b, op.c, k))
     }
@@ -1777,7 +1781,7 @@ pub(crate) fn lane_op<const N: usize>(
     narrow: bool,
     base: usize,
     t: &Tables,
-    tabs: &[i32; MAX_TABLE],
+    tabs: &[i32],
     under: Option<&[u8]>,
     ink: Option<&[u8]>,
 ) {
@@ -1816,6 +1820,21 @@ pub(crate) fn lane_op<const N: usize>(
         SUB => bin!(fast2, d, a, b, fixed::sub),
         MUL => bin!(fast2, d, a, b, fixed::mul),
         DIV => bin!(run2, d, a, b, fixed::div),
+        // (`b` is a scalar: `range::narrow` makes no other. Not in wasm,
+        // which runs the checked steps, as the other narrowed ones.)
+        #[cfg(not(target_arch = "wasm32"))]
+        DIV_S => match b {
+            Arg::Sc(v) => match fixed::DivBy::shift(v) {
+                // By ±2^j: a shift towards zero.
+                Some((j, false)) => un!(fast1, d, a, |x| fixed::shr_trunc(x, j)),
+                Some((j, true)) => un!(fast1, d, a, |x| -fixed::shr_trunc(x, j)),
+                None => {
+                    let by = fixed::DivBy::new(v);
+                    un!(fast1, d, a, |x| by.div(x))
+                }
+            },
+            Arg::Lane(_) => bin!(run2, d, a, b, fixed::div),
+        },
         MOD => bin!(run2, d, a, b, fixed::modulo),
         MASK => bin!(fast2, d, a, b, fixed::mask),
         LT => bin!(fast2, d, a, b, fixed::lt),
@@ -2165,7 +2184,7 @@ fn mulr_lane<const N: usize>(d: &mut [i32; N], args: [Arg; 3]) {
 /// outside its rows fills the lane with 0 at once. In IRAM (road-cost).
 #[inline(never)]
 #[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
-fn spr_lane<const N: usize>(d: &mut [i32; N], args: [Arg; 2], tabs: &[i32; MAX_TABLE], at: u8) {
+fn spr_lane<const N: usize>(d: &mut [i32; N], args: [Arg; 2], tabs: &[i32], at: u8) {
     let hd = SprHead::new(tabs, at);
     // A row value outside the sprite's rows: 0 along the whole lane (as
     // `read` gives each pixel).
@@ -2462,7 +2481,7 @@ pub mod stats {
     pub static STILL1: AtomicUsize = AtomicUsize::new(0);
 
     pub(super) fn note<const N: usize>(
-        prog: &Program,
+        prog: &Prog,
         s: &Scratch<N>,
         cache: &Cache,
         out: &[u8],
@@ -2491,7 +2510,7 @@ pub mod stats {
     /// the VM and the JIT's driver lay it, a row at a time: psi-probe times
     /// the overlay alone with it. Nothing for a formula that doesn't paint
     /// or a canvas without the plane.
-    pub fn paint_rows(prog: &Program, ink: &Ink, out: &mut [u8]) {
+    pub fn paint_rows(prog: &Prog, ink: &Ink, out: &mut [u8]) {
         if let Some(p) = crate::draw::paint_of(prog, Some(ink)) {
             for (row, span) in out.chunks_exact_mut(W * 3).enumerate().take(H) {
                 crate::draw::paint_row(prog, p, row, span);

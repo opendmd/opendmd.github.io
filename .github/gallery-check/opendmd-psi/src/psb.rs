@@ -13,19 +13,25 @@
 //!
 //! ```text
 //! "PSB" ABI(u8)  flags(u8: bit 0, a look program follows; bit 1, the
-//!                       programs declare controls or a look: their meta)
+//!                       programs declare controls or a look: their meta;
+//!                       bit 2, they read built-in inputs: their list)
 //! name_len(u8) name(UTF-8, ≤ 60)
 //! program [look program]
-//! program = len(u16) header ops init tables paint store meta   (len: the bytes after it)
+//! program = len(u16) header ops init tables paint store meta ins   (len: the bytes after it)
 //! header  = frame_end draw_end row_end pixel_end (u16 each)
 //!           n_scalars regs uses frame_ms (u8 each)  loop_ms(u32)
 //! ops     = pixel_end × (code d a b c)
 //! init    = (n_scalars − 9) × i32   (the inputs' slots are always 0)
-//! tables  = lo(u16)  lo × i32 (from 0)
+//! tables  = lo(u16)  lo × i32 (from 0; up to 1,024)
 //! paint   = n(u8)  n × u32 (the paint palette from entry 0)
 //! store   = n(u8)  n × 32 × u32 (the palette store from slot 0)
 //! meta    = kind[3] look amount (u8)  lo[3] hi[3] def[3] (i32)   (with flag bit 1)
+//! ins     = n base (u8)  n × key (u8: `world::input_byte`)       (with flag bit 2)
 //! ```
+//!
+//! ABI 3 (after 1.0.0-beta.14): the store of tables and sprites holds 1,024
+//! numbers (a `TAB`'s and an `SPR`'s place byte counts fours:
+//! `program::store_at`), and the built-in inputs (`ins`, flag bit 2).
 //!
 //! A program is *portable*: laid out by the compiler but not narrowed or
 //! fused, and with no lane-loop marks (every `FOR`'s `c` 0). [`ABI`]
@@ -35,7 +41,7 @@
 use crate::fixed;
 use crate::meta::Meta;
 use crate::program::{
-    code, is_lane, lane_no, Op, Program, LANES, L_REG0, MAX_OPS, MAX_PALETTES, MAX_SCALARS,
+    code, is_lane, lane_no, Op, Prog, LANES, L_REG0, MAX_OPS, MAX_PALETTES, MAX_SCALARS,
     MAX_TABLE, REGS, S_FIRST_FREE, TWEEN_TEMPS, TW_HIGH, TW_LOW, USER_PALETTES, WIDE,
 };
 use alloc::string::String;
@@ -44,11 +50,12 @@ use alloc::vec::Vec;
 /// The program format and the meaning of its steps. Bumped with any change
 /// to either; the web app reads the player's from `/api/status`
 /// (`psi_abi`) and the www pack carries the compiler that writes it.
-pub const ABI: u8 = 2;
+pub const ABI: u8 = 3;
 
 const MAGIC: &[u8; 3] = b"PSB";
 const F_LOOK: u8 = 1;
 const F_META: u8 = 2;
+const F_INS: u8 = 4;
 /// A Formula's name: 60 characters (the compiler's `MAX_NAME_TEXT`), so
 /// at most this many bytes.
 pub const MAX_NAME: usize = 240;
@@ -62,6 +69,53 @@ pub const NOT_PSB: Refusal = "not a compiled Formula";
 pub const OTHER_ABI: Refusal =
     "this Formula was prepared for another version of OpenDMD: open the OpenDMD app to prepare it again";
 
+/// The program was loaded into a store too small for its numbers (a
+/// caller's mistake: [`store_needed`] says how big).
+pub const SMALL_STORE: Refusal = "a Formula's tables don't fit the store it was loaded into";
+/// The heap had no block for the program.
+pub const NO_HEAP: Refusal = "not enough memory for this Formula right now";
+
+/// The numbers program `which` of `b` keeps in its store (tables, sprites
+/// and texts): a [`Prog`] for it needs [`crate::store_words`] of this
+/// ([`load_boxed`] makes one).
+pub fn store_needed(b: &[u8], which: Which) -> Result<usize, Refusal> {
+    let body = body(b, which)?;
+    let mut r = Reader { b: body, at: 0 };
+    // The header: the four section ends (the steps' count last), the
+    // scalars' count, three bytes, the loop; then the steps and the init.
+    let h = r.take(16)?;
+    let n = u16::from_le_bytes([h[6], h[7]]) as usize;
+    let ns = h[8] as usize;
+    r.take(n * 5)?;
+    r.take(ns.saturating_sub(S_FIRST_FREE as usize) * 4)?;
+    let lo = r.u16()? as usize;
+    if lo > MAX_TABLE {
+        return Err(NOT_PSB);
+    }
+    Ok(lo)
+}
+
+/// Program `which` of `b` in a [`Prog`] of the store it needs, on the heap:
+/// loaded, checked and finished ([`load_into`]).
+pub fn load_boxed(b: &[u8], which: Which) -> Result<alloc::boxed::Box<Prog>, Refusal> {
+    let mut p = Prog::try_boxed(store_needed(b, which)?).ok_or(NO_HEAP)?;
+    load_into(b, which, &mut p)?;
+    Ok(p)
+}
+
+/// Program `which`'s bytes in `b` (after its length).
+fn body(b: &[u8], which: Which) -> Result<&[u8], Refusal> {
+    let (flags, _, at) = head(b)?;
+    let mut r = Reader { b, at };
+    let len = r.u16()? as usize;
+    let play = r.take(len)?;
+    if which == Which::Look && flags & F_LOOK != 0 {
+        let len = r.u16()? as usize;
+        return r.take(len);
+    }
+    Ok(play)
+}
+
 /// Which program of a file to load.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Which {
@@ -74,13 +128,18 @@ pub enum Which {
 
 /// The bytes for a Formula: its `name` and its programs (portable: see the
 /// module's docs; [`crate::compile_portable`] makes them).
-pub fn encode(name: &str, play: &Program, look: Option<&Program>) -> Vec<u8> {
+pub fn encode(name: &str, play: &Prog, look: Option<&Prog>) -> Vec<u8> {
     let mut o = Vec::with_capacity(1024);
     o.extend_from_slice(MAGIC);
     o.push(ABI);
     let meta =
         *play.meta() != Meta::default() || look.is_some_and(|l| *l.meta() != Meta::default());
-    o.push(if look.is_some() { F_LOOK } else { 0 } | if meta { F_META } else { 0 });
+    let ins = play.ins.n != 0 || look.is_some_and(|l| l.ins.n != 0);
+    o.push(
+        if look.is_some() { F_LOOK } else { 0 }
+            | if meta { F_META } else { 0 }
+            | if ins { F_INS } else { 0 },
+    );
     let cut = name
         .char_indices()
         .nth(60)
@@ -88,14 +147,14 @@ pub fn encode(name: &str, play: &Program, look: Option<&Program>) -> Vec<u8> {
         .min(MAX_NAME);
     o.push(cut as u8);
     o.extend_from_slice(&name.as_bytes()[..cut]);
-    put_program(&mut o, play, meta);
+    put_program(&mut o, play, meta, ins);
     if let Some(l) = look {
-        put_program(&mut o, l, meta);
+        put_program(&mut o, l, meta, ins);
     }
     o
 }
 
-fn put_program(o: &mut Vec<u8>, p: &Program, meta: bool) {
+fn put_program(o: &mut Vec<u8>, p: &Prog, meta: bool, ins: bool) {
     let at = o.len();
     o.extend_from_slice(&[0, 0]);
     for v in [p.frame_end, p.draw_end, p.row_end, p.pixel_end] {
@@ -136,16 +195,19 @@ fn put_program(o: &mut Vec<u8>, p: &Program, meta: bool) {
         o.extend_from_slice(&c.to_le_bytes());
     }
     let m = &p.meta;
-    if !meta {
-        let len = (o.len() - at - 2) as u16;
-        o[at..at + 2].copy_from_slice(&len.to_le_bytes());
-        return;
+    if meta {
+        o.extend_from_slice(&m.kind);
+        o.push(m.look);
+        o.push(m.amount);
+        for v in m.lo.iter().chain(&m.hi).chain(&m.def) {
+            o.extend_from_slice(&v.to_le_bytes());
+        }
     }
-    o.extend_from_slice(&m.kind);
-    o.push(m.look);
-    o.push(m.amount);
-    for v in m.lo.iter().chain(&m.hi).chain(&m.def) {
-        o.extend_from_slice(&v.to_le_bytes());
+    if ins {
+        let n = (p.ins.n as usize).min(crate::program::MAX_INS);
+        o.push(n as u8);
+        o.push(p.ins.base);
+        o.extend_from_slice(&p.ins.keys[..n]);
     }
     let len = (o.len() - at - 2) as u16;
     o[at..at + 2].copy_from_slice(&len.to_le_bytes());
@@ -192,7 +254,7 @@ fn head(b: &[u8]) -> Result<(u8, &str, usize), Refusal> {
     }
     let mut r = Reader { b, at: 4 };
     let flags = r.u8()?;
-    if flags & !(F_LOOK | F_META) != 0 {
+    if flags & !(F_LOOK | F_META | F_INS) != 0 {
         return Err(NOT_PSB);
     }
     let n = r.u8()? as usize;
@@ -217,12 +279,13 @@ pub fn has_look(b: &[u8]) -> Result<bool, Refusal> {
 /// Load program `which` of `b` into `prog`, check it ([`verify`]) and
 /// finish it for the player ([`Program::finish`]). On a refusal `prog` is
 /// left empty.
-pub fn load_into(b: &[u8], which: Which, prog: &mut Program) -> Result<(), Refusal> {
+pub fn load_into(b: &[u8], which: Which, prog: &mut Prog) -> Result<(), Refusal> {
     let r = load_raw(b, which, prog).and_then(|()| verify(prog));
     match r {
+        Ok(()) if prog.finish(true, true) => Ok(()),
         Ok(()) => {
-            prog.finish(true, true);
-            Ok(())
+            prog.clear();
+            Err(NO_HEAP)
         }
         Err(e) => {
             prog.clear();
@@ -234,7 +297,7 @@ pub fn load_into(b: &[u8], which: Which, prog: &mut Program) -> Result<(), Refus
 /// [`load_into`] without finishing (the program as encoded, verified):
 /// tests, and tools that re-encode.
 #[doc(hidden)]
-pub fn load_portable(b: &[u8], which: Which, prog: &mut Program) -> Result<(), Refusal> {
+pub fn load_portable(b: &[u8], which: Which, prog: &mut Prog) -> Result<(), Refusal> {
     let r = load_raw(b, which, prog).and_then(|()| verify(prog));
     if r.is_err() {
         prog.clear();
@@ -242,7 +305,7 @@ pub fn load_portable(b: &[u8], which: Which, prog: &mut Program) -> Result<(), R
     r
 }
 
-fn load_raw(b: &[u8], which: Which, prog: &mut Program) -> Result<(), Refusal> {
+fn load_raw(b: &[u8], which: Which, prog: &mut Prog) -> Result<(), Refusal> {
     let (flags, _, at) = head(b)?;
     let look = flags & F_LOOK != 0;
     let mut r = Reader { b, at };
@@ -296,6 +359,9 @@ fn load_raw(b: &[u8], which: Which, prog: &mut Program) -> Result<(), Refusal> {
     if lo > MAX_TABLE {
         return Err(NOT_PSB);
     }
+    if lo > prog.tables.len() {
+        return Err(SMALL_STORE);
+    }
     for k in 0..lo {
         prog.tables[k] = r.i32()?;
     }
@@ -314,27 +380,30 @@ fn load_raw(b: &[u8], which: Which, prog: &mut Program) -> Result<(), Refusal> {
         prog.pals[k] = r.u32()? & 0xff_ffff;
     }
     let mut m = Meta::default();
-    if flags & F_META == 0 {
-        prog.meta = m;
-        return if r.at == body.len() {
-            Ok(())
-        } else {
-            Err(NOT_PSB)
-        };
-    }
-    for k in 0..3 {
-        m.kind[k] = r.u8()?;
-    }
-    m.look = r.u8()?;
-    m.amount = r.u8()?;
-    for v in
-        m.lo.iter_mut()
-            .chain(m.hi.iter_mut())
-            .chain(m.def.iter_mut())
-    {
-        *v = r.i32()?;
+    if flags & F_META != 0 {
+        for k in 0..3 {
+            m.kind[k] = r.u8()?;
+        }
+        m.look = r.u8()?;
+        m.amount = r.u8()?;
+        for v in
+            m.lo.iter_mut()
+                .chain(m.hi.iter_mut())
+                .chain(m.def.iter_mut())
+        {
+            *v = r.i32()?;
+        }
     }
     prog.meta = m;
+    if flags & F_INS != 0 {
+        let n = r.u8()? as usize;
+        if n > crate::program::MAX_INS {
+            return Err(NOT_PSB);
+        }
+        prog.ins.n = n as u8;
+        prog.ins.base = r.u8()?;
+        prog.ins.keys[..n].copy_from_slice(r.take(n)?);
+    }
     if r.at != body.len() {
         return Err(NOT_PSB);
     }
@@ -344,14 +413,14 @@ fn load_raw(b: &[u8], which: Which, prog: &mut Program) -> Result<(), Refusal> {
 /// Check a portable program: everything the VM, the draw stage, the still
 /// cache, the slow layers and the JIT's lowering take as given from the
 /// compiler. Rejects, never repairs.
-pub fn verify(p: &Program) -> Result<(), Refusal> {
+pub fn verify(p: &Prog) -> Result<(), Refusal> {
     verify_codes(p, true)
 }
 
 /// [`verify`], with (`fused`) or without the fused compares among the
 /// steps it knows: without, as the ABI 2 players before P0b-4 check a
 /// program (their refusal of one that has them is the tests').
-fn verify_codes(p: &Program, fused: bool) -> Result<(), Refusal> {
+fn verify_codes(p: &Prog, fused: bool) -> Result<(), Refusal> {
     use code::*;
     let bad = Err("a damaged Formula: open the OpenDMD app to prepare it again");
     let (fe, de, re, pe) = (
@@ -373,6 +442,30 @@ fn verify_codes(p: &Program, fused: bool) -> Result<(), Refusal> {
     if verify_meta(&p.meta).is_err() {
         return bad;
     }
+    // The built-in inputs: known keys, each read once, in slots of their
+    // own after the fixed ones (none written by a step: below).
+    let ins = &p.ins;
+    if ins.n != 0 {
+        let keys = &ins.keys[..ins.n as usize];
+        if (ins.base as usize) < S_FIRST_FREE as usize
+            || ins.base as usize + keys.len() > ns
+            || keys.iter().any(|&b| {
+                b >> 6 > crate::world::WAS || crate::world::key_by_id(b & 63).is_none()
+            })
+            || keys.windows(2).any(|w| w[0] >= w[1])
+        {
+            return bad;
+        }
+    } else if ins.base != 0 {
+        return bad;
+    }
+    // (Its slots are the player's: no step writes one, nor counts in one.)
+    if p.ops[..pe].iter().any(|o| {
+        ((writes_scalar(o.code) || o.code == FOR) && ins.holds(o.d))
+            || (o.code == END && ins.holds(o.a))
+    }) {
+        return bad;
+    }
     let regs = p.regs;
     // A scalar operand: a slot in use. A lane: x, px, i or a register in use.
     let scalar = |v: u8| !is_lane(v) && (v as usize) < ns;
@@ -389,7 +482,7 @@ fn verify_codes(p: &Program, fused: bool) -> Result<(), Refusal> {
         let draw = (fe..de).contains(&k);
         let row = (de..re).contains(&k);
         // Steps the player works out itself (narrowing, fusing).
-        if matches!(c, ADD_W | SUB_W | MUL_W | MUL_N | SHR | FUSE) {
+        if matches!(c, ADD_W | SUB_W | MUL_W | MUL_N | SHR | DIV_S | FUSE) {
             return bad;
         }
         let known = matches!(c, 0..=LAST_BIN | ARGS..=TWEEN | GUARD | 32..=LAST_UN | PALIDX | W_FIRST..=W_LAST | 64..=LAST_TERN)
@@ -487,6 +580,28 @@ fn verify_codes(p: &Program, fused: bool) -> Result<(), Refusal> {
                 }
                 // Its END.
                 let e = op.target();
+                // Its count a constant while it runs (security review M9):
+                // END compares the counter with the live slot (`draw.rs`)
+                // and the frame's estimate multiplies by this initial
+                // value, so no step before the loop's end may write the
+                // slot or count in it — nor, in a loop inside another, any
+                // step before the outer loop's end (its next turn runs this
+                // one again). After that the compiler may reuse the slot.
+                let last = if depth == 1 {
+                    p.ops[fors[0]].target()
+                } else {
+                    e
+                };
+                // (Nor one the player fills: a built-in input, `seed`.)
+                if ins.holds(op.a)
+                    || (op.a == crate::program::S_SEED && p.uses & crate::program::SEEDED != 0)
+                    || p.ops[..=last.min(pe - 1)].iter().any(|o| {
+                        ((writes_scalar(o.code) || o.code == FOR) && o.d == op.a)
+                            || (o.code == END && o.a == op.a)
+                    })
+                {
+                    return bad;
+                }
                 if e <= k
                     || e >= de
                     || p.ops[e].code != END
@@ -620,7 +735,7 @@ fn verify_codes(p: &Program, fused: bool) -> Result<(), Refusal> {
         }
         match c {
             TAB => {
-                if op.b as usize + op.c as usize >= MAX_TABLE {
+                if crate::program::store_at(op.b) + op.c as usize >= p.tables.len() {
                     return bad;
                 }
             }
@@ -800,14 +915,32 @@ fn colour_ok(c: u8) -> bool {
     c >= OUT_RGB && (c < OUT_LAYER || c - OUT_LAYER < 4 * blends)
 }
 
-fn spr_ok(p: &Program, at: u8) -> bool {
-    let at = at as usize;
-    if at >= MAX_TABLE {
+/// A sprite's shape fits the store, and every pixel's key is one of its
+/// keys (security review M3): the JIT reads a pixel's key's number at
+/// `at + 1 + k` with no mask (`jit::lower`'s `sprite_read`), so `k` must
+/// stay below the key count (or be 0, which reads the sprite's own first
+/// word after its header: with no keys, a data word). The VM masks every
+/// read into the store anyway; the two then read the same word.
+fn spr_ok(p: &Prog, place: u8) -> bool {
+    let at = crate::program::store_at(place);
+    if at >= p.tables.len() {
         return false;
     }
-    let h = crate::program::SprHead::new(&p.tables, at as u8);
+    let h = crate::program::SprHead::new(&p.tables, place);
     let keys = ((p.tables[at] as u32) >> 20) & 31;
-    h.w >= 1 && h.w <= 64 && h.h >= 1 && h.h <= 32 && keys <= 16 && at + h.words() <= MAX_TABLE
+    if !(h.w >= 1 && h.w <= 64 && h.h >= 1 && h.h <= 32 && keys <= 16)
+        || at + h.words() > p.tables.len()
+    {
+        return false;
+    }
+    let (bits, per) = (1u32 << h.lb, 1u32 << h.lg);
+    (0..h.h).all(|y| {
+        (0..h.w).all(|x| {
+            let w = p.tables[h.data + y as usize * h.wpr + (x >> h.lg) as usize] as u32;
+            let k = (w >> ((x & (per - 1)) * bits)) & ((1 << bits) - 1);
+            k == 0 || k < keys
+        })
+    })
 }
 
 fn verify_meta(m: &Meta) -> Result<(), ()> {
@@ -957,21 +1090,23 @@ mod tests {
     use super::*;
     use crate::{compile, golden, render_rows_still, Ink, Scratch, Still, H, W};
 
+    const DAMAGED: Refusal = "a damaged Formula: open the OpenDMD app to prepare it again";
+
     #[test]
     fn a_built_formula_loads_as_the_compiled_program() {
         for (name, src) in sources() {
             let b = crate::build(&src).unwrap_or_else(|e| panic!("{name}: {}", e.render(&src)));
-            let mut p = Program::default();
+            let mut p = crate::program::Program::default();
             load_into(&b, Which::Play, &mut p).unwrap_or_else(|e| panic!("{name}: {e}"));
             assert!(
                 p == compile(&src).unwrap(),
                 "{name}: loaded program differs"
             );
-            let mut l = Program::default();
+            let mut l = crate::program::Program::default();
             load_into(&b, Which::Look, &mut l).unwrap();
             match p.meta().look() {
                 Some((b, a)) if b != "over" || a < 100 => {
-                    let mut c = Program::default();
+                    let mut c = crate::program::Program::default();
                     crate::compile_look(&src, &mut c).unwrap();
                     c.finish(true, true);
                     assert!(l == c, "{name}: look differs");
@@ -999,7 +1134,7 @@ mod tests {
         assert!(k.1.is_none());
         assert!(k.try_fit(&paint) && k.1.is_some());
         assert!(k.try_fit(&lines) && k.1.is_none());
-        let frame = |p: &Program, k: &mut Ink| {
+        let frame = |p: &Prog, k: &mut Ink| {
             let mut out = alloc::vec![0u8; W * H * 3];
             crate::render_rows_ink::<128>(
                 p,
@@ -1033,7 +1168,7 @@ mod tests {
     /// plane by the flag).
     #[test]
     fn paint_steps_without_the_flag_are_refused() {
-        let mut b = Program::default();
+        let mut b = crate::program::Program::default();
         load_portable(
             &crate::build("draw { circfill(64, 16, 10, #f00) }").unwrap(),
             Which::Play,
@@ -1054,9 +1189,9 @@ mod tests {
         let src = "k = (px >= 40) + (px >= 80)\nr = (py < 16) * 0.5\ngray(k*0.4 + r)";
         let b = crate::build(src).unwrap();
         assert_eq!(b[3], ABI);
-        let mut p = Program::default();
+        let mut p = crate::program::Program::default();
         load_portable(&b, Which::Play, &mut p).unwrap();
-        let has = |p: &Program| {
+        let has = |p: &Prog| {
             p.ops[..p.len()]
                 .iter()
                 .any(|o| (code::CMP_FIRST..=code::CMP_LAST).contains(&o.code))
@@ -1070,13 +1205,114 @@ mod tests {
         );
         // A program without them is the same to both.
         let plain = crate::build("gray(x)").unwrap();
-        let mut q = Program::default();
+        let mut q = crate::program::Program::default();
         load_portable(&plain, Which::Play, &mut q).unwrap();
         assert!(!has(&q) && verify_codes(&q, false).is_ok());
         // And loaded whole, it draws.
-        let mut f = Program::default();
+        let mut f = crate::program::Program::default();
         load_into(&b, Which::Play, &mut f).unwrap();
         draw(&f, 0);
+    }
+
+    /// The bytes of `src` with `f` applied to its portable program, as a
+    /// crafted `.psb` would carry them.
+    fn crafted(src: &str, f: &dyn Fn(&mut crate::program::Program)) -> Vec<u8> {
+        let mut p = crate::program::Program::default();
+        load_portable(&crate::build(src).unwrap(), Which::Play, &mut p).unwrap();
+        assert!(verify(&p).is_ok());
+        f(&mut p);
+        encode("crafted", &p, None)
+    }
+
+    /// Security review M3: a sprite's pixels name its keys. The review's
+    /// case (a 1 × 1 sprite of 4-bit pixels and no keys, its one pixel 15,
+    /// at the end of a 1,024-number store) and a pixel past a real key
+    /// count are refused; the JIT's unmasked key read could otherwise go
+    /// 13 words past the store.
+    #[test]
+    fn a_sprite_pixel_past_its_keys_is_refused() {
+        let src = "sprite s {\nkey A 0.25, B 0.5, C 0.75\nABC\nCBA\n}\ngray(s[px/8, py/8])";
+        let ok = crafted(src, &|_| {});
+        let mut p = crate::program::Program::default();
+        assert!(load_into(&ok, Which::Play, &mut p).is_ok());
+        let spr = |p: &crate::program::Program| {
+            p.ops[..p.len()]
+                .iter()
+                .find(|o| o.code == code::SPR)
+                .unwrap()
+                .c
+        };
+        // Pixel 0 of row 0 made 3 (2 bits a pixel, 3 keys: 0..=2).
+        let bad = crafted(src, &|p| {
+            let at = crate::program::store_at(spr(p));
+            let data = at + 1 + 3;
+            p.tables[data] |= 3;
+        });
+        assert_eq!(load_into(&bad, Which::Play, &mut p).err(), Some(DAMAGED));
+        // The review's: the store's last place, w = h = 1, lb = 2, no keys,
+        // the pixel 15.
+        let review = crafted("table t = 1, 2\ngray(t[x])", &|p| {
+            let at = MAX_TABLE - 4;
+            p.tables[at] = 1 | 1 << 8 | 2 << 16;
+            p.tables[at + 1] = 0xf;
+            let k = p.len() - 1;
+            let col = p.ops[k];
+            // A sprite read in the pixel step before the colour.
+            p.ops[k - 1] = Op {
+                code: code::SPR,
+                d: p.ops[k - 1].d,
+                a: p.ops[k - 1].a,
+                b: p.ops[k - 1].a,
+                c: (at / 4) as u8,
+            };
+            p.ops[k] = col;
+        });
+        assert_eq!(load_into(&review, Which::Play, &mut p).err(), Some(DAMAGED));
+        // The same with its pixel 0 is a sprite like any other.
+        let fine = crafted("table t = 1, 2\ngray(t[x])", &|p| {
+            let at = MAX_TABLE - 4;
+            p.tables[at] = 1 | 1 << 8 | 2 << 16;
+            p.tables[at + 1] = 0;
+            let k = p.len() - 1;
+            p.ops[k - 1] = Op {
+                code: code::SPR,
+                d: p.ops[k - 1].d,
+                a: p.ops[k - 1].a,
+                b: p.ops[k - 1].a,
+                c: (at / 4) as u8,
+            };
+        });
+        assert!(load_into(&fine, Which::Play, &mut p).is_ok());
+    }
+
+    /// Security review M9: a draw loop's count is a constant. A step that
+    /// writes the FOR's count slot (here the loop's own body setting it
+    /// to 1,024 after the estimate counted 1) is refused.
+    #[test]
+    fn a_draw_loop_count_written_by_a_step_is_refused() {
+        let src = "draw { for k < 2 { dot(k, 0, 1) } }\ngray(ink)";
+        let ok = crafted(src, &|_| {});
+        let mut p = crate::program::Program::default();
+        assert!(load_into(&ok, Which::Play, &mut p).is_ok());
+        let bad = crafted(src, &|p| {
+            let (fe, de) = (p.frame_end as usize, p.draw_end as usize);
+            let f = (fe..de).find(|&k| p.ops[k].code == code::FOR).unwrap();
+            let count = p.ops[f].a;
+            // A new constant slot of 1,024 and a step in the body copying it
+            // into the count: the body's DOT becomes `count = max(big, big)`.
+            let big = p.n_scalars;
+            p.n_scalars += 1;
+            p.init[big as usize] = 1024 << 16;
+            let dot = (f + 1..de).find(|&k| p.ops[k].code == code::DOT).unwrap();
+            p.ops[dot] = Op {
+                code: code::MAX,
+                d: count,
+                a: big,
+                b: big,
+                c: 0,
+            };
+        });
+        assert_eq!(load_into(&bad, Which::Play, &mut p).err(), Some(DAMAGED));
     }
 
     #[test]
@@ -1087,7 +1323,7 @@ mod tests {
         assert_eq!(name(b"GIF89a"), Err(NOT_PSB));
     }
 
-    fn draw(p: &Program, ms: u32) {
+    fn draw(p: &Prog, ms: u32) {
         let mut s = Scratch::<128>::new();
         let mut ink = Ink::boxed();
         let mut st = Still::new();
@@ -1140,7 +1376,7 @@ mod tests {
             let b = crate::build(&src).unwrap();
             for _ in 0..200 {
                 let m = mutate(&mut r, &b);
-                let mut p = Program::default();
+                let mut p = crate::program::Program::default();
                 tried += 1;
                 if load_into(&m, Which::Play, &mut p).is_ok() {
                     taken += 1;

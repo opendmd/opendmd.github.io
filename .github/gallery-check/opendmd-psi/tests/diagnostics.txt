@@ -221,7 +221,7 @@ gray(y)
 
 === E304
 #f00 + gray(x)
---- 1:8 `gray(…)` is a whole colour: it can't be added to others (only `#…` and `rgb(r, g, b)` can)
+--- 1:8 `gray(…)` is a whole colour: it can't be combined with others by `+`, `*`, `? :` or a function (only `#…` and `rgb(r, g, b)` can, as `c ? #f80 : #000`)
 
 === E305
 cycle(fire, x, t) + 1
@@ -360,7 +360,7 @@ gray(1)
 === E707
 table T = 1, x
 gray(T[0])
---- 1:14 a table holds numbers only, up to 256 in all, as in `table T = 1, -2, 0.5`
+--- 1:14 a table holds numbers only, as in `table T = 1, -2, 0.5`
 
 === E708
 draw { dot(x, 1) }
@@ -582,7 +582,10 @@ pal(p9, x)
 --- 9:1 a formula can have 8 palettes of its own at most
 
 === E924
-table T = <<250;, ;{k}>>
+table T = <<254;, ;{k}>>
+table U = <<254;, ;{k}5>>
+table V = <<254;, ;{k}6>>
+table X = <<254;, ;{k}7>>
 sprite s {
   key . 0, X 1
   <<64*X>>
@@ -590,8 +593,8 @@ sprite s {
   <<64*X>>
   <<64*X>>
 }
-gray(s[px, py] + T[x])
---- 2:1 tables and sprites hold 256 numbers in all — this would make 261
+gray(s[px, py] + T[x] + U[x] + V[x] + X[x])
+--- 5:1 tables and sprites hold 1024 numbers in all — this would make 1035
 
 === E925
 palette sea = deep #003, deep #06c
@@ -825,6 +828,25 @@ layer = 1
 gray(x)
 --- 1:1 `layer` is a word of the language; pick another name
 
+=== E215
+fn sin(a) = a*2
+gray(sin(x))
+--- 1:4 `sin(…)` is a built-in function: a `fn` takes a name of its own
+
+=== E216
+sun = 1
+gray(sun)
+--- 1:1 `sun` is the built-in inputs' name (sun.alt); pick another name
+
+=== E217
+daylight = 0.5
+gray(since(daylight))
+--- 2:12 `daylight` is this formula's own value here: `since(…)` reads a built-in input, so give yours another name
+
+=== E218
+gray(0 < x < 0.5)
+--- 1:12 comparisons don't chain: write `0 < x and x < 0.5` (`0 < x < 0.5` would compare `0 < x`, 1 or 0, with 0.5)
+
 === E301
 frame {
 k = t
@@ -858,9 +880,12 @@ draw { print("0123456789012345678901234567890123", 1, 1, #fff) }
 
 === E725
 table T = <<253;, ;{k}>>
+table U = <<253;, ;{k}5>>
+table V = <<253;, ;{k}6>>
+table X = <<253;, ;{k}7>>
 draw { print("HELLO", 1, 1, #fff) }
-gray(T[0])
---- 2:14 this text doesn't fit: tables, sprites and texts hold 256 numbers in all
+gray(T[0] + U[0] + V[0] + X[0])
+--- 5:14 this text doesn't fit: tables, sprites and texts hold 1024 numbers in all
 
 === E726
 draw { print("A", 1, 1, #fff, huge) }
@@ -973,3 +998,21 @@ scene s when t > 1 {
 layer rate 4 { gray(v) }
 layer add { gray(y*0.1) }
 --- 6:13 a `rate` layer can't read a scene's per-pixel values: work them out outside the scene, or leave `rate` out
+
+=== E974
+table T = <<257;, ;{k}>>
+gray(T[x])
+--- 1:1 a table holds 256 numbers at most — this one has 257: split it in two
+
+=== E975
+gray(sun.height)
+--- 1:10 `sun.height` is not a built-in input: `sun` has sun.alt
+
+=== E976
+v = 0.5
+gray(since(v))
+--- 2:12 `since(…)` takes a built-in input's name, as in `since(replay.game)`: daylight, sun.alt, moon.phase, season, yearday, night, bright, replay.playing, replay.platform, replay.game
+
+=== E977
+gray((daylight + sun.alt + moon.phase + season + yearday + night + bright + replay.playing + replay.platform + replay.game + since(daylight) + since(sun.alt) + since(moon.phase) + since(season) + since(yearday) + since(night) + since(bright) + since(replay.playing) + since(replay.platform) + since(replay.game) + was(daylight) + was(sun.alt) + was(moon.phase) + was(season) + was(yearday)) * x)
+--- 1:1 a formula can read 24 built-in inputs at most (each `since` and `was` one more) — this one reads 25

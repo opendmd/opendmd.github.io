@@ -89,14 +89,14 @@ impl Still {
 
     /// The heap `prog`'s cache takes (16 KB a value; 0 for a formula
     /// without cached values).
-    pub fn bytes_for(prog: &Program) -> usize {
+    pub fn bytes_for(prog: &Prog) -> usize {
         prog.still_lanes() * core::mem::size_of::<StillLane>()
     }
 
     /// Take the lanes `prog` needs (any it doesn't are let go): `false`,
     /// and none held, when the heap hasn't them or the formula has no
     /// cached values. Nothing is kept until the next full frame.
-    pub fn take(&mut self, prog: &Program) -> bool {
+    pub fn take(&mut self, prog: &Prog) -> bool {
         let n = prog.still_lanes();
         self.kept = 0;
         for (k, l) in self.lanes.iter_mut().enumerate() {
@@ -131,12 +131,12 @@ impl Still {
 
     /// Whether the lanes hold `prog`'s values (a full frame of it has been
     /// drawn since they were taken).
-    pub fn holds(&self, prog: &Program) -> bool {
+    pub fn holds(&self, prog: &Prog) -> bool {
         self.kept != 0 && self.kept == fingerprint(prog)
     }
 
     /// The lanes, if there are enough for `prog`.
-    pub(crate) fn lanes_for(&self, prog: &Program) -> bool {
+    pub(crate) fn lanes_for(&self, prog: &Prog) -> bool {
         let n = prog.still_lanes();
         n > 0 && self.lanes[..n].iter().all(Option::is_some)
     }
@@ -147,7 +147,7 @@ impl Still {
 /// the entries of the tables they read, and the constants. Never 0. A program changed in place (a live edit)
 /// that the player forgot to tell the cache about is noticed here, so a
 /// frame is never drawn from another formula's values.
-pub(crate) fn fingerprint(prog: &Program) -> u32 {
+pub(crate) fn fingerprint(prog: &Prog) -> u32 {
     let Some(k) = prog.still_marker() else {
         return 0;
     };
@@ -167,10 +167,10 @@ pub(crate) fn fingerprint(prog: &Program) -> u32 {
         // them).
         // (A sprite's words, its header first.)
         let (a, n) = match op.code {
-            code::TAB => (op.b as usize, op.c as usize + 1),
+            code::TAB => (crate::program::store_at(op.b), op.c as usize + 1),
             code::SPR => {
                 let h = crate::program::SprHead::new(&prog.tables, op.c);
-                (op.c as usize, h.words())
+                (crate::program::store_at(op.c), h.words())
             }
             _ => (0, 0),
         };

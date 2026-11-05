@@ -7,6 +7,19 @@
 
 use super::*;
 
+/// A whole number with thousands' commas.
+fn group(v: i64) -> String {
+    let d = v.to_string();
+    let mut o = String::new();
+    for (k, ch) in d.chars().enumerate() {
+        if k > 0 && (d.len() - k).is_multiple_of(3) {
+            o.push(',');
+        }
+        o.push(ch);
+    }
+    o
+}
+
 /// Source text for a note, cut to 40 characters.
 fn short(s: &str) -> String {
     match s.char_indices().nth(40) {
@@ -263,6 +276,7 @@ impl<'s> Parser<'s> {
                 ));
             }
         }
+        notes.extend(self.saturation_notes(prog));
         // Draw loops run as lanes: costed for 128 turns a lane.
         prog.mark_lane_loops();
         for (k, (count, lanes)) in prog.draw_loops().into_iter().enumerate() {
@@ -308,6 +322,154 @@ impl<'s> Parser<'s> {
                 sink.note((*a, *b), t);
             }
         }
+    }
+
+    /// Language review B1: a `+ − *` whose exact result can pass the ends
+    /// of the number range for the inputs in theirs (so it is held there,
+    /// silently) and whose value goes into something that cares about it
+    /// (`frac`, `%`, a wave, `noise`, `hash`, a later `*` or `/`); not one
+    /// that goes only into a clamp, a compare or a colour, where a held
+    /// value is the point (`gray(x*30000)`). Intervals over the DAG, as
+    /// `range` has them over the laid-out program. At most three notes.
+    fn saturation_notes(&self, prog: &Program) -> Vec<(usize, usize, String)> {
+        use crate::range::{add_iv, mul_iv, sub_iv, value, Iv, FULL_IV};
+        let dag = &self.dag;
+        let mut out = Vec::new();
+        if dag.forever {
+            return out;
+        }
+        let n = dag.nodes.len();
+        let unit = Iv(0, ONE as i64);
+        let declared = prog.meta.declared();
+        let input = |v: i32| -> Iv {
+            let v = v as u8;
+            if is_lane(v) {
+                return match lane_no(v) {
+                    L_X => unit,
+                    L_PX => Iv(0, 127 * ONE as i64),
+                    L_I => Iv(0, 4095 * ONE as i64),
+                    _ => FULL_IV,
+                };
+            }
+            match v {
+                S_Y => unit,
+                S_PY => Iv(0, 31 * ONE as i64),
+                S_T => Iv(0, i64::from(prog.loop_ms) * ONE as i64 / 1000),
+                S_HOUR => Iv(0, 23 * ONE as i64),
+                S_MINUTE | S_SECOND => Iv(0, 59 * ONE as i64),
+                S_A | S_B | S_C if declared & (1 << (v - S_A)) == 0 => unit,
+                S_SEED => unit,
+                _ => FULL_IV,
+            }
+        };
+        // (An interval reaching an end is one `range` could not bound,
+        // `len`'s or `sqrt`'s: no note from it.)
+        let known = |v: Iv| v.0 > i64::from(i32::MIN) && v.1 < i64::from(i32::MAX);
+        let mut iv = alloc::vec![FULL_IV; n];
+        let mut raw = alloc::vec![false; n];
+        for i in 0..n {
+            let m = &dag.nodes[i];
+            iv[i] = match m.code {
+                K_CONST => Iv::point(m.val),
+                K_INPUT => match key_byte(m) {
+                    Some(b) => {
+                        let (lo, hi) = crate::world::range(b & 63, b >> 6);
+                        Iv(i64::from(lo), i64::from(hi))
+                    }
+                    None => input(m.val),
+                },
+                c if c >= K_CONST => FULL_IV,
+                code::TAB | code::SPR | code::PICK => FULL_IV,
+                c => {
+                    let ar = code::arity(c);
+                    let g = |k: usize, x: Id| if k < ar { iv[x as usize] } else { Iv::point(0) };
+                    let (a, b, cc) = (g(0, m.a), g(1, m.b), g(2, m.c));
+                    // A loop's counter or a value of one: not known here.
+                    if m.level == LV_LOOP1 || m.level == LV_LOOP2 {
+                        FULL_IV
+                    } else {
+                        raw[i] = match c {
+                            code::ADD => !add_iv(a, b).fits(),
+                            code::SUB => !sub_iv(a, b).fits(),
+                            code::MUL => !mul_iv(a, b).fits(),
+                            _ => false,
+                        } && known(a)
+                            && known(b);
+                        let op = Op { code: c, d: 0, a: 0, b: 0, c: 0 };
+                        value(&op, a, b, cc, &[0])
+                    }
+                }
+            };
+        }
+        let cares = |c: u8| {
+            matches!(
+                c,
+                code::FRAC
+                    | code::MOD
+                    | code::MASK
+                    | code::SIN
+                    | code::COS
+                    | code::TRI
+                    | code::SAW
+                    | code::SQR
+                    | code::NOISE
+                    | code::HASH
+                    | code::MUL
+                    | code::DIV
+            )
+        };
+        for (i, _) in raw.iter().enumerate().filter(|r| *r.1) {
+            if out.len() >= 3 {
+                break;
+            }
+            let Some(user) = (0..n).find(|&j| {
+                let m = &dag.nodes[j];
+                m.code < K_CONST && cares(m.code) && reads(dag, j).any(|x| x as usize == i)
+            }) else {
+                continue;
+            };
+            let Some(&(_, a, b)) = dag.made.iter().find(|m| m.0 as usize == i) else {
+                continue;
+            };
+            let m = &dag.nodes[i];
+            let (x, y) = (iv[m.a as usize], iv[m.b as usize]);
+            let exact = match m.code {
+                code::ADD => add_iv(x, y),
+                code::SUB => sub_iv(x, y),
+                _ => mul_iv(x, y),
+            };
+            let reach = (exact.1.max(-exact.0) >> 16).max(32768);
+            let what = match dag.nodes[user].code {
+                code::MUL => "*",
+                code::DIV => "/",
+                code::MOD | code::MASK => "%",
+                c => code::name(c),
+            };
+            out.push((
+                a,
+                b,
+                {
+                    let kind = match m.code {
+                        code::MUL => "this product",
+                        _ => "this sum",
+                    };
+                    let named = self
+                        .locals
+                        .iter()
+                        .rposition(|l| l.id as usize == i && !l.counter)
+                        .map(|k| format!("`{}`", self.locals[k].name));
+                    let ls = self.src[..a].rfind('\n').map_or(0, |k| k + 1);
+                    let le = self.src[b..].find('\n').map_or(self.src.len(), |k| b + k);
+                    let line = short(sub(self.src, ls, le).trim());
+                    format!(
+                        "{} can pass ±32,768 (to about {} here, in `{line}`) and is then held at the end: the `{what}` it goes into sees a flat value there. Scale it down before it grows (divide first, or use smaller units)",
+                        named.unwrap_or_else(|| kind.to_string()),
+                        group(reach)
+                    )
+                },
+            ));
+        }
+        out
     }
 
     /// Radians in a wave (`sin(x*6.28)`, a habit from other languages):

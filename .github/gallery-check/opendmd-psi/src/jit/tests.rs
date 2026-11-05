@@ -6,7 +6,7 @@
 use super::emu::EmuTarget;
 use super::lower::{lower, Lowered};
 use super::{check_rows, frame, CHECK_ROWS};
-use crate::program::{Program, H, W};
+use crate::program::{Prog, Program, H, W};
 use crate::still::Still;
 use crate::tables::OWN;
 use crate::vm::{Inputs, Scratch};
@@ -35,7 +35,7 @@ fn picture() -> Vec<u8> {
 
 /// A frame through the kernel (`still` as the player passes it).
 fn kernel_frame(
-    prog: &Program,
+    prog: &Prog,
     low: &Lowered,
     inputs: &Inputs,
     still: Option<&mut Still>,
@@ -48,7 +48,7 @@ fn kernel_frame(
 /// [`kernel_frame`] over `before` (the picture held before; zeros if
 /// `None`), and what changed when `before` is given.
 fn kernel_frame_changed(
-    prog: &Program,
+    prog: &Prog,
     low: &Lowered,
     inputs: &Inputs,
     still: Option<&mut Still>,
@@ -60,7 +60,7 @@ fn kernel_frame_changed(
 
 /// [`kernel_frame_changed`], racing the beam when `sink` is given.
 fn kernel_frame_beam(
-    prog: &Program,
+    prog: &Prog,
     low: &Lowered,
     inputs: &Inputs,
     still: Option<&mut Still>,
@@ -111,7 +111,7 @@ fn bytemuck_bytes(w: &mut [u32]) -> &mut [u8] {
     unsafe { core::slice::from_raw_parts_mut(w.as_mut_ptr().cast::<u8>(), w.len() * 4) }
 }
 
-fn vm_frame(prog: &Program, inputs: &Inputs, still: Option<&mut Still>, with: With) -> Vec<u8> {
+fn vm_frame(prog: &Prog, inputs: &Inputs, still: Option<&mut Still>, with: With) -> Vec<u8> {
     let mut s = Scratch::<128>::new();
     let mut out = vec![0u8; W * H * 3];
     let mut ink = with.ink.then(Ink::boxed);
@@ -142,7 +142,7 @@ fn first_diff(a: &[u8], b: &[u8]) -> Option<(usize, usize, [u8; 3], [u8; 3])> {
 /// The kernel's frames against the VM's at `times` (ms), plain and with
 /// the still cache (kept, then used): `None` when the formula is refused
 /// (the reason), else the instructions a pixel the kernel took.
-fn same_as_vm(name: &str, src: &str, prog: &Program, times: &[u32]) -> Result<f64, &'static str> {
+fn same_as_vm(name: &str, src: &str, prog: &Prog, times: &[u32]) -> Result<f64, &'static str> {
     let u = picture();
     // Over the picture (what a look draws over), with a canvas if it draws.
     same_as_vm_with(
@@ -163,7 +163,7 @@ fn same_as_vm(name: &str, src: &str, prog: &Program, times: &[u32]) -> Result<f6
 fn same_as_vm_with(
     name: &str,
     src: &str,
-    prog: &Program,
+    prog: &Prog,
     times: &[u32],
     with: With,
 ) -> Result<f64, &'static str> {
@@ -1279,6 +1279,120 @@ fn road_v2_draws_the_same_through_kernels() {
                     "road-v2 over a picture, {t} s"
                 );
             }
+        }
+    }
+}
+
+/// The built-in inputs (frame slots the driver fills) and the store past
+/// 256 numbers, in a whole program's store and in the player's smaller one
+/// (the helpers mask by its length), through kernels.
+#[test]
+fn built_ins_and_the_big_store_draw_the_same_through_kernels() {
+    let filler: Vec<String> = (0..250).map(|k| format!("{}", k % 9)).collect();
+    let big = format!(
+        "table F0 = {f}, 0.5\ntable F1 = {f}, 0.25\ntable F2 = {f}, 0.75\n",
+        f = filler.join(", ")
+    );
+    let cases = [
+        String::from("hsv(replay.game + x*0.3, 1 - night*0.5, daylight * y + since(replay.game)*0.01)"),
+        String::from("v = sun.alt*4\ngray(clamp(v + y - 0.5, 0, 1) * bright + was(night)*x)"),
+        format!("{big}table T = 0.1, 0.5, 0.9, 0.3\ngray(T[x * 4 + t] * daylight + F2[px % 251] * 0.05)"),
+        format!("{big}sprite s {{\nkey . 0, X 1, Y 0.5\nXY.XY.XY.XY.XY.XY.\n.XYXY.XYXY.XYXY.XY\n}}\ngray(s[x * 18 + t, y * 3] * (0.5 + moon.phase) + F1[py])"),
+    ];
+    let mut worlds = vec![crate::World::default()];
+    let mut w = crate::World::default();
+    for (k, key) in crate::world::KEYS.iter().enumerate() {
+        w.change(key.id, key.lo + (key.hi - key.lo) / (k as i32 + 2));
+        w.since[key.id as usize] = (k as i32) << 14;
+    }
+    worlds.push(w);
+    for src in &cases {
+        let full = compile(src).unwrap_or_else(|e| panic!("{src}: {}", e.msg));
+        let b = crate::build(src).unwrap();
+        let small = crate::psb::load_boxed(&b, crate::psb::Which::Play).unwrap();
+        for prog in [&*full as &Prog, &*small] {
+            let low = lower(prog).unwrap_or_else(|e| panic!("{src}: {e}"));
+            for w in &worlds {
+                for ms in [0, 1234, 5000] {
+                    let mut inputs = golden::inputs(ms);
+                    inputs.set_ms(prog, u64::from(ms));
+                    inputs.world = *w;
+                    let want = vm_frame(prog, &inputs, None, PLAIN);
+                    let (got, _) = kernel_frame(prog, &low, &inputs, None, PLAIN);
+                    assert!(first_diff(&got, &want).is_none(), "{src} at {ms} ms (store {})", prog.store_len());
+                }
+            }
+        }
+    }
+}
+
+/// The kernel's inline table and sprite reads (no helper call): sprites
+/// and tables at the store's start and past 750 numbers, read at a row's
+/// value, a constant and per pixel, out of range both ways (below 0, past
+/// the end), with a multiply after them in the same pixel loop (the sprite
+/// read moves SAR, which the multiplies hoist).
+#[test]
+fn inline_table_and_sprite_reads_draw_as_the_vm() {
+    let filler: Vec<String> = (0..250).map(|k| format!("{}", k % 9)).collect();
+    for pre in [0usize, 1, 3] {
+        let mut big = String::new();
+        for j in 0..pre {
+            big += &format!("table F{j} = {}, {j}.5\n", filler.join(", "));
+        }
+        for v in ["y * 3", "py % 2", "0", "y * 2.5 - 0.5"] {
+            let src = format!(
+                "{big}table T = 0.1, 0.5, 0.9, 0.3\nsprite s {{\nkey . 0, X 1, Y 0.5\nXY.XY.XY.XY.XY.XY.\n.XYXY.XYXY.XYXY.XY\n}}\n\
+                 gray(s[x * 20 - 1, {v}] * 0.5 + T[x * 6 - 1] * 0.3 + (x * 0.7) * (y * 0.3))"
+            );
+            let p = compile(&src).unwrap();
+            let low = lower(&p).unwrap_or_else(|e| panic!("{src}: {e}"));
+            for ms in [0, 2500] {
+                let mut inputs = golden::inputs(ms);
+                inputs.set_ms(&p, u64::from(ms));
+                let want = vm_frame(&p, &inputs, None, PLAIN);
+                let (got, _) = kernel_frame(&p, &low, &inputs, None, PLAIN);
+                assert!(first_diff(&got, &want).is_none(), "{src} at {ms} ms: {:?}", first_diff(&got, &want));
+            }
+        }
+    }
+}
+
+/// `div_s` (a lane divided by a scalar, language review A1) through the
+/// kernel's every form against the VM's `fixed::DivBy`: a shift, a magic
+/// number, a constant 0, a constant with neither, and a frame's or a row's
+/// divisor known past ±1 or not at all (0, tiny, negative), with the
+/// sliders swept.
+#[test]
+fn divisions_by_a_scalar_draw_as_the_vm() {
+    let srcs = [
+        "gray(frac(px/3) + frac(px/7) + frac((px - 64)/10) + frac((px - 64)/-3))",
+        "gray(frac((px - 64)/8) + frac((px - 64)/-4) + frac(px/16384) + frac((px - 64)/-16384))",
+        "gray(frac((px - 64)/2.5) + frac((px - 64)/0.3) + frac((px - 64)/0.0003) + frac((px - 64)/-0.7))",
+        "gray(frac((px - 64)/1.7) + frac((px - 64)/127.3) + frac((px - 64)/255.9) + frac(x/1.0001))",
+        "gray((px - 64)/0 + 0.5)",
+        "gray(frac(px/8 + px/-4 + (px + py)/7 + px/-10 + x/0.5 + py*px/2.5))",
+        "s = a*4 + 1.5\ngray(frac((px - 64)/s))",
+        "s = a - 0.5\ngray(frac((px - 64)*0.01/s) + (px - 64)/s/10000)",
+        "s = -a*3 - 1.25\ngray(frac((px - 64)/s))",
+        "s = floor(y*4) - 2\ngray(frac((px - 64)/s) + (px - 64)/s/10000)",
+        "s = (y - 0.5)*0.001\ngray(frac(x/s) + x/s/10000)",
+        "s = (y - 0.5)*0.00002\ngray(frac(x/s) + x/s/10000)",
+        "s = t - 2\ngray(frac((px - 64)/s) + (px - 64)/s/10000)",
+    ];
+    for src in srcs {
+        let p = compile(src).unwrap();
+        assert!(p.listing().contains("div_s"), "{src}\n{}", p.listing());
+        let low = lower(&p).unwrap_or_else(|e| panic!("{src}: {e}"));
+        for (ms, a) in [(0, 0), (700, 1 << 14), (2000, 1 << 15), (2600, 3 << 14), (3999, 1 << 16)] {
+            let mut inputs = golden::inputs(ms);
+            inputs.set_ms(&p, u64::from(ms));
+            inputs.a = a;
+            if !crate::range::inputs_in_range(&p, &inputs) {
+                continue;
+            }
+            let want = vm_frame(&p, &inputs, None, PLAIN);
+            let (got, _) = kernel_frame(&p, &low, &inputs, None, PLAIN);
+            assert!(first_diff(&got, &want).is_none(), "{src} at {ms} ms, a {a}: {:?}\n{}", first_diff(&got, &want), p.listing());
         }
     }
 }

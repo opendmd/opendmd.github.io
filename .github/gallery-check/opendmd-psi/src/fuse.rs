@@ -226,7 +226,7 @@ fn dead(ops: &[Op], r: u8) -> bool {
 /// a `floor`. A fused run before it writes only its last step's register
 /// (its others are dead after it, so `r` is none of them).
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-fn floored(prog: &Program, re: usize, k: usize) -> bool {
+fn floored(prog: &Prog, re: usize, k: usize) -> bool {
     let (fy, add) = (&prog.ops[k], &prog.ops[k + 1]);
     let r = if add.a == fy.d { add.b } else { add.a };
     prog.ops[re..k]
@@ -239,7 +239,7 @@ fn floored(prog: &Program, re: usize, k: usize) -> bool {
 /// Put a marker before each run the VM may fuse (see the module).
 #[inline(never)]
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-pub(crate) fn fuse(prog: &mut Program) {
+pub(crate) fn fuse(prog: &mut Prog) {
     let (re, pe) = (prog.row_end as usize, prog.len().min(MAX_OPS));
     let mut start = re.max(prog.column_run().end);
     if let Some(k) = prog.still_marker() {

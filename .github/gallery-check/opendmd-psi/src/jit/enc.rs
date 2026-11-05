@@ -289,6 +289,12 @@ impl Code {
         }
         self.rrr(0, sa >> 4, sa & 15, 4, 0, 4);
     }
+    /// SAR = as & 31 (a right shift amount for `src`, from a register).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    pub fn ssr(&mut self, as_: Reg) {
+        let s = self.reg(as_);
+        self.rrr(0, 0, s, 0, 0, 4);
+    }
     /// `ar = (as:at) >> SAR` (the low 32 bits of the 64-bit pair, as high).
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn src(&mut self, ar: Reg, as_: Reg, at: Reg) {

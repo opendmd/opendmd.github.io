@@ -79,10 +79,17 @@ impl Meta {
 
     /// The value a slot plays at: the one given (a path's `&a=`, a
     /// slider's), else the declared default. The formula clamps it to the
-    /// declared range itself; nothing here needs to.
+    /// declared range itself; a slot read without a `control` line is a
+    /// 0..1 slider, held to it here (`&a=30` was out of the range the
+    /// compiler narrowed its steps for: the JIT's kernel then never drew).
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn value(&self, k: usize, given: Option<i32>) -> i32 {
-        given.unwrap_or_else(|| self.default_value(k))
+        let v = given.unwrap_or_else(|| self.default_value(k));
+        if self.kind[k] == NONE {
+            v.clamp(0, crate::fixed::ONE)
+        } else {
+            v
+        }
     }
 
     /// [`value`](Self::value) for the three slots.
