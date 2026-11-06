@@ -366,7 +366,7 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 305,
         title: "a colour that can't be summed",
-        sentence: "`…(…)` is a whole colour: it can't go into a sum, only be scaled, `… * k`",
+        sentence: "`…(…)` is a whole colour: it can't go into a sum, only be scaled, `… * k` (`#…` and `rgb(r, g, b)` colours can: `#fff * k`, `mix(#000, #f80, k)`)",
         fix: "Scale it on its own line, or use `#…` or `rgb(…)` colours in the sum.",
         matches: &["is a whole colour: it can't go into a sum"],
     },
@@ -555,7 +555,7 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 712,
         title: "the wrong values for `line` or `dot`",
-        sentence: "`line` takes x0, y0, x1, y1 (pixels from the top left) and 1 or 2 inks: … given (`dot`: x, y and an ink)",
+        sentence: "`line` takes x0, y0, x1, y1 (pixels from the top left) and, if you like, the ink at each end (0 to 1): … given (`dot`: x, y and, if you like, its ink)",
         fix: "Give `line` four values and `dot` two.",
         matches: &["(pixels from the top left)"],
     },
@@ -751,7 +751,7 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 901,
         title: "a value that grows without end",
-        sentence: "`t` grows without end in `loop forever`, and this can't take it: use frac(t*k), t % n, sin(t*k), noise(t*k, y, z), a comparison, min or max",
+        sentence: "`t` grows without end in `loop forever`, and this can't take it: use frac(t*k), t % n, sin(t*k), noise(t*k, y, z), a comparison, min, max or smoothstep",
         fix: "Use frac(t*k), t % n, sin(t*k) or similar in its place.",
         matches: &["grows without end in `loop forever`, and this can't take it"],
     },
@@ -772,14 +772,14 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 904,
         title: "too many growing values",
-        sentence: "too many values that grow without end (more than …): share one, as frac(u*k) of one `u`",
+        sentence: "this formula has too many values that grow without end (more than …): share one, as frac(u*k) of one `u`",
         fix: "Use fewer values that grow without end.",
         matches: &["too many values that grow without end"],
     },
     ErrorDoc {
         code: 905,
         title: "a colour fed a growing value",
-        sentence: "a colour can't take a value that grows without end and changes across the panel: use frac(…) of it, or min(t/k, 1) (or: …, as `v` (line …) does: use frac(v) or min(v/k, 1))",
+        sentence: "a colour can't take a value that grows without end and changes across the panel (`t` in a `loop forever` formula): use frac(…) of it, or min(t/k, 1) (or: …, as `v` (line …) does: use frac(v) or min(v/k, 1))",
         fix: "Wrap it in frac(…), or limit it with min(t/k, 1).",
         matches: &["a colour can't take a value that grows without end"],
     },
@@ -793,9 +793,9 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 907,
         title: "a growing value with a per-pixel part",
-        sentence: "a growing value plus a per-pixel or per-row part only goes into frac, the waves, noise, % or a multiply: as frac(t*k) + x or sin(t*k + x)",
+        sentence: "a value that grows without end plus a part per pixel or row only goes into frac, sin, cos, tri, saw, sqr, noise, % or a multiply: add the pixel's part there, as frac(t*k) + x or sin(t*k + x)",
         fix: "Add the pixel's part inside frac, a wave or noise: frac(t*k) + x, sin(t*k + x).",
-        matches: &["a growing value plus a per-pixel or per-row part"],
+        matches: &["plus a part per pixel or row only goes into"],
     },
     ErrorDoc {
         code: 910,
@@ -821,7 +821,7 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 913,
         title: "a bad key entry",
-        sentence: "a key entry is a character (not ; { } , - / or a space) and its number, `R 1`, after a comma",
+        sentence: "a key entry is a character (not ; { } , - / or a space) and its number, as `R 1` or `. -0.5`, separated by commas",
         fix: "Write each entry as a character, a space and its number, with commas between.",
         matches: &["a key entry is a character"],
     },
@@ -849,7 +849,7 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 917,
         title: "a sprite without `[u, v]`",
-        sentence: "`…` is a sprite: read its pixels, `…[u, v]`",
+        sentence: "`…` is a sprite: read its pixels, `…[u, v]` (column, row from its top left)",
         fix: "Read the sprite at a column and a row, `NAME[u, v]`.",
         matches: &["is a sprite: read its pixels"],
     },
@@ -884,7 +884,7 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 922,
         title: "a palette of the wrong size",
-        sentence: "a palette is 1 to 32 colours: `palette sea = #003, #06c, #fff`",
+        sentence: "a palette is 1 to 32 colours: `palette sea = #003, #06c, #fff` (pal(sea, 0) is the first, pal(sea, 1) the last)",
         fix: "Write 1 to 32 colours, each as #f80.",
         matches: &["a palette is 1 to 32 colours"],
     },
@@ -940,9 +940,9 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 933,
         title: "too many palettes with `cycle`",
-        sentence: "a formula holds … palettes that `pal` and `cycle` read: its own (… here) and one more for each turn `cycle` gives (… here)",
+        sentence: "a formula has room for … palettes that `pal` and `cycle` read: its own (… here) and each palette `cycle` turns by another value (… here)",
         fix: "Read fewer palettes with `pal` and `cycle` (tweens may read more), or turn fewer by different values.",
-        matches: &["a formula holds ", "palettes that `pal` and `cycle` read"],
+        matches: &["a formula has room for ", "palettes that `pal` and `cycle` read"],
     },
     ErrorDoc {
         code: 934,
@@ -1031,9 +1031,9 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 948,
         title: "a bottom `rate` layer that does not cover",
-        sentence: "the bottom `rate` layer must cover the whole panel: `layer rate N { … }`, no blend, no coverage",
+        sentence: "the bottom `rate` layer draws the whole panel: make it cover everything (`layer rate N { … }` with no blend and no coverage)",
         fix: "Leave the blend and the coverage off the bottom `rate` layer.",
-        matches: &["the bottom `rate` layer must cover the whole panel"],
+        matches: &["the bottom `rate` layer draws the whole panel"],
     },
     ErrorDoc {
         code: 951,

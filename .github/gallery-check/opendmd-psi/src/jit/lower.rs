@@ -273,6 +273,9 @@ pub fn lower(prog: &Prog) -> Result<Lowered, Refusal> {
         for t in 0..=7 {
             e = match Emitter::new(prog, &items, t, hsv_call) {
                 Ok(e) => e,
+                // A short heap is not a way that doesn't fit: said as
+                // such, so the build is asked again (not a fixed refusal).
+                Err(NO_MEMORY) => return Err(NO_MEMORY),
                 // (An inline `hsv` keeps its values in more registers
                 // than the call does: the call's way may fit.)
                 Err(_) if !hsv_call => continue 'ways,
@@ -286,6 +289,9 @@ pub fn lower(prog: &Prog) -> Result<Lowered, Refusal> {
             }
         }
     }
+    if e.c.oom {
+        return Err(NO_MEMORY);
+    }
     if e.c.bad {
         return Err("an operand out of the kernel's range");
     }
@@ -296,16 +302,24 @@ pub fn lower(prog: &Prog) -> Result<Lowered, Refusal> {
     let mut words = e.words;
     let mut guards = e.sites;
     for g in &mut guards {
-        g.on = code[g.at..g.at + g.off.len()].to_vec();
+        let on = &code[g.at..g.at + g.off.len()];
+        g.on = try_filled(0, on.len())?;
+        g.on.copy_from_slice(on);
     }
-    let rows_at = match lower_rows_from(prog, words.clone()) {
+    let mut shared = Vec::new();
+    shared.try_reserve_exact(words.len()).map_err(|_| NO_MEMORY)?;
+    shared.extend_from_slice(&words);
+    let rows_at = match lower_rows_from(prog, shared) {
         Ok(r) => {
-            code.resize(code.len().next_multiple_of(4), 0);
-            let at = code.len();
+            let at = code.len().next_multiple_of(4);
+            code.try_reserve_exact(at - code.len() + r.code.len())
+                .map_err(|_| NO_MEMORY)?;
+            code.resize(at, 0);
             code.extend_from_slice(&r.code);
             words = r.words;
             Some(at)
         }
+        Err(NO_MEMORY) => return Err(NO_MEMORY),
         Err(_) => None,
     };
     // Slots a row writes: y, py and the row steps' values.
@@ -325,7 +339,9 @@ pub fn lower(prog: &Prog) -> Result<Lowered, Refusal> {
             .iter()
             .any(|o| o.code == code::TURN && 5 + o.d == pal & code::PAL_MASK)
     };
-    let per_row = words
+    let mut per_row = Vec::new();
+    per_row.try_reserve_exact(words.len()).map_err(|_| NO_MEMORY)?;
+    per_row.extend(words
         .iter()
         .map(|w| match *w {
             // (A register's lane: its still cache's alias moves each row.)
@@ -347,8 +363,7 @@ pub fn lower(prog: &Prog) -> Result<Lowered, Refusal> {
                 choice || rs(k) || turned(pal)
             }
             _ => false,
-        })
-        .collect();
+        }));
     Ok(Lowered {
         code,
         words,
@@ -424,6 +439,9 @@ fn lower_rows_from(prog: &Prog, words: Vec<Word>) -> Result<LoweredRows, Refusal
         }
     }
     e.c.retw_n();
+    if e.c.oom {
+        return Err(NO_MEMORY);
+    }
     if e.c.bad {
         return Err("an operand out of the kernel's range");
     }
@@ -553,7 +571,7 @@ impl<'a> Emitter<'a> {
         let uses_src = items
             .iter()
             .any(|it| matches!(it, Item::Step(op) if matches!(op.code, code::MUL_W | code::MUL)));
-        let (mut vals, livein, wv) = values(hsv_call, items);
+        let (mut vals, livein, wv) = values(hsv_call, items)?;
         let p = pressure(&vals, items.len());
         let all: [Reg; 11] = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
         let (temps, spare, pool): (Vec<Reg>, Vec<Reg>, Vec<Reg>) = if hot {
@@ -578,12 +596,13 @@ impl<'a> Emitter<'a> {
                 all[..p].to_vec(),
             )
         };
+        let valid = try_filled(false, vals.len())?;
         let mut e = Emitter {
             prog,
             items,
             c: Code::new(),
             words: Vec::new(),
-            valid: alloc::vec![false; vals.len()],
+            valid,
             vals,
             cur: livein,
             livein,
@@ -865,6 +884,11 @@ impl<'a> Emitter<'a> {
         let k = match self.words.iter().position(|&x| x == w) {
             Some(k) => k,
             None => {
+                // (Fallibly: no room is the whole kernel refused, `oom`.)
+                if self.words.try_reserve(1).is_err() {
+                    self.c.oom = true;
+                    return 0;
+                }
                 self.words.push(w);
                 self.words.len() - 1
             }
@@ -876,6 +900,10 @@ impl<'a> Emitter<'a> {
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn words_run(&mut self, ws: &[Word]) -> i32 {
         let k = self.words.len();
+        if self.words.try_reserve(ws.len()).is_err() {
+            self.c.oom = true;
+            return 0;
+        }
         self.words.extend_from_slice(ws);
         (k * 4) as i32
     }
@@ -1146,7 +1174,8 @@ impl<'a> Emitter<'a> {
         for &g in &outs {
             z.movi(g, 0);
         }
-        while self.c.here() - at < z.here() + 3 {
+        // (No room for the padding: the code is refused whole, `oom`.)
+        while self.c.here() - at < z.here() + 3 && !self.c.oom {
             if self.c.here() - at + 2 == z.here() + 3 {
                 self.c.mov_n(PIX, PIX);
             } else {
@@ -1158,8 +1187,13 @@ impl<'a> Emitter<'a> {
         // from where the stub sits: its first byte is the run's).
         let mut off = z;
         off.j(end - at);
+        self.c.oom |= off.oom;
         // (The rest of the run's bytes stay: never reached while off.)
         let bytes = off.bytes;
+        if self.sites.try_reserve(1).is_err() {
+            self.c.oom = true;
+            return;
+        }
         self.sites.push(GuardSite {
             at,
             cond,

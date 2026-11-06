@@ -70,12 +70,24 @@ enum FixKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Range;
 
+// Tests: a heap that refuses a code buffer past this many bytes (every
+// `Code`, so the guards' stubs too).
+#[cfg(test)]
+std::thread_local! {
+    pub(crate) static FAIL_PAST: core::cell::Cell<usize> = const { core::cell::Cell::new(usize::MAX) };
+}
+
 /// The instructions so far.
 #[derive(Default)]
 pub struct Code {
     pub bytes: alloc::vec::Vec<u8>,
     /// Set by an encoder whose operand was out of range.
     pub bad: bool,
+    /// Set when the heap had no room for the next instruction (taken with
+    /// `try_reserve`: the lowering then refuses, and the VM draws, rather
+    /// than the board aborting on a fragmented heap). Bytes after it are
+    /// dropped.
+    pub oom: bool,
 }
 
 #[inline]
@@ -117,13 +129,27 @@ impl Code {
 
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn put24(&mut self, w: u32) {
-        self.bytes
-            .extend_from_slice(&[w as u8, (w >> 8) as u8, (w >> 16) as u8]);
+        self.put(&[w as u8, (w >> 8) as u8, (w >> 16) as u8]);
     }
 
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn put16(&mut self, w: u32) {
-        self.bytes.extend_from_slice(&[w as u8, (w >> 8) as u8]);
+        self.put(&[w as u8, (w >> 8) as u8]);
+    }
+
+    /// Append `b`, fallibly (see [`Code::oom`]).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    #[inline(never)]
+    fn put(&mut self, b: &[u8]) {
+        #[cfg(test)]
+        let forced = FAIL_PAST.with(|f| self.bytes.len() + b.len() > f.get());
+        #[cfg(not(test))]
+        let forced = false;
+        if self.oom || forced || self.bytes.try_reserve(b.len()).is_err() {
+            self.oom = true;
+            return;
+        }
+        self.bytes.extend_from_slice(b);
     }
 
     /// RRR: op0 t s r op1 op2.
@@ -623,6 +649,12 @@ impl Code {
 
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn bind_to(&mut self, f: Fixup, to: usize) {
+        // (Out of memory, the branch may never have been written: the code
+        // is refused whole.)
+        if self.oom || f.at + 3 > self.bytes.len() {
+            self.oom |= f.at + 3 > self.bytes.len();
+            return;
+        }
         let off = to as i32 - f.at as i32 - 4;
         let w = u32::from_le_bytes([
             self.bytes[f.at],

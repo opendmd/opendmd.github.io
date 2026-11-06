@@ -1052,7 +1052,7 @@ const TWEEN_FRAME: &str = "`tween` mixes a palette once a frame (by t or a frame
 
 /// E901: a value that grows without end where it can't go.
 const GROWS: &str = "`t` grows without end in `loop forever`, and this can't take it: \
-use frac(t*k), t % n, sin(t*k), noise(t*k, y, z), a comparison, min or max";
+use frac(t*k), t % n, sin(t*k), noise(t*k, y, z), a comparison, min, max or smoothstep";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Node {
@@ -3852,11 +3852,13 @@ impl<'s> Parser<'s> {
                     e,
                         if word == "cycle" {
                         String::from(
-                            "`cycle(…)` is a whole colour: it can't go into a sum, only be scaled, `cycle(fire, v, s) * k`"
+                            "`cycle(…)` is a whole colour: it can't go into a sum, only be scaled, `cycle(fire, v, s) * k` \
+                             (`#…` and `rgb(r, g, b)` colours can: `#fff * k`, `mix(#000, #f80, k)`)"
                         )
                     } else if word == "pal" {
                         String::from(
-                            "`pal(…)` is a whole colour: it can't go into a sum, only be scaled, `pal(fire, v) * k`"
+                            "`pal(…)` is a whole colour: it can't go into a sum, only be scaled, `pal(fire, v) * k` \
+                             (`#…` and `rgb(r, g, b)` colours can: `#fff * k`, `mix(#000, #f80, k)`)"
                         )
                     } else {
                         format!(
@@ -4603,7 +4605,7 @@ impl<'s> Parser<'s> {
         }
         self.fail_at(
             t,
-            format!("`{name}` is a sprite: read its pixels, `{name}[u, v]`"),
+            format!("`{name}` is a sprite: read its pixels, `{name}[u, v]` (column, row from its top left)"),
         )
     }
 
@@ -5183,9 +5185,9 @@ impl<'s> Parser<'s> {
             return self.err(
                 t,
                 if line {
-                    format!("`line` takes x0, y0, x1, y1 (pixels from the top left) and 1 or 2 inks: {k} given")
+                    format!("`line` takes x0, y0, x1, y1 (pixels from the top left) and, if you like, the ink at each end (0 to 1): {k} given")
                 } else {
-                    format!("`dot` takes x, y (pixels from the top left) and an ink: {k} given")
+                    format!("`dot` takes x, y (pixels from the top left) and, if you like, its ink (0 to 1): {k} given")
                 },
             );
         }
@@ -6910,7 +6912,7 @@ fn finish(
             ct.start,
             ct.end,
             format!(
-                "a formula holds {USER_PALETTES} palettes that `pal` and `cycle` read: its own ({n_own} here) and one more for each turn `cycle` gives ({} here)",
+                "a formula has room for {USER_PALETTES} palettes that `pal` and `cycle` read: its own ({n_own} here) and each palette `cycle` turns by another value ({} here)",
                 turns.len()
             ),
         ));
@@ -6983,7 +6985,7 @@ fn finish(
         }
         if backdrop {
             // E948.
-            return rate_err("the bottom `rate` layer must cover the whole panel: `layer rate N { … }`, no blend, no coverage");
+            return rate_err("the bottom `rate` layer draws the whole panel: make it cover everything (`layer rate N { … }` with no blend and no coverage)");
         }
         let reads = split_slow(&mut p.dag, &mut steps, n_slow).map_err(|e| Error {
             start: ct.start,
@@ -7583,22 +7585,23 @@ fn grown_colour(
 }
 
 /// E922: a palette's colours.
-const PALETTE_COLOURS: &str = "a palette is 1 to 32 colours: `palette sea = #003, #06c, #fff`";
+const PALETTE_COLOURS: &str =
+    "a palette is 1 to 32 colours: `palette sea = #003, #06c, #fff` (pal(sea, 0) is the first, pal(sea, 1) the last)";
 
 /// E912/E913: a sprite's key.
 const SPRITE_KEY: &str =
     "a sprite starts with its key: `key . 0, R 1, D 2` (each character, then the number it reads as)";
 const SPRITE_KEY_ENTRY: &str =
-    "a key entry is a character (not ; { } , - / or a space) and its number, `R 1`, after a comma";
+    "a key entry is a character (not ; { } , - / or a space) and its number, as `R 1` or `. -0.5`, separated by commas";
 
 /// E901 for a growing value with a part per pixel or row.
-const GROWS_SPLIT: &str = "a growing value plus a per-pixel or per-row part only goes into frac, \
-the waves, noise, % or a multiply: as frac(t*k) + x or sin(t*k + x)";
+const GROWS_SPLIT: &str = "a value that grows without end plus a part per pixel or row only goes into \
+frac, sin, cos, tri, saw, sqr, noise, % or a multiply: add the pixel's part there, as frac(t*k) + x or sin(t*k + x)";
 
 /// E905.
 const GROWN_COLOUR: &str =
-    "a colour can't take a value that grows without end and changes across the panel: \
-use frac(…) of it, or min(t/k, 1)";
+    "a colour can't take a value that grows without end and changes across the panel \
+(`t` in a `loop forever` formula): use frac(…) of it, or min(t/k, 1)";
 
 /// A colour step to lay out: its code (plain or a layer's), its values,
 /// the palette and the coverage (a layer's).
@@ -8300,7 +8303,7 @@ fn emit(
                         return Err(Error::new(
                             0,
                             0,
-                            format!("too many values that grow without end (more than {}): share one, as frac(u*k) of one `u`", WIDE - 1),
+                            format!("this formula has too many values that grow without end (more than {}): share one, as frac(u*k) of one `u`", WIDE - 1),
                         ));
                     }
                     next_wide += 1;

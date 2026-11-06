@@ -1396,3 +1396,35 @@ fn divisions_by_a_scalar_draw_as_the_vm() {
         }
     }
 }
+
+/// A heap that runs out mid-lowering (the code buffer refused past each
+/// of many lengths): the lowering says `NO_MEMORY`, never panics or spins
+/// (a guard's padding, a branch bound past the end), and with room again
+/// gives the same code as before.
+#[test]
+fn a_short_heap_mid_lowering_refuses_and_recovers() {
+    use super::enc::FAIL_PAST;
+    let mut tried = 0;
+    for &(name, src, _, _) in golden::FRAMES {
+        let prog = compile(src).unwrap();
+        let Ok(whole) = lower(&prog) else { continue };
+        let len = whole.code.len();
+        let mut cut = 0;
+        while cut < len {
+            FAIL_PAST.with(|f| f.set(cut));
+            let r = lower(&prog);
+            FAIL_PAST.with(|f| f.set(usize::MAX));
+            match r {
+                Err(why) => assert_eq!(why, super::NO_MEMORY, "{name} cut at {cut} of {len} B"),
+                // (Each buffer is cut on its own: the pixel and row
+                // stages may each fit when the two joined would not.)
+                Ok(l) => assert!(l.code == whole.code, "{name} cut at {cut}: lowered, but not the same code"),
+            }
+            tried += 1;
+            cut += 1 + len / 23;
+        }
+        let again = lower(&prog).unwrap();
+        assert_eq!(again.code, whole.code, "{name}: different code after the refusals");
+    }
+    assert!(tried > 100, "only {tried} cuts tried");
+}

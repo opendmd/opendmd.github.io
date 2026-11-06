@@ -2274,8 +2274,22 @@ impl Prog {
 
     /// A readable listing of the steps (tests, the bench, debugging).
     pub fn listing(&self) -> alloc::string::String {
+        let mut s = alloc::string::String::new();
+        for n in 0..self.len() {
+            s.push_str(&self.listing_line(n));
+        }
+        s
+    }
+
+    /// Step `n` of [`listing`](Self::listing), its line with the `\n`: the
+    /// firmware's JIT logs a program a few lines at a time this way, with
+    /// no listing of the whole on its heap.
+    pub fn listing_line(&self, n: usize) -> alloc::string::String {
         use core::fmt::Write;
         let mut s = alloc::string::String::new();
+        let Some(op) = self.ops[..self.len()].get(n) else {
+            return s;
+        };
         let opnd = |v: u8, n: usize| -> alloc::string::String {
             if is_lane(v) {
                 match lane_no(v) {
@@ -2301,7 +2315,7 @@ impl Prog {
                 alloc::format!("s{v}")
             }
         };
-        for (n, op) in self.ops[..self.len()].iter().enumerate() {
+        {
             let sect = if n < self.frame_end as usize {
                 "frame"
             } else if n < self.draw_end as usize {

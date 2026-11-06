@@ -22,6 +22,29 @@ use alloc::vec::Vec;
 /// Why a formula plays on the VM: shown in `/api/status` (`formula.jit`).
 pub type Refusal = &'static str;
 
+/// The lowering found no room on the heap for its tables or the code
+/// (everything that grows with the program is taken with `try_reserve`):
+/// not the program's fault, so asked again later (the firmware: a second
+/// on), unlike every other refusal.
+pub const NO_MEMORY: Refusal = "no memory for the kernel just now";
+
+/// `v.push(x)`, or [`NO_MEMORY`] when the heap has no room for it.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+pub(crate) fn try_push<T>(v: &mut Vec<T>, x: T) -> Result<(), Refusal> {
+    v.try_reserve(1).map_err(|_| NO_MEMORY)?;
+    v.push(x);
+    Ok(())
+}
+
+/// `vec![x; n]`, or [`NO_MEMORY`].
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+pub(crate) fn try_filled<T: Clone>(x: T, n: usize) -> Result<Vec<T>, Refusal> {
+    let mut v = Vec::new();
+    v.try_reserve_exact(n).map_err(|_| NO_MEMORY)?;
+    v.resize(n, x);
+    Ok(v)
+}
+
 /// One unit of the kernel: a step, or a fused colour the kernel draws in
 /// one piece (as the VM's fused runs, `crate::fuse`).
 #[derive(Clone, Copy, Debug)]
@@ -111,7 +134,7 @@ pub(crate) fn items(prog: &Prog, start: usize, pe: usize) -> Result<Vec<Item>, R
     let mut guard_end = usize::MAX;
     while k < pe {
         if k == guard_end {
-            out.push(Item::GuardEnd);
+            try_push(&mut out, Item::GuardEnd)?;
             guard_end = usize::MAX;
         }
         let op = ops[k];
@@ -120,7 +143,7 @@ pub(crate) fn items(prog: &Prog, start: usize, pe: usize) -> Result<Vec<Item>, R
                 return Err("an unexpected layout");
             }
             guard_end = k + 1 + op.b as usize;
-            out.push(Item::Guard { cond: op.a });
+            try_push(&mut out, Item::Guard { cond: op.a })?;
             k += 1;
             continue;
         }
@@ -133,7 +156,7 @@ pub(crate) fn items(prog: &Prog, start: usize, pe: usize) -> Result<Vec<Item>, R
             let n = op.a as usize;
             let run = &ops[(k + 1).min(pe)..(k + 1 + n).min(pe)];
             if let Some(it) = fused(op.d, run) {
-                out.push(it);
+                try_push(&mut out, it)?;
                 k += 1 + n;
             } else {
                 // The steps one at a time: the same values.
@@ -142,7 +165,7 @@ pub(crate) fn items(prog: &Prog, start: usize, pe: usize) -> Result<Vec<Item>, R
             continue;
         }
         supported(op.code)?;
-        out.push(Item::Step(op));
+        try_push(&mut out, Item::Step(op))?;
         k += 1;
     }
     if guard_end != usize::MAX {
@@ -212,11 +235,15 @@ pub(crate) struct Val {
 /// The values of `items` (each with its interval) and which value each
 /// register reads first, and each item writes.
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-pub(crate) fn values(hsv_call: bool, items: &[Item]) -> (Vec<Val>, [Option<usize>; REGS], Vec<Option<usize>>) {
+#[allow(clippy::type_complexity)]
+pub(crate) fn values(
+    hsv_call: bool,
+    items: &[Item],
+) -> Result<(Vec<Val>, [Option<usize>; REGS], Vec<Option<usize>>), Refusal> {
     let mut vals: Vec<Val> = Vec::new();
     let mut cur: [Option<usize>; REGS] = [None; REGS];
     let mut livein: [Option<usize>; REGS] = [None; REGS];
-    let mut wv = alloc::vec![None; items.len()];
+    let mut wv = try_filled(None, items.len())?;
     for (k, it) in items.iter().enumerate() {
         let (v, n) = reads(it);
         for &x in &v[..n] {
@@ -224,13 +251,13 @@ pub(crate) fn values(hsv_call: bool, items: &[Item]) -> (Vec<Val>, [Option<usize
             match cur[r] {
                 Some(id) => vals[id].end = k,
                 None => {
-                    vals.push(Val {
+                    try_push(&mut vals, Val {
                         start: k,
                         end: k,
                         livein: true,
                         crosses: false,
                         gpr: 0,
-                    });
+                    })?;
                     let id = vals.len() - 1;
                     cur[r] = Some(id);
                     livein[r] = Some(id);
@@ -238,13 +265,13 @@ pub(crate) fn values(hsv_call: bool, items: &[Item]) -> (Vec<Val>, [Option<usize
             }
         }
         if let Some(w) = writes(it) {
-            vals.push(Val {
+            try_push(&mut vals, Val {
                 start: k,
                 end: k,
                 livein: false,
                 crosses: false,
                 gpr: 0,
-            });
+            })?;
             cur[w] = Some(vals.len() - 1);
             wv[k] = cur[w];
         }
@@ -277,7 +304,7 @@ pub(crate) fn values(hsv_call: bool, items: &[Item]) -> (Vec<Val>, [Option<usize
             }
         }
     }
-    (vals, livein, wv)
+    Ok((vals, livein, wv))
 }
 
 /// The most values alive at once.
@@ -354,7 +381,9 @@ pub(crate) fn jit_takes(prog: &Prog) -> bool {
         return false;
     };
     [false, true].into_iter().any(|hsv_call| {
-        let (vals, _, _) = values(hsv_call, &items);
+        let Ok((vals, _, _)) = values(hsv_call, &items) else {
+            return false;
+        };
         let p = pressure(&vals, items.len());
         let hot = items.iter().any(|it| hot_call(hsv_call, it));
         p <= if hot { 8 } else { 11 }

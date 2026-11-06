@@ -38,6 +38,8 @@ pub mod lower;
 mod tests;
 
 pub use lower::Refusal;
+/// The lowering's refusal for a short heap (asked again later).
+pub use crate::jitplan::NO_MEMORY;
 use lower::{hid, Lowered, Word, NONE};
 
 use crate::draw::Ink;
@@ -816,6 +818,11 @@ mod device {
     /// The kernel for `prog`'s pixel stage, or why the VM draws it.
     pub fn emit(prog: &Prog) -> Result<Kernel, Refusal> {
         let mut low = lower::lower(prog)?;
+        // (Fallibly, like the lowering's tables: `NO_MEMORY` is asked
+        // again later.)
+        let mut ctx = Vec::new();
+        ctx.try_reserve_exact(low.words.len()).map_err(|_| NO_MEMORY)?;
+        ctx.resize(low.words.len(), 0u32);
         let n = low.code.len().div_ceil(4);
         // SAFETY: a plain allocation, freed by `Drop`.
         let block = unsafe { heap_caps_malloc(n * 4, MALLOC_CAP_EXEC) } as *mut u32;
@@ -834,7 +841,6 @@ mod device {
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
         let code_bytes = low.code.len();
         low.code = Vec::new();
-        let ctx = alloc::vec![0u32; low.words.len()];
         Ok(Kernel {
             block,
             code_bytes,

@@ -225,11 +225,11 @@ gray(y)
 
 === E305
 cycle(fire, x, t) + 1
---- 1:19 `cycle(…)` is a whole colour: it can't go into a sum, only be scaled, `cycle(fire, v, s) * k`
+--- 1:19 `cycle(…)` is a whole colour: it can't go into a sum, only be scaled, `cycle(fire, v, s) * k` (`#…` and `rgb(r, g, b)` colours can: `#fff * k`, `mix(#000, #f80, k)`)
 
 === E305
 pal(fire, x) + #fff
---- 1:14 `pal(…)` is a whole colour: it can't go into a sum, only be scaled, `pal(fire, v) * k`
+--- 1:14 `pal(…)` is a whole colour: it can't go into a sum, only be scaled, `pal(fire, v) * k` (`#…` and `rgb(r, g, b)` colours can: `#fff * k`, `mix(#000, #f80, k)`)
 
 === E306
 v = gray(x)
@@ -402,7 +402,7 @@ gray(1)
 === E712
 draw { line(0, 0, 9) }
 gray(ink)
---- 1:8 `line` takes x0, y0, x1, y1 (pixels from the top left) and 1 or 2 inks: 3 given
+--- 1:8 `line` takes x0, y0, x1, y1 (pixels from the top left) and, if you like, the ink at each end (0 to 1): 3 given
 
 === E713
 draw { gray(1) }
@@ -435,12 +435,12 @@ gray(x)
 === E901
 loop forever
 gray(t*x)
---- 2:7 `t` grows without end in `loop forever`, and this can't take it: use frac(t*k), t % n, sin(t*k), noise(t*k, y, z), a comparison, min or max
+--- 2:7 `t` grows without end in `loop forever`, and this can't take it: use frac(t*k), t % n, sin(t*k), noise(t*k, y, z), a comparison, min, max or smoothstep
 
 === E907
 loop forever
 gray(frac((t + x)/3))
---- 2:18 a growing value plus a per-pixel or per-row part only goes into frac, the waves, noise, % or a multiply: as frac(t*k) + x or sin(t*k + x)
+--- 2:18 a value that grows without end plus a part per pixel or row only goes into frac, sin, cos, tri, saw, sqr, noise, % or a multiply: add the pixel's part there, as frac(t*k) + x or sin(t*k + x)
 
 === E902
 loop forever
@@ -455,7 +455,7 @@ gray(seed)
 loop forever
 <<16;\n;w{k} = t*{k}.5>>
 gray(<<16; + ;frac(w{k})>>)
---- 18:1 too many values that grow without end (more than 15): share one, as frac(u*k) of one `u`
+--- 18:1 this formula has too many values that grow without end (more than 15): share one, as frac(u*k) of one `u`
 
 === E905
 loop forever
@@ -499,7 +499,7 @@ key .0, X 1
 .X.
 }
 gray(s[0, 0])
---- 2:5 a key entry is a character (not ; { } , - / or a space) and its number, `R 1`, after a comma
+--- 2:5 a key entry is a character (not ; { } , - / or a space) and its number, as `R 1` or `. -0.5`, separated by commas
 
 === E914
 sprite s {
@@ -539,7 +539,7 @@ key . 0, X 1
 .X.
 }
 gray(s)
---- 5:6 `s` is a sprite: read its pixels, `s[u, v]`
+--- 5:6 `s` is a sprite: read its pixels, `s[u, v]` (column, row from its top left)
 
 === E919
 sprite s {
@@ -566,7 +566,7 @@ pal(p, x)
 === E922
 palette p = #fff, 3
 pal(p, x)
---- 1:19 a palette is 1 to 32 colours: `palette sea = #003, #06c, #fff`
+--- 1:19 a palette is 1 to 32 colours: `palette sea = #003, #06c, #fff` (pal(sea, 0) is the first, pal(sea, 1) the last)
 
 === E923
 palette p1 = #111, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010
@@ -629,7 +629,7 @@ palette pa = #f00
 palette pb = #0f0
 layer { cycle(pa, x, t) }
 layer add { cycle(pb, x, t/2) }
---- 4:13 a formula holds 3 palettes that `pal` and `cycle` read: its own (2 here) and one more for each turn `cycle` gives (2 here)
+--- 4:13 a formula has room for 3 palettes that `pal` and `cycle` read: its own (2 here) and each palette `cycle` turns by another value (2 here)
 
 === E934
 cycle(fire, x)
@@ -710,7 +710,7 @@ layer rate 4 { gray(x) }
 === E948
 layer rate 4 { gray(x, 0.5) }
 layer add { gray(y) }
---- 2:13 the bottom `rate` layer must cover the whole panel: `layer rate N { … }`, no blend, no coverage
+--- 2:13 the bottom `rate` layer draws the whole panel: make it cover everything (`layer rate N { … }` with no blend and no coverage)
 
 === E951
 loop 4
