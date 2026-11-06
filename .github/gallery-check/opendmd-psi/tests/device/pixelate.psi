@@ -1,0 +1,3 @@
+name "Pixelate"
+look
+under(floor(px/4)*4 + 2, floor(py/4)*4 + 2)

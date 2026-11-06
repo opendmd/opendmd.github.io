@@ -1,0 +1,10 @@
+loop 8
+palette dD = #f80, #fc0, #08f, #fff
+palette dN = #400, #320, #002, #224
+palette cD = #f0f, #0ff, #888, #ccc
+palette cN = #202, #022, #111, #333
+palette tun = #000, #444, #f90, #222
+night = 0.5 + 0.5*sin(t*0.8)
+p = frac(t/8)
+palette scene = tween(tween(dD, dN, night), tween(cD, cN, night), p), tween(tun, dN, p)
+pal(scene, floor(x*4)/32 + (y > 0.5)*0.5)

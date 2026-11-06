@@ -3,7 +3,7 @@
 //! cheat sheet are generated from them (the `docs` feature adds the cheat
 //! sheet's rows), and `tests/builtins.rs` checks that the generated blocks
 //! in `opendmd-web/www/js/psikit.js` and `js/formulas.js` are what these
-//! tables give (`PSI_BLESS=1` rewrites them) — docs/research/psi-tooling-plan.md §3.
+//! tables give (`PSI_BLESS=1` rewrites them) — opendmd-notes docs/research/psi-tooling-plan.md §3.
 //!
 //! Not part of the crate's API (`#[doc(hidden)]`): the types are the
 //! compiler's own.

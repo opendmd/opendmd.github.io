@@ -17,7 +17,7 @@
 //! the compiler uses `alloc` (and frees it all before returning), the VM
 //! never allocates: its working memory is a caller's [`Scratch`].
 //!
-//! The language (v0) and the VM's design are in `docs/research/psi-spike.md`.
+//! The language (v0) and the VM's design are in `opendmd-notes docs/research/psi-spike.md`.
 
 #![cfg_attr(not(test), no_std)]
 // `fixed::lz32`'s one `nsau` (the esp toolchain is a nightly; the host and

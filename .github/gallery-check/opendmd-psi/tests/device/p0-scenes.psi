@@ -1,0 +1,11 @@
+loop 8
+city = frac(t/8) > 0.5
+scene towers when city * (py < 20) {
+  h = hash(floor(px/6), 3)
+  win = (frac(px/6) > 0.3) * (frac(py/3) > 0.4) * (h > 0.3)
+  lit = win * (hash(floor(px/2), floor(py/3)) > 0.5)
+}
+scene sea when 1 - city {
+  wave = sin(x*12 + t*2 + y*6) * 0.5 + 0.5
+}
+rgb(lit, wave*0.3 + lit*0.5, wave + h*0.2*(py < 20))

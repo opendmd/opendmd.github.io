@@ -1,0 +1,4 @@
+name "Shake"
+look
+loop 2
+under(px + floor(sin(t*2)*2), py)

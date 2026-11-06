@@ -1,4 +1,4 @@
-//! The built-in inputs (`docs/research/psi-inputs.md` §3): values the
+//! The built-in inputs (`opendmd-notes docs/research/psi-inputs.md` §3): values the
 //! panel keeps about the world, which a Formula reads by name without a
 //! line of its own (`daylight`, `sun.alt`, `replay.game` …), and the two
 //! functions over them, `since(KEY)` (seconds since the key last changed)

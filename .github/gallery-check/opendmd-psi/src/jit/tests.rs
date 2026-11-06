@@ -1180,7 +1180,7 @@ fn jit_takes_is_lower() {
     for (_, s) in crate::sketches::ALL {
         srcs.push(s.into());
     }
-    let dev = Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/research/psi-rebuild-device");
+    let dev = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/device");
     for e in std::fs::read_dir(dev).unwrap().flatten() {
         if e.path().extension().is_some_and(|x| x == "psi") {
             srcs.push(std::fs::read_to_string(e.path()).unwrap());

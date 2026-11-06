@@ -1,0 +1,14 @@
+name "Functions"
+loop 4
+fn ring(cx0, r0) = abs(len(px - cx0, py - 15.5) - r0) < 1
+fn palm(x0, y0, s) {
+  line(x0, y0, x0, y0 - 10*s, #a62)
+  circfill(x0, y0 - 10*s, 3*s, #2a4)
+}
+draw {
+  for k < 4 {
+    palm(10 + k*30, 31, 1 + k/4)
+  }
+}
+v = ring(64 + sin(t/4)*30, 8) + ring(64, 12)
+pal(ice, v*0.8)

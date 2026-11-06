@@ -1,0 +1,13 @@
+loop 4
+fn palm(x0, s) {
+  line(x0, 31, x0, 31 - 10*s, #a62)
+  circfill(x0, 31 - 10*s, 3*s, #2a4)
+}
+draw {
+  cls(#102040)
+  circfill(100, 8, 5, #ffd040)
+  for k < 4 {
+    palm(12 + k*30 + sin(t/4 + k/4)*3, 1 + k/4)
+  }
+  rectfill(0, 29, 127, 31, #d0a060)
+}

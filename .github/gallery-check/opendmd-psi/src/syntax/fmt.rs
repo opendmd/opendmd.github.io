@@ -1,5 +1,5 @@
 //! `psi fmt`: one canonical layout for a formula (the owner's house style,
-//! docs/research/psi-tooling-plan.md "Decisions" 6).
+//! opendmd-notes docs/research/psi-tooling-plan.md "Decisions" 6).
 //!
 //! **Only the space between tokens changes.** The formula's tokens — every
 //! name, number, colour, operator and line end the compiler reads — come out

@@ -910,7 +910,7 @@ pub const fn store_words(used: usize) -> usize {
     n.next_power_of_two()
 }
 
-// (The budget: 6.3 KB at P0's limits, `docs/research/endless-road-v2.md`
+// (The budget: 6.3 KB at P0's limits, `opendmd-notes docs/research/endless-road-v2.md`
 // §5; +1.3 KB for 768 steps, P2; the store out of the fixed part, sized
 // by the formula (ABI 3), and 26 B for the inputs.)
 const _: () = assert!(core::mem::size_of::<ProgramOf<[i32; 0]>>() <= 6_500);
@@ -1324,7 +1324,7 @@ impl Prog {
     }
 
     /// [`esp32_us`](Self::esp32_us) as the ESP32's JIT draws it (its
-    /// pixel stage and row stage compiled: `docs/research/psi-jit-esp32.md`):
+    /// pixel stage and row stage compiled: `opendmd-notes docs/research/psi-jit-esp32.md`):
     /// the steps before the kernel (the column and still runs) and the rest
     /// of the frame as the VM's, the kernel's steps at [`jit_value_ns`]'s
     /// costs (the device's rows). Never more than the VM's: the player keeps

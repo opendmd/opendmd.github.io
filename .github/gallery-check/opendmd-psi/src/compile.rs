@@ -6056,7 +6056,7 @@ impl<'s> Parser<'s> {
 // the part's value of that slot) that say what it is. Read here, out of the
 // recursive parser (`header` returns before any expression is read deeper
 // than a number), so the compiler's deepest stack is unchanged.
-// docs/research/formula-apps.md §2.1; the codes in psi-tooling-plan.md §4.
+// opendmd-notes docs/research/formula-apps.md §2.1; the codes in psi-tooling-plan.md §4.
 
 /// The words a choice may have: 2 to 6.
 const CHOICE_WORDS: core::ops::RangeInclusive<usize> = 2..=6;

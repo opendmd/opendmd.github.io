@@ -1,4 +1,4 @@
-//! The language service's hook (feature `syntax`, docs/research/
+//! The language service's hook (feature `syntax`, opendmd-notes docs/research/
 //! psi-tooling-plan.md §2): the lexer's tokens, and a [`Sink`] the compiler
 //! tells what it saw — the names a formula defines (where, what, at which
 //! level), every name read and its definition, each op it made (where in

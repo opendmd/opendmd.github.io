@@ -5,7 +5,7 @@ about "Desert, megacity, tunnel, forest: one road through four places, a day goi
 loop forever
 fps 50
 
--- Endless road V2 (docs/research/endless-road-v2.md): a shared road core,
+-- Endless road V2 (opendmd-notes docs/research/endless-road-v2.md): a shared road core,
 -- each place a `scene`, the road's profile and the colours tweened between
 -- places. P1 drew the Desert and the Megacity, the city rising out of the
 -- desert; P2 the Forest, the Tunnel, the mouth and the exit, the trees

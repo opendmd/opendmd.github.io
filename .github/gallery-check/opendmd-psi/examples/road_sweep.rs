@@ -1,4 +1,4 @@
-//! Endless road V2's sweep (docs/research/endless-road-v2.md §12.1, §13):
+//! Endless road V2's sweep (opendmd-notes docs/research/endless-road-v2.md §12.1, §13):
 //! each frame's own cost (`psi check --ms`'s figure) at 24 points of the
 //! cycle × 3 seeds × by day and by night (the sun's phase picked by the
 //! cycle the point is taken from), summed by place.

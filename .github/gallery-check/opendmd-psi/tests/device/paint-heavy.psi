@@ -1,0 +1,29 @@
+name "Paint heavy"
+loop 4
+sprite ship {
+  key . 0, W #fff, R #f40, B #48f
+  ..W..
+  .WBW.
+  WWWWW
+  R.R.R
+}
+draw {
+  cls(#000820)
+  for k < 40 {
+    pset(frac(k*0.37 + t/4)*128, frac(k*0.71)*24, #fff)
+  }
+  for k < 8 {
+    circfill(16 + k*15, 20 + sin(t/4 + k/8)*6, 6, pal(rainbow, k/8))
+    rect(10 + k*15, 2, 20 + k*15, 8, #0f0)
+  }
+  trifill(0, 31, 64, 18, 127, 31, #224)
+  rectfill(0, 28, 127, 31, #642)
+  spr(ship, 60 + sin(t/4)*40, 4)
+  print("SCORE", 2, 1, #ff0)
+  print(floor(t*25), 30, 1, #ff0, small, 4)
+  if frac(t) < 0.5 {
+    circ(64, 16, 10, #f00)
+  } else {
+    circ(64, 16, 14, #0ff)
+  }
+}

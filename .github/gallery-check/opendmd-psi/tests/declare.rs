@@ -1,7 +1,7 @@
-//! The declarations (docs/research/formula-apps.md §2.1, built in F1):
+//! The declarations (opendmd-notes docs/research/formula-apps.md §2.1, built in F1):
 //! `psi 1`, `name "…"`, `about "…"`, `control …`, `look …` — what they
 //! compile to, their errors (each with its stable code, listed in
-//! docs/research/psi-tooling-plan.md §4), `compact`, the controls' ranges
+//! opendmd-notes docs/research/psi-tooling-plan.md §4), `compact`, the controls' ranges
 //! (sound for any value a path gives) and the `look` line as the
 //! composition `look::compose` makes.
 
@@ -33,7 +33,7 @@ fn frame(p: &Program, ms: u32, abc: [i32; 3]) -> Vec<u8> {
 }
 
 /// Every new error: the source, a piece of the sentence, line, column and
-/// the code (docs/research/psi-tooling-plan.md §4).
+/// the code (opendmd-notes docs/research/psi-tooling-plan.md §4).
 const ERRORS: &[(&str, &str, usize, usize, &str)] = &[
     ("psi 2\ngray(x)", "it is written for Psi 2, this one has Psi 1", 1, 5, "E601"),
     ("psi 12\ngray(x)", "written for Psi 12", 1, 5, "E601"),
@@ -129,19 +129,16 @@ fn every_declaration_error_says_what_and_where() {
     assert!(bad.is_empty(), "\n{}", bad.join("\n"));
 }
 
-/// The new codes are all in the tooling plan's index.
+/// The new codes are all in the language reference's error list.
 #[test]
-fn the_codes_are_in_the_tooling_plan() {
-    let plan = std::fs::read_to_string(concat!(
+fn the_codes_are_in_the_language_reference() {
+    let spec = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../docs/research/psi-tooling-plan.md"
+        "/../docs/psi-spec.md"
     ))
     .unwrap();
     for &(_, _, _, _, code) in ERRORS {
-        assert!(
-            plan.contains(code),
-            "{code} is not in psi-tooling-plan.md §4"
-        );
+        assert!(spec.contains(code), "{code} is not in docs/psi-spec.md");
     }
 }
 

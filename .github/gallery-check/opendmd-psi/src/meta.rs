@@ -1,6 +1,6 @@
 //! What a Formula says about itself that the player needs: its controls'
 //! kinds, ranges and defaults, and whether it is offered as a look (its
-//! `control` and `look` lines, docs/research/formula-apps.md §2.1-2.2).
+//! `control` and `look` lines, opendmd-notes docs/research/formula-apps.md §2.1-2.2).
 //! The rest of the declarations (`name`, `about`, a control's label and
 //! words) is text the browser reads back from the source
 //! ([`crate::compile_declared`]): it is never stored in a [`Program`].

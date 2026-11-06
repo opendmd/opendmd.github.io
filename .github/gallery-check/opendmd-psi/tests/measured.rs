@@ -240,23 +240,23 @@ pub const JIT_EFFECTS: &[(&str, &str, u32)] = &[
         include_str!("../../opendmd-web/formulas/plasma.psi"),
         2657,
     ),
-    // psi-p0 on the spare (paint80-713cd, 2026-11-04,
-    // /srv/scratch/opendmd-psi-p0-paint-probe-spare1.txt): the effect path
+    // psi-p0 on the spare (paint80-713cd, 2026-11-04, a paint probe
+    // capture, not committed): the effect path
     // with the JIT on, as the other rows (the tween's VM frame is 757: the
     // player keeps the faster).
     (
         "p0 Megacity sketch",
-        include_str!("../../docs/research/psi-rebuild-device/p0-road-v2-city.psi"),
+        include_str!("device/p0-road-v2-city.psi"),
         6245,
     ),
     (
         "p0 big",
-        include_str!("../../docs/research/psi-rebuild-device/p0-big.psi"),
+        include_str!("device/p0-big.psi"),
         1429,
     ),
     (
         "p0 tween",
-        include_str!("../../docs/research/psi-rebuild-device/p0-tween.psi"),
+        include_str!("device/p0-tween.psi"),
         818,
     ),
 ];
@@ -362,18 +362,18 @@ pub const UNDER: &[(&str, &str, u32)] = &[
 // same run; palm and paint-heavy as looks: they paint without a colour
 // line), VM and JIT p50 µs a frame.
 pub const PAINT_FORMULAS: &[(&str, &str, u32, u32)] = &[
-    ("functions", include_str!("../../docs/research/psi-rebuild-device/functions.psi"), 7330, 6799),
-    ("paint-heavy", include_str!("../../docs/research/psi-rebuild-device/paint-heavy.psi"), 6407, 5569),
-    ("palm", include_str!("../../docs/research/psi-rebuild-device/palm.psi"), 3233, 2385),
+    ("functions", include_str!("device/functions.psi"), 7330, 6799),
+    ("paint-heavy", include_str!("device/paint-heavy.psi"), 6407, 5569),
+    ("palm", include_str!("device/palm.psi"), 3233, 2385),
     // (The JIT's under(x, y) template, the second run, paint80-f6aa6.)
-    ("pixelate", include_str!("../../docs/research/psi-rebuild-device/pixelate.psi"), 5318, 2645),
-    ("under-shake", include_str!("../../docs/research/psi-rebuild-device/under-shake.psi"), 5312, 2563),
+    ("pixelate", include_str!("device/pixelate.psi"), 5318, 2645),
+    ("under-shake", include_str!("device/under-shake.psi"), 5312, 2563),
     // (Painted, the second run.)
     ("Neon city", include_str!("../../opendmd-web/formulas/neon-city.psi"), 4289, 4037),
 ];
 
 /// P0b-4 and the guards a row on the spare (paint80-01e06, 2026-11-04,
-/// `/srv/scratch/opendmd-psi-p0b4-paint-probe-spare1.txt`, the paint
+/// a paint probe capture (not committed), the paint
 /// probe's `cmp` lines): direct frames from `start` ms (seed
 /// `golden::SEED`), µs, VM and kernel, each against its frame's own
 /// estimate. `fused`: compiled with the fused compares. The sources are

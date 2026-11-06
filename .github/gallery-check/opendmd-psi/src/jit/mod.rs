@@ -1,4 +1,4 @@
-//! A narrow JIT for the ESP32 (phase 1 of `docs/research/psi-jit-esp32.md`):
+//! A narrow JIT for the ESP32 (phase 1 of `opendmd-notes docs/research/psi-jit-esp32.md`):
 //! a formula's pixel stage compiled to Xtensa code in executable heap, the
 //! VM for everything else.
 //!
