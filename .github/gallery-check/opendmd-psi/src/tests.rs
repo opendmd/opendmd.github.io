@@ -605,7 +605,7 @@ fn sliders_and_the_esp32_estimate() {
     assert_eq!(i("gray(minute / 60 + b)"), 16 | 2);
     // Within 25 % of what psi-probe measured on the ESP32 (effect frame p50, µs).
     for (src, measured) in [
-        // (7,245 before fast-div, less its `len`'s saving on the spare: 848
+        // (7,245 before fast-div, less its `len`'s saving on a test board: 848
         // → 683 ns a pixel at fastdiv-a/-b.)
         (sketches::PLASMA, 6569),
         (sketches::FIRE, 4964),

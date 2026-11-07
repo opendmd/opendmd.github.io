@@ -146,8 +146,8 @@ pub fn compile(src: &str) -> Result<Program, Error> {
 #[cfg(feature = "compiler")]
 /// A zeroed [`Program`] on the heap, never on the stack (`compile_into`
 /// and its kin take a zeroed one: `program_is_plain_data`); an error, not
-/// an abort, when the heap can't give it (the panel's probe builds at the
-/// rig's heap).
+/// an abort, when the heap can't give it (the panel's probe builds at a
+/// test panel's heap).
 fn zeroed_program() -> Result<alloc::boxed::Box<Program>, Error> {
     let layout = core::alloc::Layout::new::<Program>();
     // SAFETY: `Program` is not zero-sized; a non-null block of `layout`

@@ -939,7 +939,7 @@ impl<'a> Emitter<'a> {
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn release(&mut self, r: Reg) {
         // Only what `tmp` gave this item: an operand's register may be a
-        // live value's (Fable's review: `release` once freed one).
+        // live value's (`release` once freed one).
         if self.taken.contains(&r) && !self.free.contains(&r) {
             self.free.push(r);
         }
@@ -2556,8 +2556,8 @@ impl<'a> Emitter<'a> {
         c.s32i(i, CTX, memo);
         c.s32i(s, CTX, memo + 4);
         let keep = self.keep_save(k, &[]);
-        // (The palette into a11 first: its hoist may be a10 itself — Fable's
-        // review: a hoist read after a10 was written made 6·i the entry.)
+        // (The palette into a11 first: its hoist may be a10 itself: a hoist
+        // read after a10 was written made 6·i the entry.)
         self.load_word(11, pal);
         self.c.addx2(10, i, i);
         self.c.add(10, 10, 11);

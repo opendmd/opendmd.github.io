@@ -1,4 +1,4 @@
-//! `psi fmt`: one canonical layout for a formula (the owner's house style,
+//! `psi fmt`: one canonical layout for a formula (the house style,
 //! opendmd-notes docs/research/psi-tooling-plan.md "Decisions" 6).
 //!
 //! **Only the space between tokens changes.** The formula's tokens — every

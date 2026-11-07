@@ -795,7 +795,7 @@ fn helpers_draw_the_same_through_kernels() {
         "pal(rainbow, pick(floor(px*0.07 + py*0.3) % 9, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, t/8, 0.8, 0.9)) * (py / 31)",
         "gray(tri(x * 3 + t) * sqr(y * 2 + t) * saw(x + y))",
         "gray(x > t or not (y < 0.5) and px != 7)",
-        // Fable's review: a saturating mul's operand read again later (a
+        // A saturating mul's operand read again later (a
         // released operand register was a live value's).
         "v = (x + y) * 30000 + y + t\nu = v * v\ngray(min(u, 0.1) + frac(v))",
         "v = (x + y + t) * 300 + y\nu = v * v\ngray(frac(v) + min(u, 0.1))",
@@ -803,7 +803,7 @@ fn helpers_draw_the_same_through_kernels() {
         // ...and a table past 8 entries, a lane pick of 9 (two immediates).
         "table T = 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9\ngray(T[x*9 + y*3 + t] + y)",
         "gray(pick(floor(x * 9 + t) % 9, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, y, 0.8, x) + y)",
-        // Fable's phase-2 review: a palette hoisted in a10 read after a
+        // A palette hoisted in a10 read after a
         // memo miss wrote a10 (an unscaled and a scaled layer of one palette).
         "u = x * 0.5\nv = u + y\nq = v * x + u\nlayer { pal(fire, q) }\nlayer max { gray(y, 0.3) }\nlayer multiply { pal(fire, x) * 0.7 }",
         "layer { pal(ice, x + t) }\nlayer screen { pal(ice, y) * (x * 0.9) }\nlayer add { pal(ice, x * y) * y }",

@@ -1605,7 +1605,7 @@ impl Prog {
             return 0;
         }
         if op.code == DIV_S {
-            // Fitted to paint80-ab8b5's div4 rows on the spare (2026-11-05,
+            // Fitted to paint80-ab8b5's div4 rows on a test board (2026-11-05,
             // each over `div4 mul`'s shifts, four a pixel): a constant's
             // magic number 34-39 ns (±2^j, whole numbers), the general
             // steps 89 for a divisor past ±1, 113 at ±1 or more, 115 where
@@ -1691,7 +1691,7 @@ impl Prog {
                     OUT_HSV if lane => 195,
                     OUT_RGB if lane => 120,
                     // `pal(P, v) * k`: three channels scaled. psi-probe on
-                    // the spare (p2probe-b): 346 ns a pixel in all for a
+                    // a test board (p2probe-b): 346 ns a pixel in all for a
                     // k that varies (226 + the write), 166 for k = 1 (the
                     // palette's bytes: 46 + the write). Since psi-speed a
                     // pixel with its neighbour's entry and scale reuses its
@@ -1891,7 +1891,7 @@ impl Prog {
     }
 
     /// The draw stage's part of [`esp32_us`](Self::esp32_us), from
-    /// `psi-probe` on the spare (2026-10-27, 1.0.0-beta.11-drawprobe-a,
+    /// `psi-probe` on a test board (2026-10-27, 1.0.0-beta.11-drawprobe-a,
     /// tests/measured.rs `DRAW`): a step run ~420 ns (a loop's END and its
     /// body's values, each as often as it runs), a dot 400, a line 1,100 +
     /// 320 a pixel walked (its longer side when a side's ends are
@@ -2131,7 +2131,7 @@ impl Prog {
     /// a box on the panel, a line's steps, a sprite's or a text's cells) at
     /// its kind's cost each — counted where its values are constants, else
     /// a typical size. A ring also tests its neighbours where it is inside.
-    /// Fitted to the spare (paint-probe, 2026-11-04, 80 MHz flash: each kind
+    /// Fitted to a test board (paint-probe, 2026-11-04, 80 MHz flash: each kind
     /// 16 times a frame at three sizes, the draw stage alone; within ~5 %
     /// of every row).
     fn paint_ns(&self, at: usize) -> u64 {
@@ -2770,11 +2770,11 @@ impl VecLoop {
 pub(crate) const HELD_COPY_NS: u32 = 5;
 
 /// `cycle`'s turn of a palette, µs a frame over a row step's 10: 32 rows
-/// of a 32-entry copy (consoleb-a on the spare: `cycle(fire, x*3, t)` 838
+/// of a 32-entry copy (consoleb-a on a test board: `cycle(fire, x*3, t)` 838
 /// µs a frame against `pal(fire, frac(x*3))`'s 735).
 pub(crate) const TURN_US: u32 = 90;
 /// A tween of a palette once a frame (`code::TWEEN`: 32 entries, 96
-/// mixes on bytes), µs: paint80-713cd on the spare, p0-tween's frame
+/// mixes on bytes), µs: paint80-713cd on a test board, p0-tween's frame
 /// steps (six) and its four tweens with the store's unpacking 44 µs a frame.
 pub(crate) const TWEEN_US: u32 = 9;
 /// A scene's guard in the pixel section, ns a pixel: one test a lane of
@@ -2782,14 +2782,14 @@ pub(crate) const TWEEN_US: u32 = 9;
 /// paint-probe measures it); in the kernel a test and a branch a pixel.
 pub(crate) const GUARD_NS: u32 = 4;
 /// On the VM, a guard's rows off more: its values' lanes zeroed (512 B
-/// each a lane). paint80-01e06 on the spare (2026-11-04): three scenes
+/// each a lane). paint80-01e06 on a test board (2026-11-04): three scenes
 /// off 2,018 µs against an estimate of 1,871 without it (+12 ns a pixel
 /// each).
 pub(crate) const GUARD_VM_OFF_NS: u32 = 12;
 /// In the kernel (P0b, the guards tested once a row, sites patched by the
 /// driver): on a row its scene is on, the run as if there were no guard;
 /// off, the run's first bytes are zeros and a jump past it.
-/// paint80-01e06 on the spare: three scenes on 3,944 µs against 3,859
+/// paint80-01e06 on a test board: three scenes on 3,944 µs against 3,859
 /// without scenes (+6.8 ns a pixel each, the path's ×1.4 in: 4 here; the
 /// register layout round the runs), off 1,199 µs rows against an estimate
 /// of 1,243 at 17, by rows 2,589 against 2,576. (It was a test and a
@@ -2797,14 +2797,14 @@ pub(crate) const GUARD_VM_OFF_NS: u32 = 12;
 pub(crate) const GUARD_JIT_ON_NS: u32 = 4;
 pub(crate) const GUARD_JIT_OFF_NS: u32 = 17;
 /// A paint primitive's call: its values gathered, the call, its
-/// coordinates to pixels, ns (paint-probe on the spare: `pset` off the
+/// coordinates to pixels, ns (paint-probe on a test board: `pset` off the
 /// panel 16 times a frame).
 pub(crate) const PAINT_CALL_NS: u64 = 1_700;
 /// A ring's pixel inside it: four neighbours tested more, ns.
 pub(crate) const RING_INSIDE_NS: u64 = 810;
 /// The paint plane laid over the rows a frame (`draw::paint_row`: a byte a
 /// pixel read, a palette entry written where something was painted), µs:
-/// paint-probe on the spare, 197 µs alone with nothing painted, 401 with
+/// paint-probe on a test board, 197 µs alone with nothing painted, 401 with
 /// every pixel painted (the VM's rows +196 and +401): a formula that
 /// clears the plane (`cls`) paints it all, others are counted at half.
 pub(crate) const PAINT_ROWS_US: u32 = 200;
@@ -2816,7 +2816,7 @@ pub(crate) const PAINT_FULL_US: u32 = 400;
 pub(crate) const STILL_COPY_NS: u32 = 1;
 
 /// `noise(x, y, z)` with a whole constant `z`, ns a pixel: the plane's
-/// four corners ([`crate::fixed::noise_flat`]), measured on the spare
+/// four corners ([`crate::fixed::noise_flat`]), measured on a test board
 /// (p2probe-b: 816 ns a pixel for the step row against 1,103 with eight).
 pub(crate) const NOISE_FLAT_NS: u32 = 565;
 
@@ -2828,7 +2828,7 @@ pub(crate) fn value_ns(c: u8) -> u32 {
     match c {
         ADD | SUB | LT | LE | GT | GE | EQ | NE | AND | OR | MIN | MAX | STEP | MASK => 50,
         // A fused compare (`cmp_lane`: three strided operands, one element
-        // a turn). paint80-01e06 on the spare (2026-11-04): four `sel_lt`
+        // a turn). paint80-01e06 on a test board (2026-11-04): four `sel_lt`
         // 136 µs a frame over the compares and multiplies they replace
         // (+8 ns a pixel each over the pair), two `cnt_ge` 55
         // µs under theirs (−7 each against 128): the strided loop is no
@@ -2837,7 +2837,7 @@ pub(crate) fn value_ns(c: u8) -> u32 {
         CNT_LT..=CNT_GE => 120,
         BIT => 55,
         MUL => 86,
-        // The narrowed steps (`range`), measured by psi-probe on the spare
+        // The narrowed steps (`range`), measured by psi-probe on a test board
         // (lang-probe-b, 2026-10-28: each row against `gray(x)`'s 163 ns;
         // they were instruction-count guesses of 25, 55, 33 and 28).
         ADD_W | SUB_W => 28,
@@ -2938,7 +2938,7 @@ pub(crate) fn jit_value_ns(c: u8) -> u32 {
         ABS | NEG | NOT | SAW | SQR => 17,
         LT | LE | GT | GE | EQ | NE | STEP => 17,
         // `sel_*`: a move, a branch, a move; `cnt_*`: two branches over
-        // two adds, then the shift. paint80-01e06 on the spare: four
+        // two adds, then the shift. paint80-01e06 on a test board: four
         // `sel_lt` 174 µs a frame under the compares and multiplies (−10.6
         // ns a pixel each, ×1.4 the path: 22 − 7.6), two `cnt_ge` 215
         // under theirs (−26.2 each: 36 − 18.7).
@@ -2953,7 +2953,7 @@ pub(crate) fn jit_value_ns(c: u8) -> u32 {
         U_L => 70,
         // `under(x, y)`'s template: two coordinates rounded and held (8
         // instructions each), the index, a mask, a byte read and `byte`
-        // (~24 in all, U_R's 26 ns for 8). Paint-probe on the spare
+        // (~24 in all, U_R's 26 ns for 8). Paint-probe on a test board
         // (paint80-f6aa6): 3, 6 and 12 steps 2,306 / 4,052 / 7,505 µs a
         // frame, pixelate 2,645 on the real path: within -3..+12 %.
         UAT => 75,
@@ -2963,12 +2963,12 @@ pub(crate) fn jit_value_ns(c: u8) -> u32 {
         // (the index against its length, the load), a sprite's pixel ~25
         // (its shape known when the kernel is made: both bounds, the
         // row's word, the pixel's bits by `ssr`/`src`, the key's number).
-        // Instruction counts until the spare measures them.
+        // Instruction counts until a test board measures them.
         TAB => 40,
         SPR => 110,
         // `fixed::DivBy`'s steps inline (~18 instructions where the ranges
         // say the divisor is past ±1, ~27 where they don't; a constant's:
-        // `jit_step_ns`). Instruction counts until the spare measures them.
+        // `jit_step_ns`). Instruction counts until a test board measures them.
         DIV_S => 115,
         c => value_ns(c).saturating_sub(60).max(60),
     }

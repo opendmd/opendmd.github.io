@@ -119,7 +119,7 @@ fn every_composition_compiles_to_a_look() {
     // Plasma, screened at 40 %: what the panel is asked to draw.
     let p = compose(PLASMA, "screen", 40).unwrap();
     assert_eq!(p.layers(), 1);
-    // (~8.2 ms: the spare measured it at 8.55 ms as a look, a 12 ms limit;
+    // (~8.2 ms: a test board measured it at 8.55 ms as a look, a 12 ms limit;
     // ~6.7 ms once its waves of x are worked out once a column; ~5.9 with
     // the narrowed steps.)
     assert!(

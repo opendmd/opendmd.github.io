@@ -1,5 +1,5 @@
 //! `Program::esp32_us` against what the device measured (`psi-probe` on
-//! the spare, the VM's frame p50 over a picture: tests/measured.rs). Every
+//! a test board, the VM's frame p50 over a picture: tests/measured.rs). Every
 //! row here is compiled without the column run and the still cache's run
 //! (`compile_plain`) and without the narrowed steps, as it was when
 //! measured.
@@ -46,7 +46,7 @@ fn compose(src: &str, blend: &str, k: u8) -> opendmd_psi::Program {
 /// language review's A1 (psi-settle, 2026-11-04), when that compiled to a
 /// multiply by the reciprocal, and played since as a division (`div_s`
 /// narrowed; `div` here, unnarrowed). Such a row's program is not the one
-/// measured: it is printed, not held, until the spare measures it again.
+/// measured: it is printed, not held, until a test board measures it again.
 fn divides_per_pixel(p: &opendmd_psi::Program) -> bool {
     p.listing().lines().any(|l| {
         let l = l.trim_start();
@@ -187,7 +187,7 @@ fn the_jit_estimate_is_never_above_the_vms() {
     assert!(n > 30);
 }
 
-/// The JIT's estimate against the spare's JIT frames (jit2-c): within
+/// The JIT's estimate against a test board's JIT frames (jit2-c): within
 /// ±20 % of each (the governor measures anyway; the estimate is the
 /// editor's label and the governor's first frame).
 #[test]
@@ -218,7 +218,7 @@ fn the_jit_estimate_is_within_20_percent_of_the_device() {
 }
 
 /// `cycle` and `layer rate N` (console-b): the estimate the editor and the
-/// governor start from against the spare's frames, within ±20 %.
+/// governor start from against a test board's frames, within ±20 %.
 #[test]
 fn the_cycled_and_slow_formulas_estimate_their_frames() {
     let mut rows = Vec::new();
@@ -241,7 +241,7 @@ fn the_cycled_and_slow_formulas_estimate_their_frames() {
 }
 
 /// The paint primitives' draw stage, the overlay, `under(x, y)` and the
-/// Formulas that use them against paint-probe's rows on the spare
+/// Formulas that use them against paint-probe's rows on a test board
 /// (2026-11-04): each primitive's draw stage within 15 % of `draw_us`
 /// (the fit set, three sizes a kind), the `UAT` looks and the Formulas
 /// within 15 % (the VM; the JIT's within 20 %).
@@ -312,7 +312,7 @@ fn the_estimate_counts_two_scenes() {
     assert!(two > one + one / 2, "{one} {two}");
 }
 
-/// P0b-4's fused compares and the guards a row against the spare
+/// P0b-4's fused compares and the guards a row against a test board
 /// (`measured::P0B4`): each frame's own estimate (`tier_us_frame` with the
 /// JIT, against the direct kernel frame; `vm_us_frame` without, against
 /// the direct VM frame ×1.15 as the rows above) within ±15 % for the

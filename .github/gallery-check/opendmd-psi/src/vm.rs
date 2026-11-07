@@ -1539,7 +1539,7 @@ pub(crate) fn scalar_value(sc: &Sc, op: &Op, t: &Tables, tabs: &[i32]) -> i32 {
 /// A wide noise of the small parts `x y z` with noise context `code -
 /// NOISE_O`'s lattice offsets (out of line, and in IRAM beside the frame
 /// loop: a row step, run between the row's lanes, whose flash copy cost
-/// Endless road ~1.1 ms a frame on the spare — roadprobe-b, two a row).
+/// Endless road ~1.1 ms a frame on a test board — roadprobe-b, two a row).
 #[inline(never)]
 #[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
 fn noise_o(x: i32, y: i32, z: i32, sc: &Sc, c: u8) -> i32 {

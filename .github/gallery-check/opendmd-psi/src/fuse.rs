@@ -335,7 +335,7 @@ pub(crate) fn fuse(prog: &mut Prog) {
 }
 
 /// What a fused run of kind `kind` saves, ns a pixel, against its steps'
-/// costs: s2probe-b's `fuse` rows on the spare (2026-10-28), each pattern
+/// costs: s2probe-b's `fuse` rows on a test board (2026-10-28), each pattern
 /// alone (the multiply-add from s2probe-a and the two Rotozooms' change
 /// between the probes).
 #[cfg_attr(target_arch = "xtensa", optimize(size))]

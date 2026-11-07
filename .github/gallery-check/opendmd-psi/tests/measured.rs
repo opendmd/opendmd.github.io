@@ -1,4 +1,4 @@
-// Measured on the spare by psi-probe (2026-10-26, 1.0.0-beta.10-anylook-a): VM p50 µs a frame.
+// Measured on a test board by psi-probe (2026-10-26, 1.0.0-beta.10-anylook-a): VM p50 µs a frame.
 pub const STEPS: &[(&str, &str, u32)] = &[
     ("base gray(x)", "gray(x)", 678),
     ("add", "gray(x + t)", 897),
@@ -115,7 +115,7 @@ pub const ROAD_DRAWN: &str = "-- author: OpenDMD\n-- licence: CC0-1.0\n-- bundle
 pub const STARFIELD: &str = "loop 2.4\n-- Starfield: 192 stars flying at you, a pass through the field a loop,\n-- each a streak from where it was a moment ago. a: streak length\nback = 8 + a*240\ndraw {\n  for k < 192 {\n    sx = (hash(k, 7) - 0.5)*4096; sy = (hash(k, 3) - 0.5)*1024  -- where it is, across and up\n    z = frac(hash(k, 11) - t/2.4)*4096        -- how far: 0 near, 4096 far\n    s = 2/(z/16 + 4); st = 2/(min(z + back, 4095)/16 + 4)  -- perspective, now and before\n    lit = 1 - z/4096                          -- fading in from the dark\n    line(64 + sx*st, 16 + sy*st, 64 + sx*s, 16 + sy*s, lit*0.2, lit)\n  }\n}\npal(ice, ink)";
 pub const CUBE: &str = "loop 4.8\n-- Wireframe cube: turning about two axes and swinging across; the near\n-- edges brighter. a: size. The colour is the last line's #40c0ff\ntable V = -1,-1,-1, 1,-1,-1, 1,1,-1, -1,1,-1, -1,-1,1, 1,-1,1, 1,1,1, -1,1,1\ntable E = 0,1, 1,2, 2,3, 3,0, 4,5, 5,6, 6,7, 7,4, 0,4, 1,5, 2,6, 3,7\nsa = sin(t/4.8); ca = cos(t/4.8); sb = sin(t/4.8 + 1/6); cb = cos(t/4.8 + 1/6)\nsize = 20 + a*28; mid = 64 + sa*40\ndraw {\n  for e < 12 {\n    m = E[e*2]*3; n = E[e*2 + 1]*3            -- the edge's two corners\n    x0 = V[m]*size; y0 = V[m + 1]*size; z0 = V[m + 2]*size\n    x1 = V[n]*size; y1 = V[n + 1]*size; z1 = V[n + 2]*size\n    xa = x0*ca + z0*sa; za = z0*ca - x0*sa; ya = y0*cb - za*sb; zb = y0*sb + za*cb  -- turned\n    xc = x1*ca + z1*sa; zc = z1*ca - x1*sa; yc = y1*cb - zc*sb; zd = y1*sb + zc*cb\n    line(mid + xa*36/(zb + 128), 16 + ya*36/(zb + 128), mid + xc*36/(zd + 128), 16 + yc*36/(zd + 128),\n         clamp(0.6 - zb/90, 0.16, 1), clamp(0.6 - zd/90, 0.16, 1))\n  }\n}\n#40c0ff * ink";
 
-// psi-speed3 (psi-probe on the spare, 2026-10-28, 1.0.0-beta.11-s3probe-a;
+// psi-speed3 (psi-probe on a test board, 2026-10-28, 1.0.0-beta.11-s3probe-a;
 // s2probe-b's before it): the draw rows with their loops run as lanes, VM
 // p50 µs a frame, compared over the one-dot base (`DRAW_LANES_BASE`); the
 // last two rows: steps laned since psi-speed3, and steps still worked out
@@ -176,7 +176,7 @@ pub const SPEED2: &[(&str, &str, u32)] = &[
     ("Endless road", "loop forever\nfps 100\n-- Endless road: an OutRun drive into a synthwave sunset. Bends and hills\n-- come from noise along the distance driven, which grows without end, so\n-- the track doesn't repeat; each time it plays it starts somewhere else.\n-- The car, from behind: red body (6), black glass and tyres (7), orange\n-- tail lights (8): the colours' places in the pick at the end\nsprite car {\n  key . 0, R 6, D 7, L 8\n  ........RRRRRRRRRR........\n  .......RDDDDDDDDDDR.......\n  ......RDDDDDDDDDDDDR......\n  ...RRRRRRRRRRRRRRRRRRRR...\n  .RLLLLRDDDDDDDDDDDDRLLLLR.\n  .RLLLLRDDDDDDDDDDDDRLLLLR.\n  .RRRRRRRRRRRRRRRRRRRRRRRR.\n  .RRRRRRRRRRRRRRRRRRRRRRRR.\n  DDDDDDDDDDDDDDDDDDDDDDDDDD\n}\n-- The mountains: 19 spans (row, from, to)\ntable MY = 19,19,19,20,20,20,21,21,21,22,22,22,23,23,23,24,24,25,26\ntable MA = -1,57,118,0,59,120,2,61,122,4,62,123,5,64,125,7,66,67,69\ntable MB = 17,83,134,16,81,132,14,79,130,12,78,129,11,76,127,9,74,73,71\n-- Road rows py 0 to 18: depth/2 in bends (ZH), depth in stripes (ZS),\n-- half width in pixels (HW); the sun's rows, half widths and colours\ntable ZH = .0058,.0061,.0064,.0068,.0072,.0077,.0083,.009,.0098,.011,.012,.013,.015,.017,.02,.025,.032,.045,.075\ntable ZS = .77,.81,.86,.91,.97,1.03,1.11,1.2,1.3,1.43,1.58,1.76,2,2.31,2.73,3.33,4.29,6,10\ntable HW = 50.7,48.1,45.5,42.9,40.3,37.7,35.1,32.5,29.9,27.3,24.7,22.1,19.5,16.9,14.3,11.7,9.1,6.5,3.9\ntable UY = 20,21,23,24,25,26,27,28,29,30,31\ntable UC = 7.2,7.6,8,8,7.9,7.6,7.2,6.7,6,5,3.5\ntable UI = .344,.344,.281,.281,.281,.281,.219,.219,.219,.219,.219\nu = t*0.15 + seed*1000                    -- distance driven, in bends\nh0 = noise(u, 0, 0); h1 = noise(u + 0.03, 0, 0)    -- heading here, just ahead\nv0 = noise(u, 5, 0)                       -- height here, and its slope\ndv = (noise(u + 0.01, 5, 0) - v0)*100\ncx = 50.5 + (h1 - h0)*80                  -- the car's left edge: it slides out in bends\nmx = (0.5 - h0)*60; sunx = 64 + mx        -- the sky turns with the road\ndraw {\n  for k < 19 {\n    my = MY[k]\n    line(MA[k] + mx, my, MB[k] + mx, my, 0.46875)\n  }\n  for k < 11 {\n    uy = UY[k]; uc = UC[k]\n    line(sunx - uc, uy, sunx + uc, uy, UI[k])\n  }\n}\n-- each row looks ahead: how far the road bends there, and how far a hill\n-- lifts or hides it (a crest moves rows to where the road is out of sight)\nzp = ZH[py]\nun = u + zp\nq = py - clamp((noise(un, 5, 0) - v0 - zp*dv)*ZS[py]*200, -6, 2)\nhw = HW[q]\nalt = frac(t*10 + ZS[q]) < 0.5             -- light or dark stripe: 10 a second\nadx = abs(px - (64 + (noise(un, 0, 0) - h0)*2000))\n-- 0 road, 1 kerb, 2 verge or sky; drawn: 3-5 sun, 7 mountains; 6-8 the car\nm = max(max((adx >= hw) + (adx >= hw*1.2), ink*16), car[px - cx, py - 23])\nlow = py < 19\n-- colours: entries of the rainbow palette (entry k is k/31)\npal(rainbow, pick(m, alt ? 30/31 : 1,\n                     alt ? 4/31 : 10/31,\n                     low ? (alt ? 2/31 : 1/31) : 1.17 - py*0.0161,\n                     10/31, 7/31, 5/31, 3/31, 0, 6/31))", 3733),
     ("Plasma", "loop 8\n-- three waves added together\nwave = sin(x*2 + t/8) + sin(y*1.5 - t/4) + sin(x*1.5 + y + t/8)\nhsv(wave/6 + t/8, 0.9, 1)", 2799),
     ("Fire", "loop 4\n-- curl bends the flames, more and more as they rise\ncurl = sin(y*1.5 - t)*0.25 + sin(y*3 - t*2 + x*4)*0.15\nflames = sin(x*6 + curl)*0.5 + sin(x*11 - curl)*0.5\nheat = (1 - y)*(1.6 + flames*0.7) - 0.5\npal(fire, clamp(heat, 0, 0.95))", 3753),
-    // roadprobe-c (2026-10-29, the spare, once-a-row helpers in IRAM): the
+    // roadprobe-c (2026-10-29, a test board, once-a-row helpers in IRAM): the
     // VM frame of Endless road as bundled until road-cost (the sprite car;
     // its split: setup 234 + rows 3,443) and with its car drawn as 17 spans
     // (the same bytes; its effect frame 3,393 less the 42 µs the effect
@@ -186,7 +186,7 @@ pub const SPEED2: &[(&str, &str, u32)] = &[
     ("Endless road (car drawn)", ROAD_DRAWN, 3351),
 ];
 
-// The JIT on the spare (psi-probe JIT2_ONLY, 1.0.0-beta.11-jit2-c,
+// The JIT on a test board (psi-probe JIT2_ONLY, 1.0.0-beta.11-jit2-c,
 // 2026-10-29): each bundled formula as an effect on the player's path with
 // the JIT on (its kernel, after the self-check and the trial; the still
 // cache taken where it has values), p50 µs a frame; and the looks over a
@@ -240,7 +240,7 @@ pub const JIT_EFFECTS: &[(&str, &str, u32)] = &[
         include_str!("../../opendmd-web/formulas/plasma.psi"),
         2657,
     ),
-    // psi-p0 on the spare (paint80-713cd, 2026-11-04, a paint probe
+    // psi-p0 on a test board (paint80-713cd, 2026-11-04, a paint probe
     // capture, not committed): the effect path
     // with the JIT on, as the other rows (the tween's VM frame is 757: the
     // player keeps the faster).
@@ -284,7 +284,7 @@ pub const JIT_LOOKS: &[(&str, &str, &str, u8, u32)] = &[
     ),
 ];
 
-// console-b on the spare (psi-probe CONSOLEB_ONLY, 1.0.0-beta.11-consoleb-a,
+// console-b on a test board (psi-probe CONSOLEB_ONLY, 1.0.0-beta.11-consoleb-a,
 // 2026-10-29): the cycled and rate Formulas as effects on the player's path,
 // p50 µs a frame, whichever the trial kept (JIT or VM; the still cache
 // taken, the held picture held). For `Program::esp32_us_jit_still`.
@@ -311,7 +311,7 @@ pub const CONSOLEB: &[(&str, &str, u32)] = &[
     ),
 ];
 
-// The paint primitives (paint-probe on the spare, 2026-11-04,
+// The paint primitives (paint-probe on a test board, 2026-11-04,
 // 1.0.0-beta.12-paint80-15d18, 80 MHz flash): each `for k < 16 { … }` over
 // `gray(x)` with a sprite `ship` (5 × 4), the frame steps and the draw stage
 // alone (the VM's stamps), p50 µs a frame: the fit set for `paint_ns`.
@@ -372,7 +372,7 @@ pub const PAINT_FORMULAS: &[(&str, &str, u32, u32)] = &[
     ("Neon city", include_str!("../../opendmd-web/formulas/neon-city.psi"), 4289, 4037),
 ];
 
-/// P0b-4 and the guards a row on the spare (paint80-01e06, 2026-11-04,
+/// P0b-4 and the guards a row on a test board (paint80-01e06, 2026-11-04,
 /// a paint probe capture (not committed), the paint
 /// probe's `cmp` lines): direct frames from `start` ms (seed
 /// `golden::SEED`), µs, VM and kernel, each against its frame's own
