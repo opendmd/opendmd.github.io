@@ -6,6 +6,7 @@
 //! it reads the parser's and the DAG's own fields. Never in the firmware.
 
 use super::*;
+use crate::syntax::Kept;
 
 /// A whole number with thousands' commas.
 fn group(v: i64) -> String {
@@ -132,7 +133,7 @@ impl<'s> Parser<'s> {
     pub(super) fn layout_notes(
         &mut self,
         prog: &mut Program,
-        (cached, col, col_lost): &(Vec<usize>, Vec<usize>, Option<&'static str>),
+        (cached, col, col_lost, took): &(Vec<usize>, Vec<usize>, Option<&'static str>, Vec<usize>),
     ) {
         let dag = &self.dag;
         let n = dag.nodes.len();
@@ -307,6 +308,21 @@ impl<'s> Parser<'s> {
         let mut lines: Vec<usize> = Vec::new();
         let mut last: Option<(usize, usize)> = None;
         if let Some(sink) = self.sink.as_mut() {
+            // The steps the still cache and the column run took out of the
+            // pixel loop, as [`Sink::op`] told them.
+            for &(id, a, e) in &self.dag.made {
+                let i = id as usize;
+                let how = if took.contains(&i) {
+                    Kept::Once
+                } else if col.contains(&i) {
+                    Kept::Column
+                } else {
+                    continue;
+                };
+                if self.dag.nodes[i].code < K_CONST {
+                    sink.kept((a, e), self.dag.nodes[i].code, how);
+                }
+            }
             for (a, b, t) in &notes {
                 if last == Some((*a, *b)) {
                     continue;

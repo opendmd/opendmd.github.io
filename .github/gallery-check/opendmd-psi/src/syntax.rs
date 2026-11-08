@@ -69,6 +69,15 @@ pub enum Level {
     Pixel,
 }
 
+/// Where a step the pixel loop no longer does went ([`Sink::kept`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kept {
+    /// The still cache: worked out once and kept.
+    Once,
+    /// The column run: worked out once a column.
+    Column,
+}
+
 /// What a compile saw ([`compile_observed`]). Every method has an empty
 /// default: implement what you need. Told after the formula is read (or up
 /// to the error that stopped it), before the program is laid out.
@@ -94,6 +103,12 @@ pub trait Sink {
     /// on the way (`via`, its definition's place), else the built-in it
     /// reads (`input`, as `px`). Not told for constants.
     fn why(&mut self, at: (usize, usize), via: Option<(usize, usize)>, input: &str) {}
+    /// A step [`op`](Self::op) told (the same place and code) that the
+    /// pixel loop does not work out every pixel after all: the still cache
+    /// keeps it ([`Kept::Once`]: not a step a frame) or the column run
+    /// works it out once a column ([`Kept::Column`]: 32 pixels' worth a
+    /// frame, not 4,096). Told once the program is laid out.
+    fn kept(&mut self, at: (usize, usize), code: u8, how: Kept) {}
     /// A note about the cost (`psi check` prints them): a `pick` worked out
     /// per pixel, a sum or product that could be bracketed, what the still
     /// cache and the column run took or left, a draw loop run as lanes.

@@ -2,7 +2,7 @@
 //! compiler reads these tables; the web app's highlighter and the editor's
 //! cheat sheet are generated from them (the `docs` feature adds the cheat
 //! sheet's rows), and `tests/builtins.rs` checks that the generated blocks
-//! in `opendmd-web/www/js/psikit.js` and `js/formulas.js` are what these
+//! in `opendmd-web/www/js/psikit.js` and `js/fhint.js` (with the completions) are what these
 //! tables give (`PSI_BLESS=1` rewrites them) — opendmd-notes docs/research/psi-tooling-plan.md §3.
 //!
 //! Not part of the crate's API (`#[doc(hidden)]`): the types are the
@@ -224,7 +224,7 @@ pub const VERSION: usize = 1;
 /// `key` line, `rate N` after `layer` (and its blend).
 pub const CONTEXT_WORDS: [&str; 6] = ["fps", "forever", "sprite", "palette", "key", "rate"];
 
-/// The editor's cheat sheet (`js/formulas.js` `VARS FUNCS DRAW COLS
+/// The editor's cheat sheet (`js/fhint.js` `VARS FUNCS DRAW COLS
 /// DECLS`, generated from these): what to write, what it does, and what a
 /// tap inserts when that is not the first column.
 #[cfg(feature = "docs")]
@@ -233,7 +233,7 @@ pub mod cheat {
     pub type Row = (&'static str, &'static str, &'static str);
 
     pub const VARS: &[Row] = &[
-        ("x, y", "where the pixel is: 0 to 1 across from the left, and down from the top", ""),
+        ("x, y", "where the pixel is: x 0 at the left to 1 at the right, y 0 at the top to 1 at the bottom", ""),
         ("px, py", "the pixel’s column 0–127 from the left and row 0–31 from the top", ""),
         ("t", "seconds into the loop", ""),
         ("hour, minute, second", "the time of day", ""),
@@ -244,7 +244,7 @@ pub mod cheat {
         ("r, angle", "distance and angle (turns, clockwise from the right) from the middle", ""),
         ("ur, ug, ub", "the colour under the formula: the GIF it is drawn over, 0 to 1", ""),
         ("ul", "how bright that is", ""),
-        ("under(x, y)", "the picture under at pixel x, y (the nearest, held to the panel): a colour, as #…: under(px + 2, py) shifts it, under(floor(px/4)*4, floor(py/4)*4) pixelates it; under alone is this pixel's", ""),
+        ("under(x, y)", "the picture under the formula at pixel x, y (the nearest, held to the panel), as a #… colour. under(px + 2, py) shifts it; under(floor(px/4)*4, floor(py/4)*4) pixelates it. under alone is this pixel's", ""),
         ("daylight", "how light it is outside where the panel is, 0 at night to 1 by day (twilight between); the panel's location in Settings, else 1", ""),
         ("sun.alt", "the sun's height in turns: 0 on the horizon, 0.25 straight up, below 0 at night; 0.1 without a location", ""),
         ("moon.phase, season, yearday", "the moon (0 new, 0.5 full), the time of year (0 midwinter, 0.5 midsummer) and the day of the year (0 on 1 January)", ""),
@@ -266,9 +266,9 @@ pub mod cheat {
         ("hash(a, b)", "random 0 to 1", ""),
         ("select(c, a, b)", "a when c is true (not 0), else b; or c ? a : b", ""),
         ("pick(k, a, b, …)", "a at k = 0, b at 1, …; else 0", ""),
-        ("since(replay.game)", "seconds since a built-in input last changed (32767 when it never has): a flash is max(0, 1 - since(replay.game))", ""),
-        ("was(replay.game)", "a built-in input's value before its last change: mix(was(k), k, min(1, since(k))) fades from the old to the new", ""),
-        ("digit(n, col, row)", "the panel’s font: 1 where digit n has a pixel; col 0–4, row 0–6 from the top; add , small or , bold (chunky digits) for another font", ""),
+        ("since(replay.game)", "seconds since a built-in input last changed, 32767 if it never has. max(0, 1 - since(replay.game)) flashes on a change", ""),
+        ("was(replay.game)", "a built-in input's value before its last change. mix(was(k), k, min(1, since(k))) fades from the old to the new", ""),
+        ("digit(n, col, row)", "1 where digit n has a pixel in the panel’s font; col 0–4, row 0–6 from the top. Add , small or , bold (chunky digits) for another font", ""),
         ("glyph('A', col, row)", "the same for a character", ""),
         ("bit(n, i)", "bit i of a whole number: 1 or 0", ""),
         ("< <= > >= == !=", "compare: 1 or 0; and, or, not", ""),
@@ -278,9 +278,9 @@ pub mod cheat {
         ("loop forever", "goes on without repeating: t grows from when it starts (use frac, %, sin, noise of it); seed is 0 to 1, new each time it plays", ""),
         ("fps 100", "frames a second: 25, 50 (else) or 100, for fast motion; a light formula only", ""),
         ("layer add { … }", "a layer with its own names and colour, on what is below: over, add, multiply, screen, max or min", ""),
-        ("layer rate 4 { … }", "a slow bottom layer: redrawn every 4th frame, a band of rows a frame (or when the clock or a control it reads changes); the layers above draw over it every frame", "layer rate 4 {\n  \n}\n"),
-        ("fn ring(cx, r) = abs(len(px - cx, py - 16) - r) < 1", "a function: a value worked out from its values, used as ring(64, 8); with { … } instead of = …, lines that draw, called on a line of their own in draw", "fn f(a) = "),
-        ("fn p(x, y) { … }", "a function whose values are x and y: px, py, r, angle … inside follow them; its last line a colour, p(1 - x, y) draws it mirrored", "fn p(x, y) {\n  \n}\n"),
+        ("layer rate 4 { … }", "a slow bottom layer: a band of its rows is redrawn each frame, so every row every 4th frame, and all of it when the clock or a control it reads changes. The layers above draw over it every frame", "layer rate 4 {\n  \n}\n"),
+        ("fn ring(cx, r) = abs(len(px - cx, py - 16) - r) < 1", "a function: a value worked out from its values, used as ring(64, 8). With { … } instead of = …, it holds lines that draw, called on a line of their own in draw", "fn f(a) = "),
+        ("fn p(x, y) { … }", "a function whose values are x and y, so px, py, r, angle … inside follow them. With a colour as its last line, p(1 - x, y) draws it mirrored", "fn p(x, y) {\n  \n}\n"),
         ("use Plasma as p", "puts in one of your formulas or an example, as a function fn p(x, y) { … }", "use Plasma as p\n"),
     ];
 
@@ -289,20 +289,20 @@ pub mod cheat {
         ("for k < 12 { … }", "inside draw: k = 0, 1, … 11; two deep at most, 2048 turns a frame", "for k < 12 {\n  \n}"),
         ("line(x0, y0, x1, y1, v0, v1)", "a line, in pixels from the top left; v0, v1 its ink at each end, 0 to 1 (else 1)", ""),
         ("dot(x, y, v)", "one pixel of ink v", ""),
-        ("cls(#102)", "paint: the whole panel one colour (paint is drawn over the colour line; the last painted wins)", ""),
+        ("cls(#102)", "paint the whole panel one colour. Paint is drawn over the colour line, and the last painted wins", ""),
         ("pset(x, y, #f80)", "paint one pixel; line(x0, y0, x1, y1, c) and dot(x, y, c) paint too when their last value is a colour", ""),
         ("rect(x0, y0, x1, y1, c) rectfill(…)", "paint a box (its corners included), or a filled one", ""),
         ("circ(x, y, r, c) circfill(…)", "paint a circle, or a filled one", ""),
         ("trifill(x0, y0, x1, y1, x2, y2, c)", "paint a filled triangle", ""),
         ("print(\"TEXT\", x, y, c)", "paint text in the panel's font (add small); or a number: print(minute, x, y, c, small, 2) with at least 2 digits", ""),
-        ("spr(s, x, y, flip)", "paint sprite s with its top left at x, y (its key gives colours: key . 0, R #f00); flip 1 across, 2 down, 3 both", ""),
+        ("spr(s, x, y, flip)", "paint sprite s with its top left at x, y, in its key's colours (key . 0, R #f00); flip 1 across, 2 down, 3 both", ""),
         ("pal(fire, v), gray(v)", "colours to paint with besides #…: a palette's or a gray, v 0 to 1", ""),
         ("if c { … } else { … }", "inside draw: only when c is not 0", "if  {\n  \n}"),
         ("ink", "what draw put at the pixel, 0 to 1: pal(ice, ink), #40c0ff * ink", ""),
-        ("ink(16)", "the same in 16 levels, a whole number: what was drawn with ink k/16 reads k, exactly (pick(ink(16), …)); 1 to 255 levels", ""),
+        ("ink(16)", "the same in 16 levels, as a whole number. Ink k/16 reads exactly k, for pick(ink(16), …); 1 to 255 levels", ""),
         ("table T = 1, -2, 0.5", "numbers, 256 a table and 1024 in all (tables and sprites)", "table T = "),
         ("T[k]", "number k of table T, from 0 (0 outside it)", ""),
-        ("sprite s { … }", "a small picture in characters: first its key, key . 0, X 1 (each character and the number it reads as, up to 16), then rows up to 64 wide and 32 tall", "sprite s {\n  key . 0, X 1\n  .X.\n}\n"),
+        ("sprite s { … }", "a small picture in characters. First the key, key . 0, X 1, gives each character the number it reads as (up to 16); then rows up to 64 wide and 32 tall", "sprite s {\n  key . 0, X 1\n  .X.\n}\n"),
         ("s[u, v]", "sprite s at column u, row v from its top left: its key’s number (0 outside)", ""),
     ];
 
@@ -310,12 +310,12 @@ pub mod cheat {
         ("hsv(hue, sat, val)", "colour: hue in turns, 0 to 1 each", ""),
         ("rgb(r, g, b)", "red, green, blue: 0 to 1", ""),
         ("pal(fire, v)", "a palette: fire, ice, ocean, chrono, amber, rainbow, gray", ""),
-        ("palette sea = #024, #08c, #fff", "your own palette, up to 32 colours (8 palettes; pal and cycle read 3): pal(sea, 0) the first, pal(sea, 1) the last, pal(sea, 0.5) the middle one", "palette p = #000, #f80, #fff\n"),
-        ("scene s when c { v = … }", "values worked out only while c (once a frame or a row) is not 0; after it its names are 0 while it is off; the estimate counts two scenes at once", "scene s when  {\n  \n}\n"),
+        ("palette sea = #024, #08c, #fff", "your own palette of up to 32 colours (8 palettes; pal and cycle read 3). pal(sea, 0) is the first, pal(sea, 1) the last, pal(sea, 0.5) the middle one", "palette p = #000, #f80, #fff\n"),
+        ("scene s when c { v = … }", "values worked out only while c is not 0 (c once a frame or a row). After it, its names read 0 while it is off. The estimate counts two scenes at once", "scene s when  {\n  \n}\n"),
         ("palette sky = tween(day, night, w)", "a palette mixed once a frame, day towards night by w (0 to 1, of t or sliders); tweens nest; tween(a, b, w), tween(c, d, v) fills the low and high 16 colours", "palette p = tween(, , )\n"),
         ("palette sea = deep #024, foam #fff", "a colour may have a name: sea.foam is where pal finds it (sea.step from one colour to the next, sea.n how many)", ""),
         ("pal(fire, v) * k", "a palette colour, dimmed (or lit) by k", ""),
-        ("cycle(fire, v, s)", "palette cycling: the palette turned by s (one turn per 1: t/4 turns it every 4 s), at v; wraps where pal stops; s may change by row; cheap when v is the same every frame", ""),
+        ("cycle(fire, v, s)", "palette cycling: the palette read at v, turned by s (one turn per 1, so t/4 turns it every 4 s). It wraps where pal stops; s may change by row; cheap when v is the same every frame", ""),
         ("gray(v)", "white, 0 to 1", ""),
         ("#ff8800", "a colour: alone, or #f80 * v, mix(#000, #f80, v)", ""),
         ("rgb(r, g, b, k)", "a last value: how much it covers, 0 to 1 (what is under shows through); rgb(#f80, k)", ""),
@@ -327,6 +327,6 @@ pub mod cheat {
         ("about \"…\"", "one line about it (120 at most)", "about \"\"\n"),
         ("control speed 0..1 = 0.5 \"Speed\"", "a slider: its name in the formula, range, default and label (three controls at most)", "control speed 0..1 = 0.5 \"Speed\"\n"),
         ("control mode = calm, wild", "buttons: the value is the choice’s number, 0 for the first (pick(mode, …)); two words make a switch", "control mode = calm, wild\n"),
-        ("look screen 40", "it can be the panel’s look: drawn over the GIF with a blend and an amount (look alone: over, 100)", "look\n"),
+        ("look screen 40", "it can be the panel’s look, drawn over the GIF with a blend and an amount (look alone is over, 100)", "look\n"),
     ];
 }

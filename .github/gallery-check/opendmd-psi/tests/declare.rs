@@ -129,16 +129,16 @@ fn every_declaration_error_says_what_and_where() {
     assert!(bad.is_empty(), "\n{}", bad.join("\n"));
 }
 
-/// The new codes are all in the language reference's error list.
+/// The new codes are all in the error codes page (docs/psi-errors.md).
 #[test]
 fn the_codes_are_in_the_language_reference() {
     let spec = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../docs/psi-spec.md"
+        "/../docs/psi-errors.md"
     ))
     .unwrap();
     for &(_, _, _, _, code) in ERRORS {
-        assert!(spec.contains(code), "{code} is not in docs/psi-spec.md");
+        assert!(spec.contains(code), "{code} is not in docs/psi-errors.md");
     }
 }
 

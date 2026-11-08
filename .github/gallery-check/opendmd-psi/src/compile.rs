@@ -519,7 +519,7 @@ fn lex_into(src: &str, out: &mut Toks) -> Result<(), Error> {
                     '^' => " (there is no power operator: multiply, e.g. `x * x`)",
                     '&' | '|' => " (write `and` / `or`)",
                     // E001.
-                    '"' => " (there are no strings but on `name`, `about` and `control` lines: for a character's code write it in single quotes, 'A')",
+                    '"' => " (there are no strings but on `name`, `about` and `control` lines and in `print(…)`: for a character's code write it in single quotes, 'A')",
                     _ => "",
                 };
                 return Err(Error::new(
@@ -6689,7 +6689,7 @@ fn compile_inner<'s>(
         return Err(Error::new(
             MAX_SOURCE,
             src.len(),
-            format!("too long: a formula can be {MAX_SOURCE} characters at most"),
+            format!("too long: a formula can be {MAX_SOURCE} bytes at most"),
         ));
     }
     let toks = lex(src)?;
@@ -7020,7 +7020,7 @@ fn finish(
     // A limit hit while laying out the steps is the formula's as a whole:
     // point at its (top) colour line.
     #[cfg(feature = "syntax")]
-    let mut seen = (Vec::new(), Vec::new(), None);
+    let mut seen = (Vec::new(), Vec::new(), None, Vec::new());
     if cmp {
         fuse_compares(&mut p.dag, &steps, &p.draw, &tweens)?;
     }
@@ -7962,7 +7962,7 @@ fn emit(
     reuse: bool,
     slow: Option<Slow>,
     prog: &mut Program,
-    #[cfg(feature = "syntax")] seen: &mut (Vec<usize>, Vec<usize>, Option<&'static str>),
+    #[cfg(feature = "syntax")] seen: &mut (Vec<usize>, Vec<usize>, Option<&'static str>, Vec<usize>),
 ) -> Result<(), Error> {
     let nodes = &dag.nodes;
     let n = nodes.len();
@@ -8650,6 +8650,17 @@ fn emit(
             Vec::new()
         };
         seen.2 = if col_len > 0 { None } else { col_lost };
+        // What the still cache took out of the pixel loop: every value
+        // worked out each frame without it and not with it (its values and
+        // what only they read).
+        seen.3 = if run_len > 0 {
+            let (all, left) = (per_frame(dag, steps, &[]), per_frame(dag, steps, &cached));
+            (0..n)
+                .filter(|&i| nodes[i].level == LV_PIXEL && all[i] && (!left[i] || cached.contains(&i)))
+                .collect()
+        } else {
+            Vec::new()
+        };
     }
     #[cfg(not(feature = "syntax"))]
     let _ = col_lost;

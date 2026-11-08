@@ -7,12 +7,12 @@ gray(x ^ 2)
 
 === E001
 gray("x")
---- 1:6 I don't understand `"` (there are no strings but on `name`, `about` and `control` lines: for a character's code write it in single quotes, 'A')
+--- 1:6 I don't understand `"` (there are no strings but on `name`, `about` and `control` lines and in `print(…)`: for a character's code write it in single quotes, 'A')
 
 === E001
 loop 4 "x"
 gray(x)
---- 1:8 I don't understand `"` (there are no strings but on `name`, `about` and `control` lines: for a character's code write it in single quotes, 'A')
+--- 1:8 I don't understand `"` (there are no strings but on `name`, `about` and `control` lines and in `print(…)`: for a character's code write it in single quotes, 'A')
 
 === E002
 gray(1.2.3)
@@ -242,7 +242,7 @@ rgb(0.5, #f00, 1)
 
 === E401
 <<16400*x >>
---- 1:32769 too long: a formula can be 32768 characters at most
+--- 1:32769 too long: a formula can be 32768 bytes at most
 
 === E402
 v = x

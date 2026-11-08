@@ -17,7 +17,8 @@
 //! case; that every `// E…` code in `src/compile.rs` is indexed; that every
 //! sentence `src/compile.rs` can say (found by a scan of its string
 //! literals: see `unclassified_sentences`) has a code; and that the error
-//! index in `docs/psi-spec.md` is what `errors::ERRORS` gives.
+//! index in `docs/psi-errors.md` (the site's /dev/psi/errors/) is what
+//! `errors::ERRORS` gives.
 //! `PSI_BLESS=1 cargo test --features docs --test diagnostics` rewrites the
 //! `---` lines and the index.
 #![cfg(not(target_arch = "wasm32"))]
@@ -641,7 +642,7 @@ fn index() -> String {
         if ds.is_empty() {
             continue;
         }
-        s += &format!("### {title} (E{h}xx)\n\n");
+        s += &format!("## {title} (E{h}xx)\n\n");
         for d in ds {
             let l = errors::label(d.code);
             let internal = reference::INTERNAL.contains(&d.code);
@@ -651,7 +652,7 @@ fn index() -> String {
                 ""
             };
             s += &format!(
-                "<h4 id=\"{l}\">{l} · {}{badge}</h4>\n\n> {}\n\n",
+                "<h3 id=\"{l}\">{l} · {}{badge}</h3>\n\n> {}\n\n",
                 html(d.title),
                 md(d.sentence)
             );
@@ -664,7 +665,7 @@ fn index() -> String {
             s += &format!("{}\n\n", md(d.fix));
             if let Some(h) = reference::help(d.code).filter(|h| !h.before.is_empty()) {
                 s += &format!(
-                    "Before:\n\n```psi\n{}\n```\n\nAfter:\n\n```psi\n{}\n```\n\n",
+                    "Before:\n\n```psi-bad\n{}\n```\n\nAfter:\n\n```psi\n{}\n```\n\n",
                     h.before, h.after
                 );
             }
@@ -675,7 +676,7 @@ fn index() -> String {
 
 #[test]
 fn the_error_index_in_the_language_reference_is_current() {
-    let file = path("../docs/psi-spec.md");
+    let file = path("../docs/psi-errors.md");
     let text = std::fs::read_to_string(&file).unwrap();
     let lines: Vec<&str> = text.lines().collect();
     let a = lines
@@ -700,7 +701,7 @@ fn the_error_index_in_the_language_reference_is_current() {
         std::fs::write(&file, out.join("\n") + "\n").unwrap();
         return;
     }
-    panic!("the error index in docs/psi-spec.md is stale: PSI_BLESS=1 cargo test --features docs --test diagnostics");
+    panic!("the error index in docs/psi-errors.md is stale: PSI_BLESS=1 cargo test --features docs --test diagnostics");
 }
 
 // --- the web app's code table (js/psierr.js) ---------------------------------

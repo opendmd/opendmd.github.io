@@ -208,23 +208,37 @@ fn size_compile_and_cost() {
     assert!(long.contains("5120 bytes once prepared, 4500 at most") && long.contains("comments and spaces cost nothing"));
     // A real one (P0's caps made it possible: 512 steps, a 256-number table,
     // palettes in a store, 120 paint colours; 4,863 B compiled, 7.7 KB of
-    // source): refused for its length alone. The JIT draws it in 9.4 ms (the
-    // tier, under MAX_US) where the VM would take 53, and the gate counts the tier.
+    // source): refused for its length. The JIT draws it in 9.4 ms (the
+    // tier, under MAX_US) where the VM would take 53: the gallery's gate
+    // counts the tier, but the panel's refusal counts the VM's, so it is
+    // refused for that too.
     let over = include_str!("../../tools/fixtures/gallery-over-4500.psi");
     let ps = problems("x", over);
-    assert!(ps.len() == 1 && has(&ps, "4863 bytes once prepared, 4500 at most"), "{ps:?}");
+    assert!(ps.len() == 2 && has(&ps, "4863 bytes once prepared, 4500 at most") && has(&ps, "the panel refuses the formula: about 53"), "{ps:?}");
     let src = over.split_once("name ").map(|(_, r)| format!("name {r}")).unwrap();
     let p = compile(&src).unwrap();
     assert!(p.jit_takes() && p.tier_us(false) <= MAX_US && p.esp32_us_still() > MAX_US);
-    // The other way: 40 ms on the VM, 7.4 on the JIT, 4,115 B compiled: taken
+    // The other way: 34 ms on the VM, 6.4 on the JIT, 3,876 B compiled: taken
     // (the gate counts the tier), and the entry keeps both figures.
     let jit = include_str!("../../tools/fixtures/gallery-jit-only.psi");
     let e = check_file("x", jit.as_bytes()).unwrap();
-    assert!(e.us < 8000 && e.vm_us > 4 * MAX_US && e.psb_len < MAX_PSB, "{e:?}");
-    // Trusted examples marked `-- bundle` may be longer (they ship in the firmware).
+    assert!(e.us < 8000 && e.vm_us > 3 * MAX_US && e.psb_len < MAX_PSB, "{e:?}");
+    // But never past the panel's own refusal, which counts the VM's figure
+    // (the panel may draw it on the VM): 40 waves a pixel are ~9.5 ms with
+    // the JIT, inside the gallery's 10, and ~44 on the VM, over the panel's 40.
+    let waves: Vec<String> = (1..=40)
+        .map(|k| format!("step(0.5, frac(x*{} + y*{} + t*{}))*{}", k + 2, (k * 7) % 13 + 1, k % 5 + 1, k % 3 + 1))
+        .collect();
+    let refused = GOOD.replace("pal(rainbow, frac(d*1.5 - t/2))", &format!("g = {}\npal(rainbow, frac(g/40))", waves.join(" + ")));
+    let prog = compile(refused.split_once("loop 4\n").unwrap().1).unwrap();
+    assert!(prog.tier_us(false) <= MAX_US && prog.esp32_us() > opendmd_psi::PANEL_MAX_US, "{} {}", prog.tier_us(false), prog.esp32_us());
+    let ps = problems("x", &refused);
+    assert!(has(&ps, "the panel refuses the formula: about 4") && !has(&ps, "too heavy"), "{ps:?}");
+    // Trusted examples marked `-- bundle` may be longer (they ship in the
+    // firmware), but the panel refuses them by the VM's figure all the same.
     let b = over.replace("-- licence: CC0-1.0\n", "-- licence: CC0-1.0\n-- bundle\n");
-    let e = check_file_as("x", b.as_bytes(), true).unwrap();
-    assert!(e.bundle && e.psb_len > MAX_PSB && e.us <= MAX_US && e.vm_us > MAX_US && e.us < e.vm_us, "{e:?}");
+    let ps = check_file_as("x", b.as_bytes(), true).unwrap_err();
+    assert!(ps.len() == 1 && has(&ps, "the panel refuses the formula"), "{ps:?}");
     let broken = GOOD.replace("pal(rainbow, frac(d*1.5 - t/2))", "pal(rainbow, frac(tme))");
     let ps = problems("x", &broken);
     assert!(has(&ps, "line 7: the formula doesn't compile"), "{ps:?}");

@@ -30,7 +30,8 @@
 //! without control, invisible or direction-changing characters; no `<` or
 //! `>` in the header), the header's fields and limits, the licence, that it
 //! compiles, how long it is once compiled for the panel, and its cost on the
-//! panel (`Program::tier_us`, the JIT's where it takes the formula). The checker
+//! panel (`Program::tier_us`, the JIT's where it takes the formula, and the
+//! panel's own refusal, `Program::panel_refusal`, by the VM's). The checker
 //! never runs anything but the Psi VM, which has no I/O: a formula is
 //! arithmetic over the pixel and the time.
 //!
@@ -44,8 +45,8 @@ use opendmd_psi::{compile, compile_declared, render_rows_ink, Inputs, Program, S
 pub mod png;
 
 /// A gallery file's size limit, bytes: a formula as long as the compiler
-/// takes ([`opendmd_psi::MAX_SOURCE`], 16,384 characters, whose own error
-/// says so) and room for the header. This is only the public repo's guard
+/// takes ([`opendmd_psi::MAX_SOURCE`], 32,768 bytes, whose own error says
+/// so) and room for the header. This is only the public repo's guard
 /// against a huge file on disk; what the panel minds is the formula's
 /// compiled length ([`MAX_PSB`]) and its cost ([`MAX_US`]).
 pub const MAX_FILE: usize = 36 * 1024;
@@ -54,6 +55,19 @@ pub const MAX_FILE: usize = 36 * 1024;
 /// `@formula?psb=…` link carries), so that link, with its name and sliders,
 /// stays within the panel's 6,144-byte path.
 pub const MAX_PSB: usize = 4500;
+
+/// The sentence for a formula the panel refuses to play
+/// (`Program::panel_refusal`: its VM estimate, no JIT and no still cache,
+/// over the panel's limit), if it does (site/worker/src/check.ts says the
+/// same).
+pub fn panel_refuses(prog: &Program) -> Option<String> {
+    let (vm, limit) = prog.panel_refusal(false)?;
+    Some(format!(
+        "the panel refuses the formula: about {:.1} ms a frame without the JIT and its still cache, {:.0} ms at most (the panel must be able to draw it that way)",
+        vm as f64 / 1000.0,
+        limit as f64 / 1000.0
+    ))
+}
 
 /// The sentence for a formula that is `psb_len` bytes once compiled for the
 /// panel, if that is over [`MAX_PSB`] (site/worker/src/check.ts says the same).
@@ -447,6 +461,10 @@ pub fn check_file_as(slug: &str, bytes: &[u8], trusted: bool) -> Result<Entry, V
             MAX_US as f64 / 1000.0
         ));
     }
+    // And the panel's own refusal, by the VM's figure (it may have to
+    // draw any Formula on the VM): a formula light with the JIT or its
+    // still cache can be over it.
+    problems.extend(panel_refuses(&prog));
     // The compiled Formula, as the panel plays it (and a link carries it).
     let (psb_len, abi) = match opendmd_psi::build(src) {
         Ok(b) if b.len() > 3 => (b.len(), b[3]),

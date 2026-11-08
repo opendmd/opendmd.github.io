@@ -239,3 +239,43 @@ fn a_sink_changes_no_program() {
         }
     }
 }
+
+/// The steps the still cache and the column run take out of the pixel loop
+/// are told as kept, each one a step `op` told (the same place and code).
+#[test]
+fn the_sink_hears_what_the_layout_took_out_of_the_pixel_loop() {
+    use opendmd_psi::syntax::Kept;
+    #[derive(Default)]
+    struct K {
+        ops: Vec<((usize, usize), u8, Level)>,
+        kept: Vec<((usize, usize), u8, Kept)>,
+    }
+    impl Sink for K {
+        fn op(&mut self, at: (usize, usize), level: Level, code: u8, _: u32) {
+            self.ops.push((at, code, level));
+        }
+        fn kept(&mut self, at: (usize, usize), code: u8, how: Kept) {
+            self.kept.push((at, code, how));
+        }
+    }
+    let line = |src: &str, at: usize| src[..at].matches('\n').count() + 1;
+    for (src, how, on) in [
+        ("loop 4\na = noise(x*8, y*8, t)\nc = sqrt(x*x + y*y) + atan2(y - 0.5, x - 0.5)\ngray(frac(a + c))", Kept::Once, 3),
+        ("loop 4\nk = sin(x*2 + t)*0.5 + noise(x*4, t, 0)*0.3\ngray(step(y, k))", Kept::Column, 2),
+    ] {
+        let mut k = K::default();
+        compile_observed(src, &mut Program::default(), &mut k).unwrap();
+        for (at, code, _) in &k.kept {
+            assert!(k.ops.iter().any(|o| o.0 == *at && o.1 == *code && o.2 == Level::Pixel), "{src}: {at:?} was told as an op");
+        }
+        // Every pixel step of the value on that line is kept, that way (a
+        // column run may take a part of another line's value too).
+        let px = k.ops.iter().filter(|o| o.2 == Level::Pixel && line(src, o.0 .0) == on).count();
+        let ours = k.kept.iter().filter(|o| line(src, o.0 .0) == on).collect::<Vec<_>>();
+        assert!(px > 0 && ours.len() == px && ours.iter().all(|o| o.2 == how), "{src}: {ours:?}");
+    }
+    // Neither: nothing kept.
+    let mut k = K::default();
+    compile_observed("v = noise(x*8, y*8, t)\ngray(v)", &mut Program::default(), &mut k).unwrap();
+    assert!(k.kept.is_empty());
+}

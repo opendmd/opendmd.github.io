@@ -1,6 +1,6 @@
 //! The built-in table (`opendmd_psi::builtins`) is the one list of names:
 //! the web app's highlighter words (`js/psikit.js`) and the editor's cheat
-//! sheet (`js/formulas.js`) are generated from it into marked blocks, and
+//! sheet and completions (`js/fhint.js`) are generated from it into marked blocks, and
 //! this test fails when a block is not what the table gives.
 //! `PSI_BLESS=1 cargo test --features docs --test builtins` rewrites them.
 //! It also checks the cheat sheet against the compiler's tables: every
@@ -77,7 +77,142 @@ fn cheat_sheet() -> String {
         }
         s.push_str("];\n");
     }
+    s.push_str(&names());
     s.push_str("// psi-builtins end\n");
+    s
+}
+
+/// The rows in the order `js/fhint.js` flattens them (`ROWS`).
+const ORDER: [&[cheat::Row]; 5] = [
+    cheat::VARS,
+    cheat::FUNCS,
+    cheat::COLS,
+    cheat::DRAW,
+    cheat::DECLS,
+];
+
+/// Names the editor's own forms add to the tables' (special forms, block words).
+const FORMS: [&str; 10] = [
+    "since", "was", "under", "tween", "seed", "scene", "when", "if", "else", "key",
+];
+
+/// `name(…)`'s arguments in a cheat-sheet label (`rectfill(…)` takes the
+/// row's first call's), or None.
+fn sig_in(label: &str, name: &str) -> Option<String> {
+    let args = |k: usize| -> String {
+        let rest = &label[k..];
+        let mut d = 0;
+        for (j, c) in rest.char_indices() {
+            match c {
+                '(' => d += 1,
+                ')' => {
+                    d -= 1;
+                    if d == 0 {
+                        return rest[1..j].to_string();
+                    }
+                }
+                _ => {}
+            }
+        }
+        rest[1..].to_string()
+    };
+    let at = label.match_indices(&format!("{name}(")).find(|&(k, _)| {
+        !label[..k].ends_with(|c: char| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+    })?;
+    let a = args(at.0 + name.len());
+    Some(if a == "…" {
+        args(label.find('(')?)
+    } else {
+        a
+    })
+}
+
+/// The completions: every built-in name once, `[name or name(args), row]`
+/// (its row in `ROWS`, -1 for none), functions with their arguments.
+fn names() -> String {
+    let rows: Vec<cheat::Row> = ORDER.iter().flat_map(|r| r.iter().copied()).collect();
+    let calls: Vec<&str> = builtins::FUNCS
+        .iter()
+        .map(|f| f.0)
+        .chain(builtins::COLOURS.iter().map(|f| f.0))
+        .chain(builtins::PRIMITIVES)
+        .chain(["since", "was", "under", "tween"])
+        .collect();
+    let arity = |n: &str| {
+        builtins::FUNCS
+            .iter()
+            .map(|f| (f.0, f.1))
+            .chain(builtins::COLOURS.iter().map(|f| (f.0, f.1)))
+            .find(|f| f.0 == n)
+            .map_or(1, |f| f.1)
+    };
+    let mut all: Vec<&str> = Vec::new();
+    for n in builtins::INPUTS
+        .iter()
+        .map(|e| e.0)
+        .chain(builtins::LATER)
+        .chain(builtins::CONSTS.iter().map(|e| e.0))
+        .chain(opendmd_psi::world::KEYS.iter().map(|k| k.name))
+        .chain(builtins::FUNCS.iter().map(|e| e.0))
+        .chain(builtins::COLOURS.iter().map(|e| e.0))
+        .chain(builtins::PRIMITIVES)
+        .chain(FORMS)
+        .chain(builtins::KEYWORDS)
+        .chain(builtins::CONTEXT_WORDS)
+        .chain(
+            builtins::DECLARATIONS
+                .iter()
+                .copied()
+                .filter(|&d| d != "psi"),
+        )
+        .chain(builtins::PALETTES.iter().map(|e| e.0))
+        .chain(builtins::BLENDS.iter().map(|e| e.0))
+        .chain(builtins::FONTS.iter().map(|e| e.0))
+    {
+        if !all.contains(&n) {
+            all.push(n);
+        }
+    }
+    let mut s = String::from("const NAMES = [\n");
+    for (k, n) in all.iter().enumerate() {
+        // (Its row: the first whose label names it, else whose sentence does,
+        // past the values';
+        // `fract` is `frac`'s other spelling.)
+        let w = if *n == "fract" { "frac" } else { n };
+        let row = rows
+            .iter()
+            .position(|r| {
+                if w.contains('.') {
+                    r.0.contains(w)
+                } else {
+                    named(r.0).iter().any(|x| x == w)
+                }
+            })
+            .or_else(|| {
+                rows.iter()
+                    .skip(cheat::VARS.len())
+                    .position(|r| named(r.1).iter().any(|x| x == w))
+                    .map(|k| k + cheat::VARS.len())
+            });
+        let sig = if calls.contains(n) {
+            // (Not a row that defines a function of its own, `fn ring(…) = abs(…)`.)
+            let a = rows
+                .iter()
+                .filter(|r| !r.0.starts_with("fn "))
+                .find_map(|r| sig_in(r.0, n))
+                .unwrap_or_else(|| ["v", "a, b", "a, b, c"][arity(n).clamp(1, 3) - 1].to_string());
+            format!("{n}({a})")
+        } else {
+            n.to_string()
+        };
+        let sep = if k + 1 == all.len() { "" } else { "," };
+        s.push_str(&format!(
+            "  [{}, {}]{sep}\n",
+            js(&sig),
+            row.map_or(-1, |r| r as i64)
+        ));
+    }
+    s.push_str("];\n");
     s
 }
 
@@ -176,7 +311,7 @@ fn spec_names() -> String {
     for (kind, names) in [
         ("values", code_list(&values)),
         ("values about the middle", code_list(&builtins::LATER)),
-        ("built-in inputs (the panel's own values)", code_list(&keys)),
+        ("built-in inputs (values from the panel)", code_list(&keys)),
         ("their events", code_list(&["since(KEY)", "was(KEY)"])),
         ("constants", code_list(&consts)),
         ("functions (how many values)", funcs.join(", ")),
@@ -200,14 +335,14 @@ fn spec_names() -> String {
         ),
         ("the picture under", code_list(&["under", "under(x, y)"])),
         (
-            "the built-in inputs' groups (never a name)",
+            "the built-in inputs' groups (not names)",
             code_list(&["sun", "moon", "replay"]),
         ),
     ] {
         s.push_str(&format!("| {kind} | {} |\n", cell(&names)));
     }
     s.push_str(
-        "\n**The name rule.** A formula's own names win. Any built-in value's name, and any built-in function's or drawing call's, may be set as a value of the formula's (`t = 0.5`, `sin = 0.25`, `line = 3`): from the line that sets it, the name reads as the formula's value wherever a value is read, and a call `name(…)` is still the built-in function (`since`, `was`, `under` and `ink(n)` as `sin`). Not names: the keywords (E204), the palettes (E208) and `sun`, `moon` and `replay` (E216). A `fn`, table, sprite or palette of the formula's takes a name of its own: no built-in function's (E215) and no value's it has set (E203). `since(k)` and `was(k)` read the built-in inputs only: of a name the formula set they are refused (E217), never read two ways on one line. A built-in added later is read only where a formula has not set its name, so a formula saved before it means what it meant.\n",
+        "\n**The name rule.** A formula's names win over the built-ins.\n\n- Any built-in value's, function's or drawing call's name may be set as a value of the formula's (`t = 0.5`, `sin = 0.25`, `line = 3`). From the line that sets it, the name reads as the formula's value wherever a value is read (setting `x` or `y` moves `px py i cx cy r angle` with it, as in a function). A call `name(…)` is still the built-in function, and `since`, `was`, `under` and `ink(n)` work the same way as `sin`.\n- The keywords (E204), the palettes (E208) and `sun`, `moon` and `replay` (E216) are not names.\n- A `fn`, table, sprite or palette of the formula's needs a name of its own. None may take the name of a value the formula has set (E203), and a `fn` may not take a built-in function's name either (E215).\n- `since(k)` and `was(k)` read the built-in inputs only. On a name the formula has set they are refused (E217), so a name is not read two ways on one line.\n- A built-in added later is read only where a formula has not set its name, so a formula saved before it means what it meant.\n",
     );
     s.push_str("<!-- psi-builtins end -->\n");
     s
@@ -258,7 +393,7 @@ fn spec_limits() -> String {
     let rows = [
         (
             "a formula's text, comments included",
-            format!("{} characters", n(p::MAX_SOURCE)),
+            format!("{} bytes", n(p::MAX_SOURCE)),
         ),
         (
             "steps (per frame, draw, per row, per pixel, and one per layer)",
@@ -359,12 +494,11 @@ fn the_reference_pages_grammar_is_the_models() {
     );
 }
 
-/// Every built-in is named in the guide's and the models' own words too
-/// (their tables are written by hand).
+/// Every built-in is named in the models' own words too (their tables are
+/// written by hand; the guide teaches and links to the reference instead).
 #[test]
-fn the_guide_and_the_models_name_every_built_in() {
+fn the_models_name_every_built_in() {
     for doc in [
-        "docs/guide/formulas.md",
         "docs/psi-for-models.md",
         "docs/psi-card.md",
     ] {
@@ -405,7 +539,7 @@ fn the_highlighters_words_are_the_tables() {
 
 #[test]
 fn the_cheat_sheet_is_the_tables() {
-    check_block("js/formulas.js", "cheat sheet", &cheat_sheet());
+    check_block("js/fhint.js", "cheat sheet", &cheat_sheet());
 }
 
 /// The words in a cheat-sheet label that look like a call or a bare name.

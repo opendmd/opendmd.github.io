@@ -17,6 +17,35 @@ pub(crate) fn glyphs<'a>(t: &Tables<'a>, c: u8) -> Glyphs<'a> {
     t.glyphs(font, c != code::GLYPH && c != code::GLYPH_S)
 }
 
+/// The most a Formula may cost to play on the panel, µs a frame by the
+/// VM's estimate ([`ProgramOf::esp32_us`]: every step every frame, no
+/// JIT, no still cache): one over it is refused when it opens
+/// (`opendmd_core::fx_psi`). The VM's figure, not the tier's, because the
+/// panel must stay safe when it draws the Formula on the VM — the JIT off,
+/// its kernel not made yet, refused for want of memory or failing its
+/// self-check, the still cache refused or let go — and the governor holds
+/// it to its slowest step meanwhile. See [`panel_limit_us`].
+pub const PANEL_MAX_US: u32 = 40_000;
+
+/// The same for a Formula drawn over every GIF as the panel's look (its
+/// VM figure, no still cache: a look never has one).
+pub const LOOK_MAX_US: u32 = 12_000;
+
+/// The panel's limit for a Formula played at a frame time of `frame_ms`
+/// (its `fps N`: 10, 20 or 40 ms; 0 or none, 20): [`PANEL_MAX_US`], held
+/// to what the governor can keep at its slowest step (8 frames held, 40 %
+/// of them for the render, 5 ms at 10 ms frames): 32 ms at 100 fps.
+/// `opendmd_core::fx_psi` checks it against its own `Governor`.
+pub const fn panel_limit_us(frame_ms: u32) -> u32 {
+    let grid = if frame_ms == 0 { 20 } else { frame_ms };
+    let slowest = (grid << 3) * 400;
+    if slowest < PANEL_MAX_US {
+        slowest
+    } else {
+        PANEL_MAX_US
+    }
+}
+
 /// The panel the VM draws: 128 × 32.
 pub const W: usize = 128;
 pub const H: usize = 32;
@@ -1301,6 +1330,25 @@ impl Prog {
         self.estimate(None)
     }
 
+    /// The panel's limit for this program ([`panel_limit_us`] at its
+    /// `fps`, or [`LOOK_MAX_US`] as a look).
+    pub fn panel_limit_us(&self, look: bool) -> u32 {
+        if look {
+            LOOK_MAX_US
+        } else {
+            panel_limit_us(self.frame_ms().unwrap_or(0))
+        }
+    }
+
+    /// Whether the panel refuses to play this program (as a look with
+    /// `look`): its VM estimate ([`esp32_us`](Self::esp32_us)) over
+    /// [`panel_limit_us`](Self::panel_limit_us), whatever the JIT and the
+    /// still cache would make of it. `Some((estimate, limit))`, µs.
+    pub fn panel_refusal(&self, look: bool) -> Option<(u32, u32)> {
+        let (est, limit) = (self.esp32_us(), self.panel_limit_us(look));
+        (est > limit).then_some((est, limit))
+    }
+
     /// [`esp32_us`](Self::esp32_us) as the player draws it with a filled
     /// still cache ([`crate::Still`]): the steps that only work out the
     /// cached values are skipped and each cached value is a copy into its
@@ -1343,19 +1391,20 @@ impl Prog {
     }
 
     /// Whether the panel's JIT draws this program's pixel stage (its
-    /// kernel takes it): the editor's and the limits' tier
+    /// kernel takes it): the editor's tier and the gallery's limit
     /// ([`tier_us`](Self::tier_us)).
     pub fn jit_takes(&self) -> bool {
         crate::jitplan::jit_takes(self)
     }
 
-    /// What the panel takes a frame, µs, for the tier and the limits
-    /// (P0b-2): [`esp32_us_jit_still`](Self::esp32_us_jit_still) where the
+    /// What the panel takes a frame, µs, for the editor's tier and the
+    /// gallery's limit: [`esp32_us_jit_still`](Self::esp32_us_jit_still) where the
     /// JIT takes it ([`jit_takes`](Self::jit_takes)), else
     /// [`esp32_us_still`](Self::esp32_us_still); as a look (`look`: no still
     /// cache) [`esp32_us_jit`](Self::esp32_us_jit) or
     /// [`esp32_us`](Self::esp32_us). The VM's figure is the "without the
-    /// JIT" one shown beside it.
+    /// JIT" one shown beside it. Never the panel's refusal, which counts the
+    /// VM's [`esp32_us`](Self::esp32_us) ([`panel_refusal`](Self::panel_refusal)).
     pub fn tier_us(&self, look: bool) -> u32 {
         match (self.jit_takes(), look) {
             (true, false) => self.esp32_us_jit_still(),

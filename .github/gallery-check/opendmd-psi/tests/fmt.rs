@@ -49,7 +49,17 @@ fn corpus() -> Vec<(String, String)> {
     for doc in [
         "../docs/psi-for-models.md",
         "../docs/guide/formulas.md",
+        "../docs/guide/psi-1.md",
+        "../docs/guide/psi-2.md",
+        "../docs/guide/psi-3.md",
+        "../docs/guide/psi.md",
+        "../docs/guide/editor.md",
         "../docs/psi-spec.md",
+        "../docs/psi-errors.md",
+        "../docs/guide/psi.md",
+        "../docs/guide/psi-1.md",
+        "../docs/guide/psi-2.md",
+        "../docs/guide/psi-3.md",
     ] {
         let Ok(text) = std::fs::read_to_string(r.join(doc)) else {
             continue;

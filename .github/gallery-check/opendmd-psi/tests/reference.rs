@@ -1,12 +1,16 @@
 //! The language reference's own material (`opendmd_psi::reference`,
-//! feature `docs`) and the reference page's cookbook (docs/psi-spec.md,
+//! feature `docs`) and the reference page's recipes (docs/psi-spec.md,
 //! the site's /dev/psi/), against the compiler: every cheat-sheet row has a
 //! live example and every example compiles and lights the panel; every
 //! error's `before` fails with its code and its `after` compiles; every
-//! ```psi block of the cookbook compiles and lights the panel, and a block
+//! ```psi block of the recipes compiles and lights the panel, and a block
 //! marked `<!-- psi-gallery: <stem> -->` is that gallery Formula, word for
 //! word (`PSI_BLESS=1 cargo test --features docs --test reference`
-//! rewrites those blocks).
+//! rewrites those blocks). The site draws every ```psi block of its Psi
+//! pages (tools/site.py PSI_PAGES, psiref.js): each one compiles and
+//! lights something, and each ```psi-bad block (shown, never drawn) fails; every
+//! ```psi block of the guide's Psi pages (Make a Formula, How Psi thinks)
+//! is a whole, named Formula that lights the panel well.
 #![cfg(not(target_arch = "wasm32"))]
 
 use opendmd_psi::builtins::cheat;
@@ -188,15 +192,15 @@ fn every_errors_help_gives_its_code_and_its_fix_works() {
     }
 }
 
-/// The ```psi blocks between `## Cookbook` and the next `## ` heading:
+/// The ```psi blocks between `## Recipes` and the next `## ` heading:
 /// (the line the block starts on, its text, the gallery stem it is marked
 /// with).
 fn cookbook(text: &str) -> Vec<(usize, String, Option<String>)> {
     let lines: Vec<&str> = text.lines().collect();
     let a = lines
         .iter()
-        .position(|l| *l == "## Cookbook")
-        .expect("docs/psi-spec.md has a `## Cookbook`");
+        .position(|l| *l == "## Recipes")
+        .expect("docs/psi-spec.md has a `## Recipes`");
     let mut out = Vec::new();
     let mut mark: Option<String> = None;
     let mut k = a + 1;
@@ -237,13 +241,13 @@ fn gallery(stem: &str) -> String {
 }
 
 #[test]
-fn every_cookbook_recipe_compiles_and_lights_the_panel() {
+fn every_recipe_compiles_and_lights_the_panel() {
     let path = root("docs/psi-spec.md");
     let mut text = std::fs::read_to_string(&path).unwrap();
     let blocks = cookbook(&text);
     assert!(
         blocks.len() >= 7,
-        "the cookbook has {} recipes",
+        "the reference has {} recipes",
         blocks.len()
     );
     let mut stale = Vec::new();
@@ -271,7 +275,7 @@ fn every_cookbook_recipe_compiles_and_lights_the_panel() {
         return;
     }
     if std::env::var_os("PSI_BLESS").is_none() {
-        panic!("the cookbook's copy of {} is not the gallery's: PSI_BLESS=1 cargo test --features docs --test reference", stale[0].2);
+        panic!("the recipes' copy of {} is not the gallery's: PSI_BLESS=1 cargo test --features docs --test reference", stale[0].2);
     }
     for (have, want, stem) in stale {
         let at = text
@@ -280,4 +284,106 @@ fn every_cookbook_recipe_compiles_and_lights_the_panel() {
         text = format!("{}{}", &text[..at], text[at..].replacen(&have, &want, 1));
     }
     std::fs::write(&path, text).unwrap();
+}
+
+/// The docs behind the site's Psi pages (tools/site.py PSI_PAGES; the
+/// errors page's blocks are the errors' help, tested above). A guide page
+/// not written yet is skipped.
+const PSI_DOCS: &[&str] = &[
+    "docs/psi-spec.md",
+    "docs/guide/psi.md",
+    "docs/guide/psi-1.md",
+    "docs/guide/psi-2.md",
+    "docs/guide/psi-3.md",
+];
+
+/// A doc's fenced blocks of one kind (```psi or ```psi-bad exactly): (the
+/// line the block starts on, its text).
+fn fenced(text: &str, kind: &str) -> Vec<(usize, String)> {
+    let lines: Vec<&str> = text.lines().collect();
+    let fence = format!("```{kind}");
+    let mut out = Vec::new();
+    let mut k = 0;
+    while k < lines.len() {
+        if lines[k].trim_end() == fence {
+            let start = k + 1;
+            let mut end = start;
+            while end < lines.len() && !lines[end].starts_with("```") {
+                end += 1;
+            }
+            out.push((start + 1, lines[start..end].join("\n")));
+            k = end;
+        }
+        k += 1;
+    }
+    out
+}
+
+#[test]
+fn every_block_the_psi_pages_draw_compiles_and_lights_and_every_bad_one_fails() {
+    for doc in PSI_DOCS {
+        let Ok(text) = std::fs::read_to_string(root(doc)) else {
+            continue;
+        };
+        for (line, src) in fenced(&text, "psi") {
+            let p = compile(&src).unwrap_or_else(|e| {
+                panic!("{doc} line {line}: the site draws this block, but it fails: {} (a block meant to fail is ```psi-bad)", e.msg)
+            });
+            assert!(lit(&p) > 0, "{doc} line {line}: the site draws this block, but it lights nothing");
+        }
+        for (line, src) in fenced(&text, "psi-bad") {
+            assert!(compile(&src).is_err(), "{doc} line {line}: a ```psi-bad block compiles (make it ```psi, and it is drawn)");
+        }
+    }
+}
+
+/// The guide's pages that teach Psi: every ```psi block on them is a whole
+/// Formula a reader opens in the editor.
+const GUIDE: [&str; 5] = [
+    "docs/guide/psi-1.md",
+    "docs/guide/psi-2.md",
+    "docs/guide/psi-3.md",
+    "docs/guide/psi.md",
+    "docs/guide/editor.md",
+];
+
+/// Every ```psi block of a page: (the line it starts on, its text).
+fn blocks(page: &str, text: &str) -> Vec<(usize, String)> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out = Vec::new();
+    let mut k = 0;
+    while k < lines.len() {
+        if lines[k] == "```psi" {
+            let start = k + 1;
+            let end = start
+                + lines[start..]
+                    .iter()
+                    .position(|l| *l == "```")
+                    .unwrap_or_else(|| panic!("{page} line {}: a ```psi block with no end", start));
+            out.push((start + 1, lines[start..end].join("\n")));
+            k = end;
+        }
+        k += 1;
+    }
+    out
+}
+
+#[test]
+fn every_guide_example_compiles_and_lights_the_panel() {
+    let mut n = 0;
+    for page in GUIDE {
+        let text = std::fs::read_to_string(root(page)).unwrap();
+        for (line, src) in blocks(page, &text) {
+            n += 1;
+            let p = compile(&src)
+                .unwrap_or_else(|e| panic!("{page} line {line}: the example fails: {}", e.msg));
+            let lit = lit(&p);
+            assert!(lit >= 24, "{page} line {line}: the example lights only {lit} pixels");
+            assert!(
+                src.lines().any(|l| l.starts_with("name \"")),
+                "{page} line {line}: give the example a `name` line"
+            );
+        }
+    }
+    assert!(n >= 25, "the guide's Psi pages have only {n} examples");
 }

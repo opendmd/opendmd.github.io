@@ -47,7 +47,7 @@ pal(rainbow, frac(d*(1 + width*2) - t/2))
 - Its sliders are its `control` lines (up to three), and they start at
   the defaults written there (`= 0.3`). A `look` line says it can be a
   panel's look, drawn over every GIF (see
-  [how formulas work](https://opendmd.dev/guide/formulas.html)).
+  [how Psi thinks](https://opendmd.dev/guide/psi.html#over-a-gif)).
 - The formula must work, and be light enough for the display: at most 10 ms
   a frame as the editor estimates it (with the display's speed-up where it applies).
 - Once compiled for the display, the formula is at most 4,500 bytes (the

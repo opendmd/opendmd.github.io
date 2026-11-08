@@ -31,7 +31,7 @@ pub const ERRORS: &[ErrorDoc] = &[
         code: 1,
         title: "a character Psi does not know",
         sentence: "I don't understand `…`",
-        fix: "Take the character out. Text in quotes only goes on `name`, `about` and `control` lines; for a character's code write it in single quotes, 'A'.",
+        fix: "Take the character out. Text in quotes only goes on `name`, `about` and `control` lines and in `print(…)`; for a character's code write it in single quotes, 'A'.",
         matches: &["I don't understand `"],
     },
     ErrorDoc {
@@ -387,7 +387,7 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 401,
         title: "a formula that is too long to read",
-        sentence: "too long: a formula can be … characters at most",
+        sentence: "too long: a formula can be … bytes at most",
         fix: "Shorten the formula.",
         matches: &["too long: a formula can be"],
     },

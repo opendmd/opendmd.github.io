@@ -125,7 +125,7 @@ pub struct Help {
 pub const HELP: &[Help] = &[
     Help {
         code: 1,
-        why: "Psi has numbers, names, a few operators and brackets; anything else, such as `^`, `$` or a double quote outside a declaration, is not part of it.",
+        why: "Psi has numbers, names, a few operators and brackets; anything else, such as `^`, `$` or a double quote outside a declaration or `print(…)`, is not part of it.",
         before: "gray(x ^ 2)",
         after: "gray(x * x)",
     },
