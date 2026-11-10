@@ -26,6 +26,7 @@ pub use crate::meta::BLENDS;
 /// [`BLENDS`], or the formula does not compile so (layers with a blend
 /// other than over, too long for the panel).
 #[cfg(feature = "compiler")]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn compose(src: &str, blend: &str, amount: u8) -> Result<Program, Error> {
     let Some(src) = set(src, blend, amount) else {
         return Err(Error {
@@ -43,6 +44,7 @@ pub fn compose(src: &str, blend: &str, amount: u8) -> Result<Program, Error> {
 /// has none, or `look` alone) compiled into `prog` as the player loads it
 /// (narrowed and fused): what the panel draws over every GIF.
 #[cfg(feature = "compiler")]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn program(src: &str, prog: &mut Program) -> Result<(), Error> {
     crate::compile_look(src, prog)?;
     prog.finish(true, true);
@@ -57,6 +59,7 @@ pub fn program(src: &str, prog: &mut Program) -> Result<(), Error> {
 /// compile as one. (Bytes, no `str` patterns or `trim`: each brought ~1 KB
 /// to the web module.)
 #[cfg(feature = "compiler")]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn function(src: &str, name: &str) -> Option<String> {
     let b = src.as_bytes();
     let word_at = |mut i: usize| {
@@ -155,6 +158,7 @@ pub fn function(src: &str, name: &str) -> Option<String> {
 }
 
 #[cfg(feature = "compiler")]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn push_line(f: &mut String, l: &str) {
     for part in l.split('\n') {
         f.push_str("  ");

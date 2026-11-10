@@ -48,6 +48,7 @@ pub const MAX_DEPTH: usize = 48;
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 #[cold]
 #[inline(never)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn no_memory() -> Error {
     Error::new(0, 0, NO_MEMORY)
 }
@@ -63,6 +64,7 @@ fn no_memory() -> Error {
 /// are as big as the device's or bigger) every bundled and example Formula
 /// and the `worst` cases stay under it (`tests/compile_heap.rs`). A source
 /// that doesn't lex fails before it takes anything: the floor.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn compile_heap_estimate(src: &str) -> usize {
     let mut count = Toks {
         v: None,
@@ -78,6 +80,7 @@ pub fn compile_heap_estimate(src: &str) -> usize {
 }
 
 /// [`compile_heap_estimate`] for a count of tokens.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub const fn compile_heap_for_tokens(tokens: usize) -> usize {
     let e = HEAP_BASE + HEAP_PER_TOKEN * tokens;
     if e < HEAP_FLOOR {
@@ -95,6 +98,7 @@ const HEAP_FLOOR: usize = 16 * 1024;
 /// web module's bump heap grows the page's memory) the plain push: the
 /// fallible paths cost the download ~2.4 KB gz.
 #[inline]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn try_push<T>(v: &mut Vec<T>, x: T) -> Result<(), Error> {
     #[cfg(not(target_arch = "wasm32"))]
     if v.len() == v.capacity() {
@@ -105,6 +109,7 @@ fn try_push<T>(v: &mut Vec<T>, x: T) -> Result<(), Error> {
 }
 
 /// `v.extend_from_slice(s)`, or [`NO_MEMORY`] (wasm: as [`try_push`]).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn try_extend<T: Copy>(v: &mut Vec<T>, s: &[T]) -> Result<(), Error> {
     #[cfg(not(target_arch = "wasm32"))]
     v.try_reserve(s.len()).map_err(|_| no_memory())?;
@@ -113,6 +118,7 @@ fn try_extend<T: Copy>(v: &mut Vec<T>, s: &[T]) -> Result<(), Error> {
 }
 
 /// `vec![x; n]`, or [`NO_MEMORY`].
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn try_vec<T: Clone>(x: T, n: usize) -> Result<Vec<T>, Error> {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -126,6 +132,7 @@ fn try_vec<T: Clone>(x: T, n: usize) -> Result<Vec<T>, Error> {
 
 /// An empty list with room for exactly `n`, or [`NO_MEMORY`] (wasm: as
 /// [`try_push`]).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn try_with_capacity<T>(n: usize) -> Result<Vec<T>, Error> {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -140,6 +147,7 @@ fn try_with_capacity<T>(n: usize) -> Result<Vec<T>, Error> {
 /// `s[a..b]`, or "" (never a panic: a slice of a `str` that could panic
 /// brings ~3 KB of panic formatting into the wasm).
 #[inline(never)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn sub(s: &str, a: usize, b: usize) -> &str {
     s.get(a..b).unwrap_or("")
 }
@@ -216,6 +224,7 @@ pub(crate) type Packed = Token;
 #[cfg(target_arch = "wasm32")]
 impl Token {
     #[inline]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub(crate) fn get(self) -> Token {
         self
     }
@@ -224,6 +233,7 @@ impl Token {
 #[cfg(not(target_arch = "wasm32"))]
 impl Packed {
     #[inline]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub(crate) fn get(self) -> Token {
         Token {
             tok: self.tok,
@@ -233,6 +243,7 @@ impl Packed {
     }
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn describe(t: Tok) -> &'static str {
     match t {
         Tok::Num(_) => "a number",
@@ -259,6 +270,7 @@ fn describe(t: Tok) -> &'static str {
 }
 
 #[inline(never)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub(crate) fn lex(src: &str) -> Result<Vec<Packed>, Error> {
     if src.len() > u16::MAX as usize {
         return Err(Error::new(0, 0, "too long"));
@@ -295,6 +307,7 @@ struct Toks {
 
 impl Toks {
     #[inline]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn push(&mut self, t: Token) {
         self.n += 1;
         self.nl = t.tok == Tok::Newline;
@@ -313,6 +326,7 @@ impl Toks {
     }
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn lex_into(src: &str, out: &mut Toks) -> Result<(), Error> {
     let b = src.as_bytes();
     let mut i = 0;
@@ -548,6 +562,7 @@ fn lex_into(src: &str, out: &mut Toks) -> Result<(), Error> {
 
 /// The lexer's tokens as the language service sees them ([`crate::syntax`]).
 #[cfg(feature = "syntax")]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub(crate) fn lex_tokens(src: &str) -> Result<Vec<(crate::syntax::Kind, usize, usize)>, Error> {
     use crate::syntax::Kind;
     Ok(lex(src)?
@@ -580,6 +595,7 @@ pub(crate) fn lex_tokens(src: &str) -> Result<Vec<(crate::syntax::Kind, usize, u
 }
 
 /// The words that start a line where text in quotes may be.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn text_line(w: &str) -> bool {
     matches!(w, "name" | "about" | "control")
 }
@@ -596,6 +612,7 @@ pub const MAX_LABEL_TEXT: usize = 24;
 /// JSON as it is). Where it ends.
 #[cold]
 #[inline(never)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn quoted(src: &str, i: usize, out: &mut Toks) -> Result<usize, Error> {
     let b = src.as_bytes();
     let mut j = i + 1;
@@ -653,6 +670,7 @@ fn quoted(src: &str, i: usize, out: &mut Toks) -> Result<usize, Error> {
 
 /// `sprite NAME {` and nothing else (but spaces and a comment) on the line
 /// from `i`: where the `{` is.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn sprite_head(b: &[u8], i: usize) -> Option<usize> {
     let word = |j: usize| j < b.len() && (b[j].is_ascii_alphanumeric() || b[j] == b'_');
     let space = |j: usize| j < b.len() && (b[j] == b' ' || b[j] == b'\t');
@@ -688,6 +706,7 @@ fn sprite_head(b: &[u8], i: usize) -> Option<usize> {
 /// its name and `{` as tokens, then each line (to a newline or `;`, a
 /// comment cut off, trimmed, blank ones left out) as a [`Tok::Raw`] up to a
 /// line that is `}` alone, its [`Tok::RBrace`]. Where lexing goes on.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn sprite_rows(src: &str, i: usize, brace: usize, out: &mut Toks) -> usize {
     let b = src.as_bytes();
     let mut name = i + 6;
@@ -759,6 +778,7 @@ fn sprite_rows(src: &str, i: usize, brace: usize, out: &mut Toks) -> usize {
 /// Whether a line starts with a declaration (`name "…"`, `control …`; not
 /// `name = …`, an assignment): where text in quotes may be. The first word,
 /// past anything but letters and digits, then anything but `=`.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub(crate) fn declaration_line(line: &str) -> bool {
     if line.contains("print") {
         return true;
@@ -780,6 +800,7 @@ pub(crate) fn declaration_line(line: &str) -> bool {
 /// in quotes on a `name`, `about` or `control` line is kept as written
 /// (spaces, `--` and `;` inside it too): on a line that starts with a
 /// declaration, the only lines text in quotes can be on.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn compact(src: &str) -> String {
     let mut out = String::with_capacity(src.len());
     for line in src.lines() {
@@ -849,6 +870,7 @@ pub fn compact(src: &str) -> String {
 /// as written. It compiles to the very same program (tests/squeeze.rs holds
 /// that for every example): the firmware's built-in bundled Formulas are
 /// kept this way (build.rs), where every byte of the image counts.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn squeeze(src: &str) -> String {
     const OPS: &[u8] = b"=,*+-/<>()[]{}?:;";
     let mut out = String::with_capacity(src.len());
@@ -931,6 +953,7 @@ const CENTRED: [(u8, u8, u8); 6] = [
 ];
 
 /// `f80` or `ff8800` as 0xRRGGBB.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn hex_colour(h: &str) -> Option<u32> {
     let mut v = 0u32;
     for c in h.chars() {
@@ -946,6 +969,7 @@ fn hex_colour(h: &str) -> Option<u32> {
 /// Optimal string alignment distance (edits, adjacent swaps count one),
 /// in three rolling rows of bytes (it runs at the deepest point of an
 /// error: a 25 × 25 table of words was 5 KB of stack there).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn distance(a: &str, b: &str) -> usize {
     let (a, b) = (a.as_bytes(), b.as_bytes());
     if a.len() > 24 || b.len() > 24 {
@@ -974,11 +998,13 @@ fn distance(a: &str, b: &str) -> usize {
 }
 
 #[cfg(test)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub(crate) fn distance_for_tests(a: &str, b: &str) -> usize {
     distance(a, b)
 }
 
 /// The closest of `cands` to `name`, if it is close enough to be a typo.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn suggest<'a>(name: &str, cands: impl Iterator<Item = &'a str>) -> Option<&'a str> {
     let limit = if name.len() <= 3 {
         2
@@ -995,6 +1021,7 @@ fn suggest<'a>(name: &str, cands: impl Iterator<Item = &'a str>) -> Option<&'a s
     best.map(|(_, c)| c)
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn did_you_mean(s: Option<&str>) -> String {
     s.map_or(String::new(), |s| format!(" — did you mean `{s}`?"))
 }
@@ -1035,6 +1062,7 @@ const WIDE_T: i32 = 0x100;
 const KEY_TAG: i32 = 0x1_0000;
 
 /// A built-in input node's byte (`world::input_byte`), if it is one.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn key_byte(n: &Node) -> Option<u8> {
     (n.code == K_INPUT && n.val & KEY_TAG != 0).then_some((n.val >> 8) as u8)
 }
@@ -1105,6 +1133,7 @@ const SLOTS: usize = 2 * MAX_NODES;
 const NO: Id = Id::MAX;
 
 impl Node {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn hash(&self) -> usize {
         let mut h: u32 = 0x811c_9dc5;
         for v in [
@@ -1124,6 +1153,7 @@ impl Node {
 impl Dag {
     /// The scene whose steps work node `i` out (0: none): a row or pixel
     /// value made while the scene was read.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn scene_of(&self, i: usize) -> u8 {
         let m = &self.nodes[i];
         if m.level < LV_ROW || m.code >= K_CONST {
@@ -1137,17 +1167,20 @@ impl Dag {
 }
 
 impl Dag {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn level(&self, id: Id) -> u8 {
         self.nodes[id as usize].level
     }
 
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn konst(&self, id: Id) -> Option<i32> {
         let n = &self.nodes[id as usize];
         (n.code == K_CONST).then_some(n.val)
     }
 
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn push(&mut self, n: Node, at: (usize, usize)) -> Result<Id, Error> {
         let mut slot = n.hash() & (SLOTS - 1);
         let tag = if self.scene != 0 && n.level >= LV_ROW && n.code < K_CONST {
@@ -1190,6 +1223,7 @@ impl Dag {
     }
 
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn constant(&mut self, v: i32, at: (usize, usize)) -> Result<Id, Error> {
         self.push(
             Node {
@@ -1207,6 +1241,7 @@ impl Dag {
 
     /// A built-in input's read (`world::input_byte`): a frame value.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn key(&mut self, byte: u8, at: (usize, usize)) -> Result<Id, Error> {
         self.push(
             Node {
@@ -1223,6 +1258,7 @@ impl Dag {
     }
 
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn input(&mut self, inp: Input, at: (usize, usize)) -> Result<Id, Error> {
         let why = INPUTS.iter().position(|e| e.1 == inp).unwrap_or(0) as u8;
         // What is under the formula: loaded into a lane by a step of its own.
@@ -1282,6 +1318,7 @@ impl Dag {
     /// An op node: folded when its operands are constants, simplified
     /// where that is exact, shared when it already exists.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn op(&mut self, c: u8, args: [Id; 3], at: (usize, usize)) -> Result<Id, Error> {
         let n = code::arity(c);
         if self.forever && args[..n].iter().any(|&x| self.grows(x)) {
@@ -1358,6 +1395,7 @@ impl Dag {
     /// constant `k` is its entry (or 0), any other a `TAB` step at `k`'s
     /// level.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn tab(
         &mut self,
         k: Id,
@@ -1399,6 +1437,7 @@ impl Dag {
     /// same for every pixel, one `PICK` step; otherwise compares and
     /// selects, `k < 0 ? 0 : k < 1 ? a : … : k < n ? z : 0`.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn pick(&mut self, k: Id, opts: Vec<Id>, at: (usize, usize)) -> Result<Id, Error> {
         if opts.iter().any(|&o| self.grows(o)) || (self.grows(k) && !self.is_wide(k)) {
             return Err(Error::new(at.0, at.1, GROWS));
@@ -1454,6 +1493,7 @@ impl Dag {
 /// the formula's own value and for the language service, never per frame.
 #[cold]
 #[inline(never)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn cause(dag: &Dag, id: Id, named: &dyn Fn(Id) -> Option<usize>) -> (Option<usize>, Id) {
     let lv = dag.level(id);
     let mut q: Vec<Id> = Vec::new();
@@ -1483,6 +1523,7 @@ fn cause(dag: &Dag, id: Id, named: &dyn Fn(Id) -> Option<usize>) -> (Option<usiz
 }
 
 /// An input node's word and what it means (`seed` is not in [`INPUTS`]).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn input_word(n: &Node) -> (&'static str, &'static str) {
     if n.code == K_INPUT && n.val == S_SEED as i32 {
         return ("seed", "a new number each play");
@@ -1495,6 +1536,7 @@ fn input_word(n: &Node) -> (&'static str, &'static str) {
 }
 
 /// The compares the other way round (`a < b` is `b > a`).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn flip(c: u8) -> u8 {
     match c {
         code::LT => code::GT,
@@ -1509,6 +1551,7 @@ impl Dag {
     /// A value that grows without end, worked out once a frame: `t` in a
     /// `loop forever` formula and what `W_*` steps make of it.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn is_wide(&self, id: Id) -> bool {
         let n = &self.nodes[id as usize];
         (n.code == K_INPUT && n.val == WIDE_T)
@@ -1517,6 +1560,7 @@ impl Dag {
 
     /// A wide value or one with a wide part ([`K_SPLIT`]).
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn grows(&self, id: Id) -> bool {
         self.is_wide(id) || self.nodes[id as usize].code == K_SPLIT
     }
@@ -1524,12 +1568,14 @@ impl Dag {
     /// A value the same all frame that doesn't grow: what a wide step may
     /// take as its scalar operand.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn per_frame(&self, id: Id) -> bool {
         !self.grows(id) && self.level(id) <= LV_FRAME
     }
 
     /// A value's wide part and its small part (either may be missing).
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn parts(&self, id: Id) -> (Option<Id>, Option<Id>) {
         let n = &self.nodes[id as usize];
         if n.code == K_SPLIT {
@@ -1544,6 +1590,7 @@ impl Dag {
     /// A wide step's node (`imm`: a compare's or min/max's kind in `c`;
     /// `val`: a `W_LAT`'s offset).
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn wnode(
         &mut self,
         c: u8,
@@ -1587,6 +1634,7 @@ impl Dag {
     /// A wide part plus a small one: a wide value when the small one is the
     /// same all frame, else a [`K_SPLIT`].
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn make(&mut self, w: Option<Id>, s: Option<Id>, at: (usize, usize)) -> Result<Id, Error> {
         match (w, s) {
             (Some(w), None) => Ok(w),
@@ -1615,6 +1663,7 @@ impl Dag {
     /// frac(w) + s for a split (`sin`, `frac`, `noise` read only that much
     /// of the wide part: exactly, as long as the sum fits).
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn small(&mut self, id: Id, at: (usize, usize)) -> Result<Id, Error> {
         match self.parts(id) {
             (Some(w), None) => self.wnode(code::W_FRAC, w, 0, 0, 0, at),
@@ -1629,6 +1678,7 @@ impl Dag {
 
     /// A wide value held to a Q16.16 (saturated).
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn held(&mut self, w: Id, at: (usize, usize)) -> Result<Id, Error> {
         let lo = self.constant(i32::MIN, at)?;
         self.wnode(code::W_MINMAX, w, lo, code::MAX, 0, at)
@@ -1636,6 +1686,7 @@ impl Dag {
 
     /// A wide value (never a split) or E901.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn wide_only(&self, id: Id, at: (usize, usize)) -> Result<Id, Error> {
         if self.is_wide(id) {
             Ok(id)
@@ -1653,6 +1704,7 @@ impl Dag {
     /// where there is no such way (a growing value per pixel, `t*t`,
     /// `sqrt(t)`, …).
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn wide_op(&mut self, c: u8, args: [Id; 3], at: (usize, usize)) -> Result<Id, Error> {
         use code::*;
         let [a, b, k3] = args;
@@ -1876,6 +1928,7 @@ impl Dag {
     /// of the axes' small forms ([`Dag::small`]) in a context whose
     /// lattice offsets `W_LAT` steps set from the wide parts once a frame.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn noise_o(&mut self, args: [Id; 3], at: (usize, usize)) -> Result<Id, Error> {
         // Once a frame, only x wide (`noise(u, 5, 0)`): one step, no
         // context.
@@ -2116,6 +2169,7 @@ struct Sprite<'s> {
 
 /// The characters a sprite's key may use: printable, not a space, nor
 /// what would end its line or start a comment (`; { } , - /`).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn key_char(c: u8) -> bool {
     c.is_ascii_graphic() && !matches!(c, b';' | b'{' | b'}' | b',' | b'-' | b'/')
 }
@@ -2152,6 +2206,7 @@ const IN_RGB: u8 = 4;
 
 /// A built-in function's name (a call of it), which a `fn` may not take
 /// (language review A2).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn is_builtin_function(name: &str) -> bool {
     FUNCS.iter().any(|e| e.0 == name)
         || COLOURS.iter().any(|e| e.0 == name)
@@ -2314,6 +2369,7 @@ const BP_TERNARY: u8 = 1;
 const BP_UNARY: u8 = 11;
 const BP_NOT: u8 = 4;
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn infix_bp(t: Tok) -> Option<(u8, u8, u8)> {
     // (left bp, right bp, op)
     Some(match t {
@@ -2338,6 +2394,7 @@ impl<'s> Parser<'s> {
     /// Token `k`, or the closing `Eof` past the end (a look ahead that runs
     /// off the input never panics).
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn tok(&self, k: usize) -> Token {
         self.toks
             .get(k)
@@ -2347,11 +2404,13 @@ impl<'s> Parser<'s> {
     }
 
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn peek(&self) -> Token {
         self.toks[self.pos].get()
     }
 
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn next(&mut self) -> Token {
         let t = self.toks[self.pos].get();
         if self.pos + 1 < self.toks.len() {
@@ -2360,17 +2419,20 @@ impl<'s> Parser<'s> {
         t
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn text(&self, t: Token) -> &'s str {
         sub(self.src, t.start, t.end)
     }
 
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn line_of(&self, at: usize) -> usize {
         sub(self.src, 0, at).matches('\n').count() + 1
     }
 
     #[cold]
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn err<T>(&self, t: Token, msg: impl Into<String>) -> Result<T, Error> {
         Err(Error::new(t.start, t.end, msg))
     }
@@ -2381,17 +2443,20 @@ impl<'s> Parser<'s> {
 
     #[cold]
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn fail(&self, t: Token, msg: &str) -> Error {
         Error::new(t.start, t.end, msg)
     }
 
     #[cold]
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn fail_at(&self, t: Token, msg: String) -> Error {
         Error::new(t.start, t.end, msg)
     }
 
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn expect(&mut self, want: Tok, what: &str) -> Result<Token, Error> {
         let t = self.peek();
         if t.tok == want {
@@ -2402,6 +2467,7 @@ impl<'s> Parser<'s> {
 
     #[cold]
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn expected(&self, t: Token, what: &str) -> Error {
         self.fail_at(t, format!("expected {what} here, found {}", self.found(t)))
     }
@@ -2410,6 +2476,7 @@ impl<'s> Parser<'s> {
     /// was swallowed), or something else in the way.
     #[cold]
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn not_closed(&self, open: Token, close: Token, name: &str) -> Error {
         if let Err(e) = self.unclosed(open, close) {
             return e;
@@ -2426,6 +2493,7 @@ impl<'s> Parser<'s> {
         )
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn found(&self, t: Token) -> String {
         match t.tok {
             Tok::Newline | Tok::Eof => describe(t.tok).to_string(),
@@ -2436,6 +2504,7 @@ impl<'s> Parser<'s> {
     /// A `(` whose `)` was expected at `found` on a later line: the
     /// newline was swallowed, so say which bracket is open.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn unclosed(&self, open: Token, found: Token) -> Result<(), Error> {
         if found.tok == Tok::Eof || self.line_of(found.start) > self.line_of(open.start) {
             return self.err(open, "this `(` is never closed — add `)`");
@@ -2444,6 +2513,7 @@ impl<'s> Parser<'s> {
     }
 
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn skip_newlines(&mut self) {
         while self.peek().tok == Tok::Newline {
             self.next();
@@ -2452,6 +2522,7 @@ impl<'s> Parser<'s> {
 
     /// An expression (Pratt): operators binding tighter than `min_bp`.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn expr(&mut self, min_bp: u8) -> Result<Id, Error> {
         self.depth += 1;
         if self.depth > MAX_DEPTH {
@@ -2464,6 +2535,7 @@ impl<'s> Parser<'s> {
 
     #[cold]
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn too_deep(&self) -> Error {
         let t = self.peek();
         self.fail(t, "this is nested too deeply — split it into named steps")
@@ -2471,6 +2543,7 @@ impl<'s> Parser<'s> {
 
     #[cold]
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn no_value(&self, t: Token) -> Error {
         match t.tok {
             Tok::Newline | Tok::Eof => self.fail(t, "a value is missing here"),
@@ -2478,6 +2551,7 @@ impl<'s> Parser<'s> {
         }
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn expr_inner(&mut self, min_bp: u8) -> Result<Id, Error> {
         // After an operator, the expression may continue on the next line.
         self.skip_newlines();
@@ -2586,6 +2660,7 @@ impl<'s> Parser<'s> {
     /// refuses to chain comparisons rather than read it as `(a < b) < c`.
     #[cold]
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn chained(&mut self, start: usize, op: Token, mid: usize) -> Error {
         let mid_end = self.toks[self.pos.saturating_sub(1)].get().end;
         let op2 = self.next();
@@ -2611,6 +2686,7 @@ impl<'s> Parser<'s> {
 
     /// Whether names set in `scope` can be seen here: this scope's and its
     /// parents'.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn visible(&self, scope: u16) -> bool {
         let mut s = self.scope;
         loop {
@@ -2626,6 +2702,7 @@ impl<'s> Parser<'s> {
     }
 
     /// The candidates for a misspelt value name.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn value_names(&self) -> impl Iterator<Item = &str> + use<'_, 's> {
         INPUTS
             .iter()
@@ -2643,6 +2720,7 @@ impl<'s> Parser<'s> {
     /// [`Self::name`] as a call of its own, for `pick`'s rare part (inlined
     /// there it made `pick`'s frame, on the recursive path too, bigger).
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn name_out_of_line(&mut self, t: Token) -> Result<Id, Error> {
         self.name(t)
     }
@@ -2652,6 +2730,7 @@ impl<'s> Parser<'s> {
     /// the recursive path): a frame of its own between `expr` and `args` was
     /// ~100 B of the compile stack per level of nesting, ×[`MAX_DEPTH`].
     #[inline(always)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn name(&mut self, t: Token) -> Result<Id, Error> {
         let name = self.text(t);
         let at = (t.start, t.end);
@@ -2712,6 +2791,7 @@ impl<'s> Parser<'s> {
     /// built-in key and where its name ends. E975 when the group has no
     /// such key.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn dotted_key(&mut self, t: Token) -> Result<(&'static crate::world::Key, usize), Error> {
         self.next();
         let w = self.expect(Tok::Name, "the name of a built-in input after the `.`, as in `sun.alt`")?;
@@ -2743,6 +2823,7 @@ impl<'s> Parser<'s> {
     /// it last changed, or its value before that (`crate::world`): a frame
     /// value. E976 when the name is not a built-in input.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn since_was(&mut self, t: Token, since: bool) -> Result<Id, Error> {
         let f = if since { "since" } else { "was" };
         self.next();
@@ -2785,6 +2866,7 @@ impl<'s> Parser<'s> {
     /// E903: `seed` in a formula that loops, unless the formula set its
     /// own (out of line: the recursive parser's frames stay small).
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn seed_refused(&self) -> bool {
         !self.dag.forever
             && !self
@@ -2796,6 +2878,7 @@ impl<'s> Parser<'s> {
     /// Why the name at `t` is not a value here (or, before `(`, a function).
     #[cold]
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn unknown(&mut self, t: Token) -> Error {
         let name = self.text(t);
         let msg = if self.peek().tok == Tok::LParen {
@@ -2844,6 +2927,7 @@ impl<'s> Parser<'s> {
     /// formula set `ink`) and a palette's `NAME.colour`. Out of line: `name`
     /// is on the parser's deepest path (the firmware's compile stack).
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn special(&mut self, t: Token, name: &str) -> Option<Result<Id, Error>> {
         match self.peek().tok {
             Tok::LParen if name == "ink" => Some(self.ink_levels(t)),
@@ -2867,6 +2951,7 @@ impl<'s> Parser<'s> {
     /// `ink(n)` at `t` (`ink`): the canvas in `n` levels, 1..=255, a
     /// whole number (`INKN`, never folded: it reads the canvas).
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn ink_levels(&mut self, t: Token) -> Result<Id, Error> {
         // E214.
         const HOW: &str =
@@ -2896,6 +2981,7 @@ impl<'s> Parser<'s> {
     }
 
     /// The formula's own value `name` seen here (the latest set).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn lookup_local(&self, name: &str) -> Option<&Local<'s>> {
         self.locals
             .iter()
@@ -2904,6 +2990,7 @@ impl<'s> Parser<'s> {
     }
 
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn lookup_value(&mut self, name: &str) -> Option<Result<Id, Error>> {
         // (The latest: a name may be set again, or shadow one from outside.)
         if let Some(l) = self.lookup_local(name) {
@@ -2931,6 +3018,7 @@ impl<'s> Parser<'s> {
 
     /// [`LATER`]'s value `k` (unused steps cost nothing: they are dropped).
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn centred(&mut self, k: usize) -> Result<Id, Error> {
         let mut v = [0 as Id; 12];
         for (i, inp) in [Input::X, Input::Y, Input::Py].into_iter().enumerate() {
@@ -2951,6 +3039,7 @@ impl<'s> Parser<'s> {
     /// `px = floor(x·127 + ½)`, `py = floor(y·31 + ½)`, `i = py·128 + px`,
     /// as on the panel (`x = px/127`), and `cx cy r angle`.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn input(&mut self, inp: Input) -> Result<Id, Error> {
         if matches!(inp, Input::X | Input::Y | Input::Px | Input::Py | Input::I) {
             let own = |p: &Self, n: &str| {
@@ -2981,6 +3070,7 @@ impl<'s> Parser<'s> {
     /// [`input`](Self::input)'s `x y px py i` from the formula's own `x`
     /// or `y` (the built-in where it set only the other).
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn moved(&mut self, inp: Input, x: Option<Id>, y: Option<Id>) -> Result<Id, Error> {
         let at = (0, 0);
         let x = match x {
@@ -3016,6 +3106,7 @@ impl<'s> Parser<'s> {
     /// `( a, b, … )` with exactly `n` values. Always inlined: as a frame of
     /// its own (64 B on the ESP32) it sat in `expr`'s recursion.
     #[inline(always)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn args(&mut self, f: Token, name: &str, n: usize) -> Result<[Id; 3], Error> {
         let (a, _) = self.args_or_cover(f, name, n, false)?;
         Ok([a[0], a[1], a[2]])
@@ -3024,6 +3115,7 @@ impl<'s> Parser<'s> {
     /// `( a, b, … )` with `n` values, or with `cover` also `n + 1` (a
     /// colour's last: how much of the pixel it covers); the values and how
     /// many.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn args_or_cover(
         &mut self,
         f: Token,
@@ -3068,6 +3160,7 @@ impl<'s> Parser<'s> {
     /// `pick(k, a, b, …)` at `t` (out of line: the recursive parser's
     /// frames stay small).
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn pick(&mut self, t: Token) -> Result<Id, Error> {
         if self.func_named("pick").is_some() {
             return self.name_out_of_line(t);
@@ -3109,6 +3202,7 @@ impl<'s> Parser<'s> {
     /// `digit(n, x, y)` / `glyph(c, x, y)`, with a font (`, small`, …)
     /// last if you like: the three values and the font.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn glyph_args(&mut self, f: Token, name: &str) -> Result<([Id; 3], u8), Error> {
         let open = self.peek();
         if open.tok != Tok::LParen {
@@ -3162,6 +3256,7 @@ impl<'s> Parser<'s> {
 
     #[cold]
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn glyph_arity(&self, f: Token, close: Token, name: &str, k: usize) -> Error {
         let what = if name == "digit" {
             "the digit"
@@ -3179,6 +3274,7 @@ impl<'s> Parser<'s> {
 
     #[cold]
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn no_font(&self, t: Token, name: &str) -> Error {
         self.fail_at(
             t,
@@ -3193,6 +3289,7 @@ impl<'s> Parser<'s> {
     /// `n + 1`).
     #[cold]
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn arity(&self, f: Token, close: Token, name: &str, n: usize, k: usize, cover: bool) -> Error {
         let s = if n == 1 { "" } else { "s" };
         let what = "";
@@ -3354,6 +3451,7 @@ impl<'s> Parser<'s> {
     /// Whether there is a colour (`#f80` or `rgb(`) from token `k` to the
     /// end of the line, or with `arg`, of the value (a `,` or `)` that
     /// closes it).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn has_colour(&self, mut k: usize, arg: bool) -> bool {
         let mut depth = 0;
         loop {
@@ -3391,6 +3489,7 @@ impl<'s> Parser<'s> {
     /// `under` (the picture under the formula at this pixel) or `under(x,
     /// y)` (at pixel x, y), in a colour expression: the channel read now.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn under_atom(&mut self, t: Token) -> Result<Id, Error> {
         let inp = [Input::Ur, Input::Ug, Input::Ub][(self.env.ch as usize).min(2)];
         if self.peek().tok != Tok::LParen {
@@ -3429,6 +3528,7 @@ impl<'s> Parser<'s> {
 
     /// A colour expression at the cursor, read once for each channel: its
     /// red, green and blue (`#f80 * k` is `rgb(k, k*0.53, 0)`).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn channels(&mut self) -> Result<[Id; 3], Error> {
         let start = self.pos;
         let mut out = [0; 3];
@@ -3445,6 +3545,7 @@ impl<'s> Parser<'s> {
     /// `rgb(r, g, b)` (the cursor at its `(`) inside a colour expression: the channel's
     /// value (its values are plain values).
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn rgb_channel(&mut self) -> Result<Id, Error> {
         let ch = self.env.ch;
         let open = self.next();
@@ -3485,6 +3586,7 @@ impl<'s> Parser<'s> {
     }
 
     /// Past one value of a call (to its `,` or `)`).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn skip_value(&mut self) {
         let mut depth = 0;
         loop {
@@ -3500,6 +3602,7 @@ impl<'s> Parser<'s> {
     }
 
     /// `rgb(…)` or a colour on its own as a colour line: its channels.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn colour_line(&mut self) -> Result<Colour, Error> {
         Ok(Colour {
             code: code::OUT_RGB,
@@ -3511,6 +3614,7 @@ impl<'s> Parser<'s> {
         })
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn end_of_statement(&mut self) -> Result<(), Error> {
         let t = self.peek();
         match t.tok {
@@ -3538,6 +3642,7 @@ impl<'s> Parser<'s> {
     /// loop counter, and for anything but a value or a counter (which may
     /// set a name again, or shadow one from outside: the latest is read)
     /// not a name already set here (E203).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn new_name(&self, t: Token, kind: Naming) -> Result<&'s str, Error> {
         let name = self.text(t);
         // A built-in value's name, or a built-in function's, may be the
@@ -3604,6 +3709,7 @@ impl<'s> Parser<'s> {
     }
 
     /// `name = expr`.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn assignment(&mut self, in_frame: bool) -> Result<(), Error> {
         let t = self.next();
         let name = self.new_name(t, Naming::Value)?;
@@ -3634,6 +3740,7 @@ impl<'s> Parser<'s> {
 
     /// `scene NAME when …` at the cursor (not a keyword: `scene = 3` still
     /// sets a name).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn is_scene(&self) -> bool {
         let t = self.peek();
         let w = self.tok(self.pos + 2);
@@ -3650,6 +3757,7 @@ impl<'s> Parser<'s> {
     /// are zeroed by its guard, `code::GUARD`; any other, a constant, a
     /// frame value or one from outside, is `c ? v : 0`).
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn scene_block(&mut self) -> Result<(), Error> {
         let kw = self.next();
         self.next(); // its name
@@ -3713,6 +3821,7 @@ impl<'s> Parser<'s> {
     }
 
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn is_assignment(&self) -> bool {
         self.peek().tok == Tok::Name && self.toks[self.pos + 1].get().tok == Tok::Assign
     }
@@ -3720,6 +3829,7 @@ impl<'s> Parser<'s> {
     /// `fps N` at the cursor: the word `fps` with a number (or nothing)
     /// after it. Not a keyword: `fps = 3` still sets a name, as formulas
     /// written before it may.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn is_fps(&self) -> bool {
         let t = self.peek();
         t.tok == Tok::Name
@@ -3733,6 +3843,7 @@ impl<'s> Parser<'s> {
     /// `fps N` (E801): the frame time it asks for, ms. The panel's frame
     /// grids are 10, 20 and 40 ms.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn fps_line(&mut self) -> Result<u8, Error> {
         let kw = self.next();
         let n = self.peek();
@@ -3755,6 +3866,7 @@ impl<'s> Parser<'s> {
 
     /// The word starting the statement at the cursor, if it is a keyword
     /// used as one (`loop = 3` is an assignment, and refused as such).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn keyword(&self) -> &'s str {
         let t = self.peek();
         if t.tok != Tok::Name || self.toks[self.pos + 1].get().tok == Tok::Assign {
@@ -3770,6 +3882,7 @@ impl<'s> Parser<'s> {
 
     /// Inside a `layer { }` (not a formula's or a part's own lines).
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn in_layer(&self) -> bool {
         self.scope != 0 && !self.scopes[self.scope as usize].1
     }
@@ -3777,6 +3890,7 @@ impl<'s> Parser<'s> {
     /// Whether the statement at the cursor is a name, maybe a bracket, and
     /// nothing else (`p` or `p(x*2, y)`: a part's colour, not `p.v + 1`).
     /// (`open`: what a `(` never closed counts as.)
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn whole_line(&self, open: bool) -> bool {
         let mut k = self.pos + 1;
         if self.toks[k].get().tok == Tok::LParen {
@@ -3807,6 +3921,7 @@ impl<'s> Parser<'s> {
     /// `p(x', y', k)`), or a bare value as the last line of the formula or
     /// a part (`end` Eof or RBrace) or of a layer (RBrace): its gray. The
     /// colours (several for a part with layers) and whether they are layers.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn colour_or_value(&mut self, t: Token, end: Tok) -> Result<(Vec<Colour>, bool), Error> {
         let word = if t.tok == Tok::Name { self.text(t) } else { "" };
         if let Some(k) = self.func_named(word).filter(|&f| {
@@ -3905,8 +4020,8 @@ impl<'s> Parser<'s> {
 
     /// `layer [blend] { … }` at `kw`: its own values (and `frame { }`),
     /// ending in its colour (several: a part with layers drawn whole).
-    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn layer(&mut self, kw: Token) -> Result<(Vec<Colour>, Token, u8), Error> {
         self.next();
         let mut blend = None;
@@ -4031,6 +4146,7 @@ impl<'s> Parser<'s> {
 
     /// The `loop` the lines from token `k` set (to their `}`, or the end),
     /// read ahead: a part's `t` is its own from its first line.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn loop_ahead(&self, mut k: usize) -> Option<i32> {
         let mut depth = 0;
         let mut start = true;
@@ -4061,6 +4177,7 @@ impl<'s> Parser<'s> {
     /// `for` outside `draw { }`).
     #[cold]
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn misplaced(&self, t: Token) -> Error {
         self.fail(
             t,
@@ -4078,6 +4195,7 @@ impl<'s> Parser<'s> {
 
     /// The table called `name` that can be seen here.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn table_named(&self, name: &str) -> Option<usize> {
         self.table_names
             .iter()
@@ -4087,6 +4205,7 @@ impl<'s> Parser<'s> {
     /// `NAME[k]` at `t` (its name), or why not: a table not read with
     /// `[ ]`, or `[ ]` after something that is not a table.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn table_read(&mut self, t: Token) -> Result<Id, Error> {
         let name = self.text(t);
         if let Some(k) = self.sprite_named(name) {
@@ -4124,6 +4243,7 @@ impl<'s> Parser<'s> {
     /// here.
     #[inline(never)]
     /// The entry named `w` among the palette tokens `from..to`.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn entry_at(&self, from: u32, to: u32, w: &str) -> Option<u16> {
         let mut e = 0;
         for k in from as usize..to as usize {
@@ -4141,6 +4261,7 @@ impl<'s> Parser<'s> {
     /// fraction `pal` maps back to that colour, i/(n − 1) as `i/(n − 1)`
     /// is written; `NAME.step` 1/(n − 1); `NAME.n` the count. Constants.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn palette_entry(&mut self, t: Token, k: usize) -> Result<Id, Error> {
         self.next();
         let w = self.expect(
@@ -4173,6 +4294,7 @@ impl<'s> Parser<'s> {
         self.dag.constant(v, at)
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn palette_named(&self, name: &str) -> Option<usize> {
         self.palette_names
             .iter()
@@ -4181,6 +4303,7 @@ impl<'s> Parser<'s> {
 
     #[cold]
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn unknown_palette(&self, p: Token) -> Error {
         let pname = self.text(p);
         let own = || {
@@ -4205,6 +4328,7 @@ impl<'s> Parser<'s> {
     }
 
     /// Whether the statement at the cursor is `palette NAME = …`.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn is_palette(&self) -> bool {
         let t = self.peek();
         t.tok == Tok::Name
@@ -4219,6 +4343,7 @@ impl<'s> Parser<'s> {
     /// steps between), and with 16 colours or fewer over 16 too (a tween's
     /// half reads those). Or `palette NAME = tween(…)` ([`tween_palette`]).
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn palette(&mut self, kw: Token) -> Result<(), Error> {
         self.next();
         let n = self.next();
@@ -4338,6 +4463,7 @@ impl<'s> Parser<'s> {
     /// worked out once a frame (`code::TWEEN`); `NAME.n` is 32, `NAME.step`
     /// one entry.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn tween_palette(&mut self, name: &'s str, n: Token) -> Result<(), Error> {
         let from = self.pos as u32;
         let mut parts = [NO_PART; 2];
@@ -4411,6 +4537,7 @@ impl<'s> Parser<'s> {
 
     /// `tween(P, Q, w)` at the cursor: its node.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn tween_node(&mut self) -> Result<u16, Error> {
         let kw = self.next();
         self.expect(Tok::LParen, "`(` (as in `tween(day, night, w)`)")?;
@@ -4449,6 +4576,7 @@ impl<'s> Parser<'s> {
 
     /// A tween's palette at the cursor: a name (the formula's own or a
     /// built-in) or another `tween(…)`.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn tween_src(&mut self) -> Result<PSrc, Error> {
         let t = self.peek();
         if t.tok != Tok::Name {
@@ -4477,6 +4605,7 @@ impl<'s> Parser<'s> {
     /// The live slot `pal` and `cycle` read the formula's own palette `j`
     /// from: given at its first (E933 past three, with the turns, once
     /// the formula is read).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn live_of(&mut self, j: usize) -> u8 {
         if let Some(l) = self.palettes[j].live {
             return l;
@@ -4489,6 +4618,7 @@ impl<'s> Parser<'s> {
     /// E924: the tables and sprites would pass the store's numbers.
     #[cold]
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn too_full(&self, kw: Token, more: usize) -> Error {
         self.fail_at(
             kw,
@@ -4505,6 +4635,7 @@ impl<'s> Parser<'s> {
     /// the rest at the next such place (zeros between); `None` when that
     /// would pass [`MAX_TABLE`].
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn place(&mut self, words: &[i32]) -> Result<Option<usize>, Error> {
         let n = self.tables.len();
         if let Some(k) = (0..n)
@@ -4526,6 +4657,7 @@ impl<'s> Parser<'s> {
     /// it, or a table's or a sprite's name). Out of line: the recursive
     /// parser's frames stay small.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn reads_table(&self, name: &str) -> bool {
         self.peek().tok == Tok::LBracket
             || (!self.table_names.is_empty() && self.table_named(name).is_some())
@@ -4534,6 +4666,7 @@ impl<'s> Parser<'s> {
 
     /// The sprite called `name` that can be seen here.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn sprite_named(&self, name: &str) -> Option<usize> {
         self.sprites
             .iter()
@@ -4544,6 +4677,7 @@ impl<'s> Parser<'s> {
     /// small (its errors and its node out of line), and counted as two
     /// levels of nesting: it holds a frame across two values.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn sprite_read(&mut self, t: Token, k: usize) -> Result<Id, Error> {
         let open = self.peek();
         if open.tok != Tok::LBracket {
@@ -4579,6 +4713,7 @@ impl<'s> Parser<'s> {
     /// whole character, however many bytes).
     #[cold]
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn not_in_key(&self, at: usize) -> Error {
         let ch = sub(self.src, at, self.src.len())
             .chars()
@@ -4594,6 +4729,7 @@ impl<'s> Parser<'s> {
     /// A sprite read without `[u, v]` (`two`: with one value in it).
     #[cold]
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn sprite_misread(&self, t: Token, two: bool) -> Error {
         let name = self.text(t);
         if two {
@@ -4612,6 +4748,7 @@ impl<'s> Parser<'s> {
     /// A `[` whose `]` was expected at `close`.
     #[cold]
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn unclosed_bracket(&self, open: Token, close: Token) -> Error {
         if close.tok == Tok::Eof || self.line_of(close.start) > self.line_of(open.start) {
             return self.fail(open, "this `[` is never closed — add `]`");
@@ -4621,6 +4758,7 @@ impl<'s> Parser<'s> {
 
     /// The node of a sprite read at `u, v` of the sprite at `start`.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn sprite_node(&mut self, u: Id, v: Id, start: usize, at: (usize, usize)) -> Result<Id, Error> {
         if self.dag.grows(u) || self.dag.grows(v) {
             return Err(Error::new(at.0, at.1, GROWS));
@@ -4649,6 +4787,7 @@ impl<'s> Parser<'s> {
 
     /// Whether the statement at the cursor is a sprite block (`sprite NAME
     /// {` as the lexer reads one: its rows are raw).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn is_sprite(&self) -> bool {
         let t = self.peek();
         t.tok == Tok::Name
@@ -4666,6 +4805,7 @@ impl<'s> Parser<'s> {
     /// widths up to 64, up to 32 rows), packed into the tables: a header
     /// word, the keys' numbers, the rows at 1, 2 or 4 bits a pixel.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn sprite(&mut self, kw: Token) -> Result<(), Error> {
         self.next();
         let n = self.next();
@@ -4816,6 +4956,7 @@ impl<'s> Parser<'s> {
     /// and the numbers go on), [`MAX_TABLE_LEN`] at most, [`MAX_TABLE`] in
     /// the store in all.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn table(&mut self, kw: Token) -> Result<(), Error> {
         self.next();
         let n = self.peek();
@@ -4877,6 +5018,7 @@ impl<'s> Parser<'s> {
     /// Whether `id` (a value from `start` to `end`) can be used inside
     /// `draw { }`: the same for every pixel.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn drawable(&self, id: Id, start: usize, end: usize) -> Result<(), Error> {
         if self.dag.level(id) < LV_ROW {
             return Ok(());
@@ -4888,6 +5030,7 @@ impl<'s> Parser<'s> {
     /// the callers are on the parser's deepest path).
     #[cold]
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn varies_err(&self, (a, b): (usize, usize), head: &str, id: Id) -> Error {
         let mut m = String::from(head);
         m.push_str(&self.varies(id));
@@ -4900,6 +5043,7 @@ impl<'s> Parser<'s> {
     /// E931).
     #[cold]
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn varies(&self, id: Id) -> String {
         let named = |m: Id| {
             self.locals
@@ -4936,6 +5080,7 @@ impl<'s> Parser<'s> {
     /// `draw { … }` at `kw`: once a frame, before the rows — values, `for`
     /// loops, `line(…)` and `dot(…)` into the canvas `ink` reads.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn draw_block(&mut self, kw: Token) -> Result<(), Error> {
         self.next();
         if self.in_layer() {
@@ -4969,6 +5114,7 @@ impl<'s> Parser<'s> {
     }
 
     /// The lines of a `draw { }` or a `for` (at `kw`) up to its `}`.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn draw_lines(&mut self, kw: Token) -> Result<(), Error> {
         self.skip_newlines();
         loop {
@@ -5024,6 +5170,7 @@ impl<'s> Parser<'s> {
     }
 
     /// Whether the block the cursor is in has its `}` ahead.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn closed(&self) -> bool {
         let mut depth = 0;
         for t in self.toks[self.pos..].iter().map(|t| t.get()) {
@@ -5040,6 +5187,7 @@ impl<'s> Parser<'s> {
     /// `for k < N { … }` at `kw`: `k` = 0, 1, … N − 1, N a whole number
     /// from 1 to 1024; two deep at most; 2048 turns a frame in all.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn for_loop(&mut self, kw: Token) -> Result<(), Error> {
         self.next();
         if self.in_draw > 2 {
@@ -5144,6 +5292,7 @@ impl<'s> Parser<'s> {
 
     /// `line(x0, y0, x1, y1[, v0[, v1]])` or `dot(x, y[, v])` at `t`.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn primitive(&mut self, t: Token) -> Result<(), Error> {
         let line = self.text(t) == "line";
         let (need, most) = if line { (4, 6) } else { (2, 3) };
@@ -5216,6 +5365,7 @@ impl<'s> Parser<'s> {
     }
 
     /// The function called `name`, if the formula has one.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn func_named(&self, name: &str) -> Option<usize> {
         self.funcs.iter().rposition(|f| f.name == name)
     }
@@ -5223,6 +5373,7 @@ impl<'s> Parser<'s> {
     /// `fn NAME(a, b) = value` or `fn NAME(a, b) { … }` at `kw`: read
     /// later, at each call.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn fn_def(&mut self, kw: Token) -> Result<(), Error> {
         self.next();
         let n = self.next();
@@ -5310,6 +5461,7 @@ impl<'s> Parser<'s> {
     }
 
     /// Where the last line from `body` to `end` starts (`end` if none).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn last_line(&self, body: usize, end: usize) -> usize {
         let (mut last, mut depth, mut start) = (end, 0i32, true);
         for k in body..end {
@@ -5329,6 +5481,7 @@ impl<'s> Parser<'s> {
 
     /// What the line at `k` is, as a function's last: a value, a colour
     /// read by channel or a whole colour.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn line_colour(&self, k: usize) -> u8 {
         let t = self.toks[k].get();
         if t.tok == Tok::Name
@@ -5376,6 +5529,7 @@ impl<'s> Parser<'s> {
 
     /// A function's body at the cursor: the names it sets, up to its last
     /// line (E746 for a line that draws).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn body_names(&mut self, t: Token, k: usize) -> Result<(), Error> {
         loop {
             self.skip_newlines();
@@ -5401,6 +5555,7 @@ impl<'s> Parser<'s> {
     /// A function whose last line is a whole colour, on the colour line:
     /// its colour.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn call_colour(&mut self, t: Token, k: usize) -> Result<(Vec<Colour>, bool), Error> {
         self.next();
         let args = self.call_args(t, k)?;
@@ -5432,6 +5587,7 @@ impl<'s> Parser<'s> {
     }
 
     /// A call's values at the cursor (after the name), as many as `f` takes.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn call_args(&mut self, t: Token, k: usize) -> Result<Vec<Id>, Error> {
         let name = self.funcs[k].name;
         let want = self.funcs[k].params.len();
@@ -5469,6 +5625,7 @@ impl<'s> Parser<'s> {
 
     /// Bind `f`'s values to `args` in a scope of their own (seen from the
     /// call's), for reading its body; the scope the call was in.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn bind(&mut self, t: Token, k: usize, args: &[Id]) -> Result<u16, Error> {
         let outer = self.scope;
         try_push(&mut self.scopes, (outer, false))?;
@@ -5505,6 +5662,7 @@ impl<'s> Parser<'s> {
 
     /// `name(…)` of a function in a value: its value.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn call_value(&mut self, t: Token, k: usize) -> Result<Id, Error> {
         if self.funcs[k].colour == F_DRAWS {
             let name = self.funcs[k].name;
@@ -5551,6 +5709,7 @@ impl<'s> Parser<'s> {
 
     /// `name(…)` of a function on a line of its own in draw: its lines.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn call_block(&mut self, t: Token) -> Result<(), Error> {
         let k = self.func_named(self.text(t)).unwrap_or(0);
         if !self.funcs[k].block {
@@ -5577,6 +5736,7 @@ impl<'s> Parser<'s> {
 
     /// Whether the call at the cursor (`line(` or `dot(`) ends in a colour
     /// (`#…`, `pal(…)`, `gray(…)`): it paints, else it draws ink.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn paints_with_colour(&self) -> bool {
         let mut depth = 0;
         let mut last = self.pos + 2;
@@ -5606,6 +5766,7 @@ impl<'s> Parser<'s> {
     }
 
     /// Colour `rgb` in the paint palette (added once).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn paint_index(&mut self, rgb: u32, at: Token) -> Result<u8, Error> {
         if let Some(k) = self.paint.iter().skip(1).position(|&c| c == rgb) {
             return Ok(k as u8 + 1);
@@ -5625,6 +5786,7 @@ impl<'s> Parser<'s> {
 
     /// Palette `pal`'s 32 entries in the paint palette (once): where they
     /// start.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn paint_palette(&mut self, pal: u8, at: Token) -> Result<u8, Error> {
         if let Some(&(_, b)) = self.paint_pals.iter().find(|e| e.0 == pal) {
             return Ok(b);
@@ -5663,6 +5825,7 @@ impl<'s> Parser<'s> {
     /// A paint colour at the cursor: `#…`, `pal(P, v)` or `gray(v)` (its
     /// index, a value the same for every pixel).
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn paint_colour(&mut self) -> Result<Id, Error> {
         let t = self.peek();
         let at = (t.start, t.end);
@@ -5728,6 +5891,7 @@ impl<'s> Parser<'s> {
     /// c)`, `trifill(x0, y0, x1, y1, x2, y2, c)`, `cls(c)`, `spr(s, x, y
     /// [, flip])`, `print(text or value, x, y, c [, font [, digits]])`).
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn paint_call(&mut self, t: Token) -> Result<(), Error> {
         use crate::program::paint;
         let name = self.text(t);
@@ -5881,6 +6045,7 @@ impl<'s> Parser<'s> {
     }
 
     /// A value a paint primitive takes (the same for every pixel).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn paint_value(&mut self) -> Result<Id, Error> {
         let start = self.peek().start;
         let e = self.expr(0)?;
@@ -5898,6 +6063,7 @@ impl<'s> Parser<'s> {
 
     /// `if c { … } [else { … }]` at `kw`, inside draw.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn if_block(&mut self, kw: Token) -> Result<(), Error> {
         self.next();
         let c = self.paint_value()?;
@@ -5939,6 +6105,7 @@ impl<'s> Parser<'s> {
     /// The lines of a formula (`end` Eof) or a part (`end` RBrace, the
     /// cursor after its `{`): names, `frame { }`, `loop`, parts, layers and
     /// the colour.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn body(&mut self, end: Tok) -> Result<Body, Error> {
         let mut b = Body {
             colours: Vec::new(),
@@ -6067,6 +6234,7 @@ impl<'s> Parser<'s> {
     /// before anything but `=`, `look` alone or before a blend or a number
     /// — and no value or part of the formula's called `look`).
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn is_declaration(&self) -> bool {
         let t = self.peek();
         if t.tok != Tok::Name {
@@ -6096,6 +6264,7 @@ impl<'s> Parser<'s> {
     /// E951: a declaration below the formula's other lines.
     #[cold]
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn late(&self, t: Token) -> Error {
         let w = self.text(t);
         if w == "psi" {
@@ -6111,6 +6280,7 @@ impl<'s> Parser<'s> {
     /// The declarations at the top of a formula (`host`) or a part: read,
     /// checked, and — for the formula's own — kept in [`Decls`].
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn header(&mut self, host: bool) -> Result<(), Error> {
         // Where each of `name`, `about` and `look` was set (0: not yet).
         let mut seen = [0usize; 3];
@@ -6173,6 +6343,7 @@ impl<'s> Parser<'s> {
 
     /// The declarations so far (made at the first).
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn decls(&mut self) -> &mut Decls {
         self.decl.get_or_insert_with(|| {
             alloc::boxed::Box::new(Decls {
@@ -6185,6 +6356,7 @@ impl<'s> Parser<'s> {
     /// The end of a declaration's line (E967; a `control` line's own
     /// shape is E957, checked in [`Self::control`]).
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn declaration_end(&mut self, t: Token) -> Result<(), Error> {
         let n = self.peek();
         match n.tok {
@@ -6206,6 +6378,7 @@ impl<'s> Parser<'s> {
     }
 
     /// E952: `name`, `about` or `look` a second time.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn once(&self, t: Token, seen: &mut usize) -> Result<(), Error> {
         if *seen != 0 {
             return Err(self.fail_at(
@@ -6224,6 +6397,7 @@ impl<'s> Parser<'s> {
     /// `psi N`: this compiler is version [`VERSION`]; a newer one is
     /// E601, anything but a whole number from 1 E603.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn version(&mut self, t: Token) -> Result<(), Error> {
         let n = self.peek();
         let v = match n.tok {
@@ -6260,6 +6434,7 @@ impl<'s> Parser<'s> {
     /// Text in quotes at `q` (E956 if there is none), at most `most`
     /// characters (E955): its range inside the quotes.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn text_in(&self, q: Token, most: usize) -> Result<(u32, u32), Error> {
         if q.tok != Tok::Str {
             // E956.
@@ -6281,6 +6456,7 @@ impl<'s> Parser<'s> {
     /// place in [`crate::look::BLENDS`] (over when none) and the amount
     /// (100 when none).
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn look_line(&mut self) -> Result<(usize, u8), Error> {
         const HOW: &str = "`look` takes a blend (over, screen, add, multiply, max or min) and an amount from 0 to 100";
         let mut blend = 0;
@@ -6306,6 +6482,7 @@ impl<'s> Parser<'s> {
     }
 
     /// A signed number at the cursor (`-0.5`, `4`), or `None`.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn signed(&mut self) -> Option<i32> {
         let neg = self.peek().tok == Tok::Minus;
         let k = self.pos + usize::from(neg);
@@ -6326,6 +6503,7 @@ impl<'s> Parser<'s> {
     /// lines declare none (so a formula pasted in as `part look { … }`
     /// keeps its controls).
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn control(&mut self, kw: Token, k: usize, host: bool) -> Result<(), Error> {
         const HOW: &str = "a control is `control NAME lo..hi = default \"Label\"` or `control NAME = word, word, …`";
         let nt = self.next();
@@ -6440,6 +6618,7 @@ impl<'s> Parser<'s> {
     /// A choice's words, `w1, w2, …` (E961: 2 to 6; E962: each once): the
     /// first and last word and how many.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn words(&mut self) -> Result<(Token, Token, usize), Error> {
         let first = self.peek();
         let mut seen: [&str; 7] = [""; 7];
@@ -6488,6 +6667,7 @@ pub struct Info {
 
 /// Compile `src` into `prog` (which is cleared first). On an error `prog`
 /// is left empty.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn compile_into(src: &str, prog: &mut Program) -> Result<Info, Error> {
     compile_layout(src, prog, true)
 }
@@ -6497,6 +6677,7 @@ pub fn compile_into(src: &str, prog: &mut Program) -> Result<Info, Error> {
 /// frame, as before they existed (the same bytes). For measuring a step's
 /// cost on the device (`psi-probe`) and the estimate's tests.
 #[doc(hidden)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn compile_layout(src: &str, prog: &mut Program, runs: bool) -> Result<Info, Error> {
     compile_with(src, prog, runs, true)
 }
@@ -6505,6 +6686,7 @@ pub fn compile_layout(src: &str, prog: &mut Program, runs: bool) -> Result<Info,
 /// (`crate::range`: `add_w`, `mul_n`, `shr`, …; the same bytes): without,
 /// the checked steps as before them, for `psi-probe`'s before and after.
 #[doc(hidden)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn compile_with(
     src: &str,
     prog: &mut Program,
@@ -6516,6 +6698,7 @@ pub fn compile_with(
 
 /// [`compile_into`] as the player takes it ([`crate::psb`]): laid out, but
 /// not narrowed or fused (the player does both itself, from the program).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn compile_portable(src: &str, prog: &mut Program) -> Result<Info, Error> {
     compile_impl(src, prog, true, false, true, false)
 }
@@ -6523,6 +6706,7 @@ pub fn compile_portable(src: &str, prog: &mut Program) -> Result<Info, Error> {
 /// [`compile_portable`] with (`cmp`) or without the fused compares (P0b-4;
 /// the same bytes): the paint probe's before and after.
 #[doc(hidden)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn compile_portable_with(src: &str, prog: &mut Program, cmp: bool) -> Result<Info, Error> {
     compile_full(
         src,
@@ -6538,6 +6722,7 @@ pub fn compile_portable_with(src: &str, prog: &mut Program, cmp: bool) -> Result
 /// same bytes): for the tests that compare, and psi-probe's before and
 /// after.
 #[doc(hidden)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn compile_unfused(src: &str, prog: &mut Program) -> Result<Info, Error> {
     compile_impl(src, prog, true, true, true, false)
 }
@@ -6548,6 +6733,7 @@ pub fn compile_unfused(src: &str, prog: &mut Program) -> Result<Info, Error> {
 /// estimate's tests, psi-probe's before and after, the tests that
 /// compare).
 #[doc(hidden)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn compile_measured(
     src: &str,
     prog: &mut Program,
@@ -6569,6 +6755,7 @@ pub fn compile_measured(
 /// a value's last use has passed (`assign_slots`): without, every value
 /// has a slot of its own, as before (the same bytes; the tests compare).
 #[doc(hidden)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn compile_opts(
     src: &str,
     prog: &mut Program,
@@ -6582,6 +6769,7 @@ pub fn compile_opts(
 /// [`compile_opts`]'s body, in each of its callers (one frame fewer under
 /// the compiler's recursion: its stack is the firmware's to hold).
 #[inline(always)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn compile_impl(
     src: &str,
     prog: &mut Program,
@@ -6607,6 +6795,7 @@ fn compile_impl(
 /// [`compile_unfused`].)
 #[inline(always)]
 #[allow(clippy::needless_lifetimes)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn compile_full<'s>(
     src: &'s str,
     prog: &mut Program,
@@ -6651,6 +6840,7 @@ fn compile_full<'s>(
 /// steps (`narrow`), the fused runs (`fuse`), and the draw loops that run
 /// as lanes, decided once. One place, so no way of compiling can miss one.
 #[inline(never)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn finish_program(prog: &mut Program, narrow: bool, fuse: bool) {
     prog.finish(narrow, fuse);
 }
@@ -6661,6 +6851,7 @@ fn finish_program(prog: &mut Program, narrow: bool, fuse: bool) {
 /// [`Program::meta`]). The program is not narrowed or fused (the same
 /// pixels, the checked steps): it is for what the formula declares, not
 /// for drawing on the panel.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn compile_declared(src: &str, prog: &mut Program) -> Result<Declared, Error> {
     let mut d = Declared::default();
     compile_full(
@@ -6676,6 +6867,7 @@ pub fn compile_declared(src: &str, prog: &mut Program) -> Result<Declared, Error
 
 // ('s: the sink's, with `syntax`.)
 #[allow(clippy::needless_lifetimes)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn compile_inner<'s>(
     src: &'s str,
     prog: &mut Program,
@@ -6765,6 +6957,7 @@ fn compile_inner<'s>(
 /// laid out. Out of line, so its locals are not in the frame under the
 /// parser's deepest (the firmware's compile stack).
 #[inline(never)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn finish(
     src: &str,
     p: &mut Parser<'_>,
@@ -7062,6 +7255,7 @@ fn finish(
 /// reads an entry's sources before it writes it), else into a working
 /// palette.
 #[inline(never)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn lay_palettes(
     p: &Parser<'_>,
     prog: &mut Program,
@@ -7087,6 +7281,7 @@ fn lay_palettes(
         at: (usize, usize),
     }
     impl L<'_> {
+        #[cfg_attr(target_arch = "xtensa", optimize(size))]
         fn put(&mut self, lay: Lay) -> Result<u8, Error> {
             if let Some(&(_, s)) = self.map.iter().find(|m| m.0 == lay) {
                 return Ok(s);
@@ -7131,6 +7326,7 @@ fn lay_palettes(
             Ok(s as u8)
         }
 
+        #[cfg_attr(target_arch = "xtensa", optimize(size))]
         fn temp(&mut self) -> Result<u8, Error> {
             let Some(k) = self.temps.iter().position(|&u| !u) else {
                 // E939.
@@ -7144,6 +7340,7 @@ fn lay_palettes(
             Ok((USER_PALETTES + k) as u8)
         }
 
+        #[cfg_attr(target_arch = "xtensa", optimize(size))]
         fn free(&mut self, d: u8) {
             if let Some(k) = (d as usize).checked_sub(USER_PALETTES) {
                 self.temps[k % TWEEN_TEMPS] = false;
@@ -7151,6 +7348,7 @@ fn lay_palettes(
         }
 
         /// A destination as a source.
+        #[cfg_attr(target_arch = "xtensa", optimize(size))]
         fn src(d: u8) -> u8 {
             if (d as usize) < USER_PALETTES {
                 TW_LIVE + d
@@ -7159,6 +7357,7 @@ fn lay_palettes(
             }
         }
 
+        #[cfg_attr(target_arch = "xtensa", optimize(size))]
         fn leaf(&mut self, s: PSrc, half: u8) -> Result<u8, Error> {
             match s {
                 PSrc::Own(j, _) if self.pals[j].tween.is_some() => Ok(self.loc[j]),
@@ -7173,6 +7372,7 @@ fn lay_palettes(
         }
 
         /// Node `r` into destination `d` (its entries `half` says).
+        #[cfg_attr(target_arch = "xtensa", optimize(size))]
         fn gen(&mut self, r: u16, d: u8, half: u8) -> Result<(), Error> {
             let m = self.nodes[r as usize];
             let a = match m.p {
@@ -7291,6 +7491,7 @@ fn lay_palettes(
 /// screen 40`: its colour put on with that blend, covering that much):
 /// the player's look program. A formula with no `look` line, or `look`
 /// (over, 100), is drawn as it is.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn compile_look(src: &str, prog: &mut Program) -> Result<Info, Error> {
     compile_full(
         src,
@@ -7305,6 +7506,7 @@ pub fn compile_look(src: &str, prog: &mut Program) -> Result<Info, Error> {
 /// [`compile_look`] with (`runs`) or without the runs and (`narrow`) or
 /// without the narrowed steps, as [`compile_with`]: the estimate's tests.
 #[doc(hidden)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn compile_look_with(
     src: &str,
     prog: &mut Program,
@@ -7324,6 +7526,7 @@ pub fn compile_look_with(
 /// [`compile_look`]'s blend and amount, put on the formula's colours (a
 /// formula with layers goes over only: [`declarations`] refused another).
 #[inline(never)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn as_look(
     p: &mut Parser<'_>,
     prog: &Program,
@@ -7359,6 +7562,7 @@ fn as_look(
 /// [`compile_into`], telling `sink` what the compiler saw (the language
 /// service's hook: [`crate::syntax`]). Also on an error, up to it.
 #[cfg(feature = "syntax")]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn compile_observed<'s>(
     src: &'s str,
     prog: &mut Program,
@@ -7377,6 +7581,7 @@ pub fn compile_observed<'s>(
 impl<'s> Parser<'s> {
     /// A name read at `t`: where it is defined, if the formula set it.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn note_read(&mut self, t: Token) {
         let name = self.text(t);
         let def = self
@@ -7394,6 +7599,7 @@ impl<'s> Parser<'s> {
 
     /// Whether a name set in `scope` is seen from `from` (as
     /// [`visible`](Self::visible) from the scope being read).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn seen_from(&self, mut from: u16, scope: u16) -> bool {
         loop {
             if from == scope {
@@ -7408,6 +7614,7 @@ impl<'s> Parser<'s> {
     }
 
     /// Tell the sink what was read (after the formula, or up to an error).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn observe(&mut self) {
         use crate::syntax::{Defined, Level};
         let Some(sink) = self.sink.take() else {
@@ -7521,6 +7728,7 @@ impl<'s> Parser<'s> {
 /// [`Meta`], and where the text is for [`compile_declared`]. Out of line:
 /// `compile_inner`'s frame is under the parser's deepest.
 #[inline(never)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn declarations(
     decl: &Decls,
     layered: bool,
@@ -7548,6 +7756,7 @@ fn declarations(
 /// the others held to 0..1 (the colour step clamps them so anyway); a
 /// coverage, a palette's scale or a value with a part per pixel can't
 /// (E905).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn grown_colour(
     dag: &mut Dag,
     c: &mut Colour,
@@ -7622,6 +7831,7 @@ impl Step {
     /// What it reads, in operand order (a palette's scale, then the
     /// coverage), then the turn of its palette (not an operand: a row step
     /// before it).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn reads(&self) -> impl Iterator<Item = Id> + '_ {
         self.args[..code::arity(self.code)]
             .iter()
@@ -7634,6 +7844,7 @@ impl Step {
 
 /// A comparison node as `x op y`, op `LT` or `LE` (`a > b` is `b < a`,
 /// `step(e, x)` is `e <= x`), or `None` for any other node.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn as_lt_le(m: &Node) -> Option<(u8, Id, Id)> {
     match m.code {
         code::LT => Some((code::LT, m.a, m.b)),
@@ -7648,6 +7859,7 @@ fn as_lt_le(m: &Node) -> Option<(u8, Id, Id)> {
 
 /// A comparison node's two readings as `s op t` (op `LT LE GT GE`): with
 /// its first operand as `s`, and with its second.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn as_sided(m: &Node) -> Option<[(u8, Id, Id); 2]> {
     use code::*;
     let (a, b) = (m.a, m.b);
@@ -7677,6 +7889,7 @@ fn as_sided(m: &Node) -> Option<[(u8, Id, Id); 2]> {
 /// pixel stays a row step: once a row against a test a pixel), and never
 /// across scenes.
 #[inline(never)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn fuse_compares(
     dag: &mut Dag,
     steps: &[Step],
@@ -7952,6 +8165,7 @@ fn split_slow(dag: &mut Dag, steps: &mut [Step], n: usize) -> Result<u8, Error> 
 /// counter) at the top of its body.
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn emit(
     dag: &Dag,
     steps: &[Step],
@@ -8154,6 +8368,7 @@ fn emit(
     next_slot += keys.len();
     // Wide slots: 0 is `t`.
     let mut next_wide = 1usize;
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn new_slot(vs: &mut Vec<VSlot>, v: Option<i32>) -> Result<u16, Error> {
         try_push(
             vs,
@@ -8845,6 +9060,7 @@ const VS: u16 = 0x100;
 /// A pick's table goes after all of them (its choices are read by the pick,
 /// per pixel).
 #[allow(clippy::too_many_arguments)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn assign_slots(
     ops: &[WOp],
     vs: &[VSlot],
@@ -9017,6 +9233,7 @@ fn assign_slots(
 
 /// A draw stage step's target as laid out (`IF`'s, `JUMP`'s, a `FOR`'s
 /// END in `b`, an `END`'s step back in `c`: [`Op::target`]).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn target_of(w: &WOp) -> Option<u16> {
     match w.code {
         code::IF | code::JUMP | code::FOR => Some(w.b),
@@ -9026,6 +9243,7 @@ fn target_of(w: &WOp) -> Option<u16> {
 }
 
 /// A step's `d a b c` as slots: its target (`target_of`) 0.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn operand_fields(w: &WOp) -> [u16; 4] {
     match w.code {
         code::IF | code::JUMP | code::FOR => [w.d, w.a, 0, 0],
@@ -9054,12 +9272,14 @@ enum Item {
 }
 
 /// A wide noise's code.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn is_noise_o(c: u8) -> bool {
     (code::NOISE_O..=code::NOISE_O_LAST).contains(&c)
 }
 
 /// A value's operands that are nodes (a pick's choices included, and the
 /// steps a wide noise needs before it).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn reads(dag: &Dag, i: usize) -> impl Iterator<Item = Id> + '_ {
     let m = &dag.nodes[i];
     let k = if m.code < K_CONST {
@@ -9084,6 +9304,7 @@ fn reads(dag: &Dag, i: usize) -> impl Iterator<Item = Id> + '_ {
 /// again after its value's last use, and a step never writes a register it
 /// reads): the register of each item (0 for the others) and how many were
 /// used, `None` when more than [`REGS`] are live at once.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn registers(
     nodes: &[Node],
     steps: &[Step],
@@ -9154,6 +9375,7 @@ const STILL_CANDIDATES: usize = 24;
 
 /// Whether each node is *still*: worked out from the pixel's position
 /// (`x y px py i`) and constants only, the same every frame.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn still_nodes(dag: &Dag) -> Vec<bool> {
     let nodes = &dag.nodes;
     let mut still = alloc::vec![false; nodes.len()];
@@ -9179,6 +9401,7 @@ fn still_nodes(dag: &Dag) -> Vec<bool> {
 /// The per-pixel values worked out every frame when the values in
 /// `cached` come from the still cache: everything a colour step reads,
 /// through anything but a cached value.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn per_frame(dag: &Dag, steps: &[Step], cached: &[usize]) -> Vec<bool> {
     let n = dag.nodes.len();
     let mut f = alloc::vec![false; n];
@@ -9201,6 +9424,7 @@ fn per_frame(dag: &Dag, steps: &[Step], cached: &[usize]) -> Vec<bool> {
 /// The values for the still cache, best first (at most
 /// [`crate::still::STILL_LANES`]): still per-pixel values chosen greedily
 /// by what they save a pixel per frame, each at least [`STILL_GAIN_NS`].
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn choose_still(
     dag: &Dag,
     steps: &[Step],
@@ -9283,6 +9507,7 @@ fn choose_still(
 /// cached value (`ab = abs(ang)` read by the frame and by a cached
 /// `sqrt(ab*2)`, with `ang` cached too) — skipping the run would leave it
 /// reading a register nothing wrote.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn still_run(
     dag: &Dag,
     steps: &[Step],
@@ -9328,6 +9553,7 @@ fn still_run(
 /// its order: those that need none of its values (before), its values, and
 /// those that need them (after) — the same dependencies, since a value of
 /// the scene needs nothing that needs one.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn scene_blocks(
     dag: &Dag,
     steps: &[Step],
@@ -9426,6 +9652,7 @@ struct PixelSeq {
 /// the run (the cached values and the steps only they need), then the other
 /// values before the colour step that first needs them, as without either.
 #[allow(clippy::too_many_arguments)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn pixel_seq(
     dag: &Dag,
     steps: &[Step],
@@ -9516,6 +9743,7 @@ const COLUMN_GAIN_NS: u32 = 130;
 
 /// Whether each node is the same down a column: worked out from `x`, `px`,
 /// constants and per-frame values only.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn column_nodes(dag: &Dag) -> Vec<bool> {
     let nodes = &dag.nodes;
     let mut col = alloc::vec![false; nodes.len()];

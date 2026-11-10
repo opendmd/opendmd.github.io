@@ -67,7 +67,12 @@ pub type Refusal = &'static str;
 pub const NOT_PSB: Refusal = "not a compiled Formula";
 /// Compiled for another version of the player.
 pub const OTHER_ABI: Refusal =
-    "this Formula was prepared for another version of OpenDMD: open the OpenDMD app to prepare it again";
+    "this Formula was prepared for another version of OpenDMD: the display prepares it again shortly after it starts";
+/// A damaged compiled file (a cut write, a stray edit).
+pub const DAMAGED: Refusal = "a damaged Formula: the display prepares it again shortly after it starts";
+/// ABI 0: the player's mark for a Formula it could not compile (the
+/// firmware's `card_formulas`).
+pub const MARKED: Refusal = "this Formula does not compile: open it in the editor to see why";
 
 /// The program was loaded into a store too small for its numbers (a
 /// caller's mistake: [`store_needed`] says how big).
@@ -128,6 +133,9 @@ pub enum Which {
 
 /// The bytes for a Formula: its `name` and its programs (portable: see the
 /// module's docs; [`crate::compile_portable`] makes them).
+// (The writer runs only after a compile: for size on the ESP32, like the
+// compiler; the reader below keeps the crate's speed.)
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn encode(name: &str, play: &Prog, look: Option<&Prog>) -> Vec<u8> {
     let mut o = Vec::with_capacity(1024);
     o.extend_from_slice(MAGIC);
@@ -154,6 +162,7 @@ pub fn encode(name: &str, play: &Prog, look: Option<&Prog>) -> Vec<u8> {
     o
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn put_program(o: &mut Vec<u8>, p: &Prog, meta: bool, ins: bool) {
     let at = o.len();
     o.extend_from_slice(&[0, 0]);
@@ -248,6 +257,9 @@ impl<'a> Reader<'a> {
 fn head(b: &[u8]) -> Result<(u8, &str, usize), Refusal> {
     if b.len() < 6 || &b[..3] != MAGIC {
         return Err(NOT_PSB);
+    }
+    if b[3] == 0 {
+        return Err(MARKED);
     }
     if b[3] != ABI {
         return Err(OTHER_ABI);
@@ -422,7 +434,7 @@ pub fn verify(p: &Prog) -> Result<(), Refusal> {
 /// program (their refusal of one that has them is the tests').
 fn verify_codes(p: &Prog, fused: bool) -> Result<(), Refusal> {
     use code::*;
-    let bad = Err("a damaged Formula: open the OpenDMD app to prepare it again");
+    let bad = Err(DAMAGED);
     let (fe, de, re, pe) = (
         p.frame_end as usize,
         p.draw_end as usize,
@@ -1090,7 +1102,16 @@ mod tests {
     use super::*;
     use crate::{compile, golden, render_rows_still, Ink, Scratch, Still, H, W};
 
-    const DAMAGED: Refusal = "a damaged Formula: open the OpenDMD app to prepare it again";
+
+    #[test]
+    fn the_players_mark_is_refused_as_not_compiling() {
+        // `PSB`, ABI 0, the source's size and date (firmware `card_formulas`).
+        let mark = *b"PSB\0\x10\0\0\0\x21\x43\x65\x87";
+        assert_eq!(name(&mark).err(), Some(MARKED));
+        let mut other = crate::build("gray(x)").unwrap();
+        other[3] = ABI + 1;
+        assert_eq!(name(&other).err(), Some(OTHER_ABI));
+    }
 
     #[test]
     fn a_built_formula_loads_as_the_compiled_program() {
@@ -1201,7 +1222,7 @@ mod tests {
         let old = verify_codes(&p, false);
         assert_eq!(
             old,
-            Err("a damaged Formula: open the OpenDMD app to prepare it again")
+            Err(DAMAGED)
         );
         // A program without them is the same to both.
         let plain = crate::build("gray(x)").unwrap();
