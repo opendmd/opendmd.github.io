@@ -20,6 +20,7 @@ pub const EXAMPLES: &[(&str, &str)] = &[
     ("x, y", "rgb(x, y, 0.5)"),
     ("px, py", "gray(px % 8 == 0 or py % 8 == 0)"),
     ("t", "loop 4; hsv(x + t/4, 1, 1)"),
+    ("phase", "loop 4; hsv(x + phase, 1, 1)"),
     ("hour, minute, second", "band = floor(y*3); hsv(band/3, 0.8, x < pick(band, second/60, minute/60, hour/24))"),
     ("a, b, c", "control size 0..1 = 0.5 \"Size\"; gray(r < size*2)"),
     ("w, h", "gray(px == 0 or py == 0 or px == w - 1 or py == h - 1)"),
@@ -58,7 +59,7 @@ pub const EXAMPLES: &[(&str, &str)] = &[
     (";", "u = x; v = y; rgb(u, v, 0.5)"),
     ("loop 8", "loop 2; gray(frac(x - t/2))"),
     ("loop forever", "loop forever; hsv(frac(x + t/10), 1, 1)"),
-    ("fps 100", "fps 100; loop 1; gray(abs(x - frac(t)) < 0.02)"),
+    ("smooth", "smooth; loop 1; gray(abs(x - phase) < 0.02)"),
     ("layer add { … }", "layer { gray(y*0.5) }; layer add { rgb(x, 0, 0) }"),
     ("layer rate 4 { … }", "loop 4; layer rate 4 { gray(noise(x*6, y*2, t)) }; layer { rgb(1, 0.5, 0, abs(x - frac(t/4)) < 0.01) }"),
     // (`use` is the editor's: it puts the formula in as a function, as here.)
@@ -257,9 +258,9 @@ pub const HELP: &[Help] = &[
     },
     Help {
         code: 801,
-        why: "The panel shows 25, 50 or 100 frames a second; nothing in between.",
+        why: "The panel draws a Formula every refresh of its scan (`smooth`, or `fps 100`), every 2nd (the default, `fps 50`) or every 4th (`fps 25`); nothing in between.",
         before: "fps 60\ngray(x)",
-        after: "fps 50\ngray(x)",
+        after: "smooth\ngray(x)",
     },
     Help {
         code: 901,
@@ -274,6 +275,12 @@ pub const HELP: &[Help] = &[
         after: "loop forever\nv = frac(t/8 + x)\ngray(v)",
     },
     Help {
+        code: 908,
+        why: "`phase` is `t` divided by the loop's length, and a `loop forever` formula has no length to divide by.",
+        before: "loop forever\ngray(frac(x + phase))",
+        after: "loop forever\ngray(frac(x + t/8))",
+    },
+    Help {
         code: 931,
         why: "`cycle` turns a whole row's palette at once, so how far it turns can change with the time or the row, not along the row.",
         before: "cycle(fire, x, x)",
@@ -281,9 +288,9 @@ pub const HELP: &[Help] = &[
     },
     Help {
         code: 951,
-        why: "Declarations (`name`, `about`, `control`, `look`) say what the formula is, so they come first, before anything it works out.",
-        before: "loop 4\nname \"Late\"\ngray(x)",
-        after: "name \"Late\"\nloop 4\ngray(x)",
+        why: "The header (`name`, `about`, `control`, `look`, `loop`, `smooth`, in any order) says what the formula is, so it comes first, before anything it works out.",
+        before: "loop 4\nv = x\nname \"Late\"\ngray(v)",
+        after: "loop 4\nname \"Late\"\nv = x\ngray(v)",
     },
     Help {
         code: 957,

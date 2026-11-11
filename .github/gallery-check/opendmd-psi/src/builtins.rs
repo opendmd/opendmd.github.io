@@ -100,6 +100,15 @@ pub const INPUTS: [(&str, Input, &str); 17] = [
 /// saved `r = …` means what it meant.
 pub const LATER: [&str; 4] = ["cx", "cy", "r", "angle"];
 
+/// Values written out as others (2026-11-11, language review P1.1): a name
+/// and what it means. `phase` is `t / LOOP`, the loop as written (the
+/// steps of that division: the same frames). A name a formula sets is
+/// that name, as with [`LATER`].
+pub const SUGAR: [(&str, &str); 1] = [(
+    "phase",
+    "where the frame is in the loop, 0 to 1: t divided by the loop's length",
+)];
+
 /// The panel's size: constants.
 pub const CONSTS: [(&str, i32); 2] = [("w", (W as i32) << 16), ("h", (H as i32) << 16)];
 
@@ -220,9 +229,10 @@ pub const DECLARATIONS: [&str; 5] = ["psi", "name", "about", "control", "look"];
 pub const VERSION: usize = 1;
 
 /// Words that are keywords only in one place: `fps` before a number,
-/// `forever` after `loop`, `sprite NAME {`, `palette NAME =`, a sprite's
-/// `key` line, `rate N` after `layer` (and its blend).
-pub const CONTEXT_WORDS: [&str; 6] = ["fps", "forever", "sprite", "palette", "key", "rate"];
+/// `smooth` alone on a line (a formula's own `smooth` aside), `forever`
+/// after `loop`, `sprite NAME {`, `palette NAME =`, a sprite's `key` line,
+/// `rate N` after `layer` (and its blend).
+pub const CONTEXT_WORDS: [&str; 7] = ["fps", "smooth", "forever", "sprite", "palette", "key", "rate"];
 
 /// The editor's cheat sheet (`js/fhint.js` `VARS FUNCS DRAW COLS
 /// DECLS`, generated from these): what to write, what it does, and what a
@@ -236,8 +246,9 @@ pub mod cheat {
         ("x, y", "where the pixel is: x 0 at the left to 1 at the right, y 0 at the top to 1 at the bottom", ""),
         ("px, py", "the pixel’s column 0–127 from the left and row 0–31 from the top", ""),
         ("t", "seconds into the loop", ""),
+        ("phase", "where the frame is in the loop, 0 to 1: t / the loop’s length (OpenDMD 1.1: update a panel that says it is unknown)", ""),
         ("hour, minute, second", "the time of day", ""),
-        ("a, b, c", "the controls, in the order the control lines declare them (0 to 1 when undeclared); any built-in name may be set as your own", ""),
+        ("a, b, c", "the controls, in the order the control lines declare them (undeclared: a slider 0 to 1 at 0); any built-in name may be set as your own", ""),
         ("w, h", "128 and 32", ""),
         ("i", "the pixel’s number, 0–4095", ""),
         ("cx, cy", "from the middle: −2 to 2 across, −0.5 to 0.5 down", ""),
@@ -274,9 +285,9 @@ pub mod cheat {
         ("< <= > >= == !=", "compare: 1 or 0; and, or, not", ""),
         ("%", "remainder: v % 1 is the fraction", ""),
         (";", "a new line, on the same line", ""),
-        ("loop 8", "the loop’s length in seconds (first line)", ""),
+        ("loop 8", "the loop’s length in seconds, and the least time it plays", ""),
         ("loop forever", "goes on without repeating: t grows from when it starts (use frac, %, sin, noise of it); seed is 0 to 1, new each time it plays", ""),
-        ("fps 100", "frames a second: 25, 50 (else) or 100, for fast motion; a light formula only", ""),
+        ("smooth", "drawn every refresh of the panel (100 to 125 a second), not every 2nd; for fast motion, a light formula only (OpenDMD 1.1; before, fps 100)", "smooth\n"),
         ("layer add { … }", "a layer with its own names and colour, on what is below: over, add, multiply, screen, max or min", ""),
         ("layer rate 4 { … }", "a slow bottom layer: a band of its rows is redrawn each frame, so every row every 4th frame, and all of it when the clock or a control it reads changes. The layers above draw over it every frame", "layer rate 4 {\n  \n}\n"),
         ("fn ring(cx, r) = abs(len(px - cx, py - 16) - r) < 1", "a function: a value worked out from its values, used as ring(64, 8). With { … } instead of = …, it holds lines that draw, called on a line of their own in draw", "fn f(a) = "),

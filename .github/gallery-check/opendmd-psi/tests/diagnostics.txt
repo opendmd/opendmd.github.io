@@ -412,25 +412,38 @@ gray(ink)
 === E801
 fps 60
 gray(x)
---- 1:5 `fps` is 25, 50 or 100 frames a second
+--- 1:5 `fps` is 25, 50 or 100 (every refresh is 100: or write `smooth`)
 
 === E801
 fps
 gray(x)
---- 1:1 `fps` takes 25, 50 or 100 frames a second, e.g. `fps 100`
+--- 1:1 `fps` takes 25, 50 or 100, e.g. `fps 100` (or write `smooth` for every refresh)
 
 === E802
 layer {
 fps 50
 gray(x)
 }
---- 2:1 `fps` is the whole formula's: put it on a line of its own, outside the layers
+--- 2:1 the rate (`smooth` or `fps`) is the whole formula's: put it on a line of its own, outside the layers
+
+=== E802
+layer {
+smooth
+gray(x)
+}
+--- 2:1 the rate (`smooth` or `fps`) is the whole formula's: put it on a line of its own, outside the layers
+
+=== E803
+smooth
+fps 100
+gray(x)
+--- 2:1 the rate is already set: keep one `smooth` or `fps` line
 
 === E803
 fps 25
 fps 50
 gray(x)
---- 2:1 `fps` is already set
+--- 2:1 the rate is already set: keep one `smooth` or `fps` line
 
 === E901
 loop forever
@@ -468,6 +481,11 @@ loop forever
 draw { dot(t, 3) }
 gray(ink)
 --- 2:12 a value that grows without end can't be drawn at: use frac(t*k)*128, t % n or min(t, k)
+
+=== E908
+loop forever
+gray(frac(x + phase))
+--- 2:15 `phase` is the position in the loop, and `loop forever` has none: use frac(t/k), a place that comes round every k seconds
 
 === E910
 sprite s {
@@ -714,9 +732,10 @@ layer add { gray(y) }
 
 === E951
 loop 4
+v = x
 name "Late"
-gray(x)
---- 2:1 `name` goes at the top of the formula, before its other lines
+gray(v)
+--- 3:1 `name` goes in the formula's header, at its top among the `name`, `about`, `control`, `look`, `loop` and `smooth` lines, before its other lines
 
 === E952
 name "a"

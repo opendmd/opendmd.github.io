@@ -382,3 +382,18 @@ fn random_formulas_format_to_the_same_program() {
     }
     assert!(compiled > 400, "only {compiled} of 800 compiled");
 }
+
+/// `psi fmt` leaves a formula's rate line as its author wrote it: `fps 100`,
+/// `50` and `25` stay (they mean what they mean), and `smooth` stays
+/// `smooth`; the header's order is the author's too.
+#[test]
+fn fmt_keeps_the_rate_line_as_written() {
+    for (src, want) in [
+        ("fps 100\nloop 4\ngray(frac(x + t/4))\n", "fps 100\nloop 4\ngray(frac(x + t/4))\n"),
+        ("fps  50\ngray(x)\n", "fps 50\ngray(x)\n"),
+        ("fps 25; gray(x)\n", "fps 25\ngray(x)\n"),
+        ("loop 4\nsmooth\nname \"N\"\ngray(frac(x + phase))\n", "loop 4\nsmooth\nname \"N\"\ngray(frac(x + phase))\n"),
+    ] {
+        assert_eq!(format(src).unwrap(), want, "{src:?}");
+    }
+}

@@ -151,6 +151,7 @@ fn names() -> String {
         .iter()
         .map(|e| e.0)
         .chain(builtins::LATER)
+        .chain(builtins::SUGAR.iter().map(|e| e.0))
         .chain(builtins::CONSTS.iter().map(|e| e.0))
         .chain(opendmd_psi::world::KEYS.iter().map(|k| k.name))
         .chain(builtins::FUNCS.iter().map(|e| e.0))
@@ -300,6 +301,7 @@ fn spec_names() -> String {
         .iter()
         .map(|e| e.0)
         .chain(["seed"])
+        .chain(builtins::SUGAR.iter().map(|e| e.0))
         .collect();
     let consts: Vec<&str> = builtins::CONSTS.iter().map(|e| e.0).collect();
     let pals: Vec<&str> = builtins::PALETTES.iter().map(|e| e.0).collect();
@@ -517,6 +519,8 @@ fn the_models_name_every_built_in() {
             .chain(builtins::COLOURS.iter().map(|e| e.0))
             .chain(builtins::INPUTS.iter().map(|e| e.0))
             .chain(builtins::LATER)
+            .chain(builtins::SUGAR.iter().map(|e| e.0))
+            .chain(["smooth"])
             .chain(builtins::PALETTES.iter().map(|e| e.0))
             .chain(builtins::FONTS.iter().map(|e| e.0))
             .chain(builtins::BLENDS.iter().map(|e| e.0))
@@ -581,6 +585,11 @@ fn every_built_in_has_a_cheat_sheet_row() {
     for name in builtins::LATER.iter().chain(&builtins::PRIMITIVES) {
         assert!(has(name), "no cheat-sheet row for `{name}`");
     }
+    for (name, _) in builtins::SUGAR {
+        assert!(has(name), "no cheat-sheet row for `{name}`");
+    }
+    // The words of the header that are keywords in one place only.
+    assert!(has("smooth"), "no cheat-sheet row for `smooth`");
     for name in builtins::DECLARATIONS {
         // (`psi 1` is never written by the editor: unversioned is 1.)
         assert!(

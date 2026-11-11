@@ -278,6 +278,7 @@ impl<'s> Parser<'s> {
             }
         }
         notes.extend(self.saturation_notes(prog));
+        notes.extend(self.loop_note(prog));
         // Draw loops run as lanes: costed for 128 turns a lane.
         prog.mark_lane_loops();
         for (k, (count, lanes)) in prog.draw_loops().into_iter().enumerate() {
@@ -383,8 +384,20 @@ impl<'s> Parser<'s> {
         let known = |v: Iv| v.0 > i64::from(i32::MIN) && v.1 < i64::from(i32::MAX);
         let mut iv = alloc::vec![FULL_IV; n];
         let mut raw = alloc::vec![false; n];
+        // Whether each value is made from `t` (P1.5: a product of it that
+        // passes the end within the loop holds still from there, whatever
+        // it goes into).
+        let mut of_t = alloc::vec![false; n];
         for i in 0..n {
             let m = &dag.nodes[i];
+            of_t[i] = match m.code {
+                K_INPUT => key_byte(m).is_none() && m.val == i32::from(S_T),
+                c if c >= K_CONST => false,
+                c => {
+                    let ar = code::arity(c);
+                    [m.a, m.b, m.c].iter().take(ar).any(|&x| of_t[x as usize])
+                }
+            };
             iv[i] = match m.code {
                 K_CONST => Iv::point(m.val),
                 K_INPUT => match key_byte(m) {
@@ -438,12 +451,25 @@ impl<'s> Parser<'s> {
             if out.len() >= 3 {
                 break;
             }
-            let Some(user) = (0..n).find(|&j| {
+            // (A product of `t` that only a `min` or a `clamp` reads is a
+            // ramp held at its end on purpose.)
+            let held = {
+                let mut by = (0..n).filter(|&j| dag.nodes[j].code < K_CONST && reads(dag, j).any(|x| x as usize == i));
+                let first = by.next();
+                first.is_some() && first.into_iter().chain(by).all(|j| matches!(dag.nodes[j].code, code::MIN | code::CLAMP))
+            };
+            let timed = of_t[i] && dag.nodes[i].code == code::MUL && !held;
+            let user = (0..n).find(|&j| {
                 let m = &dag.nodes[j];
                 m.code < K_CONST && cares(m.code) && reads(dag, j).any(|x| x as usize == i)
-            }) else {
+            });
+            if user.is_none() && !timed {
                 continue;
-            };
+            }
+            // (A product of a product of `t`: the first one said it.)
+            if timed && reads(dag, i).any(|x| raw[x as usize] && of_t[x as usize]) {
+                continue;
+            }
             let Some(&(_, a, b)) = dag.made.iter().find(|m| m.0 as usize == i) else {
                 continue;
             };
@@ -455,6 +481,30 @@ impl<'s> Parser<'s> {
                 _ => mul_iv(x, y),
             };
             let reach = (exact.1.max(-exact.0) >> 16).max(32768);
+            if timed {
+                let named = self
+                    .locals
+                    .iter()
+                    .rposition(|l| l.id as usize == i && !l.counter)
+                    .map_or_else(|| "this product of `t`".to_string(), |k| format!("`{}`, a product of `t`,", self.locals[k].name));
+                let s = |v: u32| {
+                    let t = format!("{}.{:02}", v / 1000, v % 1000 / 10);
+                    t.trim_end_matches('0').trim_end_matches('.').to_string()
+                };
+                out.push((
+                    a,
+                    b,
+                    format!(
+                        "{named} may pass 32,767 before the loop ends (up to about {} by t = {} s, reckoned from \
+                         each factor's range): past it, it is held at the end and stops moving. Scale it down \
+                         (divide first, or a smaller factor), or wrap `t` first, as frac(t/k)",
+                        group(reach),
+                        s(prog.loop_ms)
+                    ),
+                ));
+                continue;
+            }
+            let Some(user) = user else { continue };
             let what = match dag.nodes[user].code {
                 code::MUL => "*",
                 code::DIV => "/",
@@ -486,6 +536,72 @@ impl<'s> Parser<'s> {
             ));
         }
         out
+    }
+
+    /// Language review P1.4: a `loop` that is not a whole number of the
+    /// frames it is drawn in (20 ms, or 40 with `fps 25`) in a formula that
+    /// moves. Every player draws whole frames of its
+    /// grid (10, 20 or 40 ms: every refresh, the 2nd or the 4th; a saved
+    /// GIF 20 or 40), and the loop is cut to them (`fx_psi`'s
+    /// `loop_frames`, the web app's preview and GIF), so its length, and
+    /// where `t` jumps back, differ by the rate it gets.
+    fn loop_note(&self, prog: &Program) -> Option<(usize, usize, String)> {
+        let ms = prog.loop_ms;
+        // The frames it is drawn in: 20 ms (every 2nd refresh, the default,
+        // and where the panel holds a `smooth` one that is too heavy), 40
+        // with `fps 25`. (A multiple of 20 ms only cut when a heavy one is
+        // held to every 4th refresh: no note.)
+        let grid = prog.frame_ms().unwrap_or(20).max(20);
+        if ms == 0 || ms.is_multiple_of(grid) || prog.inputs() & 8 == 0 {
+            return None;
+        }
+        // The `loop` line's number: a statement that starts `loop` and a
+        // number (the tokens are gone by now; comments skipped).
+        let b = self.src.as_bytes();
+        let (mut i, mut start, mut at) = (0, true, None);
+        while i < b.len() {
+            let c = b[i];
+            if (c == b'-' || c == b'/') && b.get(i + 1) == Some(&c) {
+                while i < b.len() && b[i] != b'\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            if start && b[i..].starts_with(b"loop") && b.get(i + 4).is_some_and(|c| *c == b' ' || *c == b'\t') {
+                let a = i + 4 + b[i + 4..].iter().take_while(|c| **c == b' ' || **c == b'\t').count();
+                let e = a + b[a..].iter().take_while(|c| c.is_ascii_digit() || **c == b'.').count();
+                if e > a {
+                    at = Some((a, e));
+                    break;
+                }
+            }
+            if !c.is_ascii_whitespace() || c == b'\n' {
+                start = matches!(c, b'\n' | b';');
+            }
+            i += 1;
+        }
+        let (a, e) = at?;
+        let s = |v: u32| {
+            let t = format!("{}.{:03}", v / 1000, v % 1000);
+            t.trim_end_matches('0').trim_end_matches('.').to_string()
+        };
+        Some((
+            a,
+            e,
+            format!(
+                "`loop {}` is not a whole number of {} ms frames: a GIF saved from it is cut to {} s, as is the \
+                 panel's loop when it can't follow its scan (a `rate` layer, the glow), and `t` jumps back there; \
+                 {} loops without a jump everywhere",
+                sub(self.src, a, e),
+                grid,
+                s(ms / grid * grid),
+                // The 40 ms multiples either side: whole frames at every rate.
+                match ms / 40 * 40 {
+                    0 => format!("`loop {}`", s(40)),
+                    lo => format!("`loop {}` or `loop {}`", s(lo), s(lo + 40)),
+                }
+            ),
+        ))
     }
 
     /// Radians in a wave (`sin(x*6.28)`, a habit from other languages):

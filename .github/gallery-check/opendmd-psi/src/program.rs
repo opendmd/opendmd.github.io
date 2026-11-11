@@ -31,12 +31,14 @@ pub const PANEL_MAX_US: u32 = 40_000;
 /// VM figure, no still cache: a look never has one).
 pub const LOOK_MAX_US: u32 = 12_000;
 
-/// The panel's limit for a Formula played at a frame time of `frame_ms`
-/// (its `fps N`: 10, 20 or 40 ms; 0 or none, 20): [`PANEL_MAX_US`], held
-/// to what the governor can keep at its slowest step (8 frames held, 40 %
-/// of them for the render, 5 ms at 10 ms frames): 32 ms at 100 fps.
-/// `opendmd_core::fx_psi` checks it against its own `Governor`.
-pub const fn panel_limit_us(frame_ms: u32) -> u32 {
+/// The most a Formula may cost to keep the frame time `frame_ms` it asks
+/// for (its rate: 10 ms `smooth`, 20, 40; 0 or none, 20): [`PANEL_MAX_US`],
+/// held to what the governor can keep at its slowest step (8 frames held,
+/// 40 % of them for the render, 5 ms at 10 ms frames): 32 ms `smooth`.
+/// One past it that is within the default rate's opens at that rate
+/// instead (every 2nd refresh): [`opens_ms`]. `opendmd_core::fx_psi`
+/// checks it against its own `Governor`.
+pub const fn tier_limit_us(frame_ms: u32) -> u32 {
     let grid = if frame_ms == 0 { 20 } else { frame_ms };
     let slowest = (grid << 3) * 400;
     if slowest < PANEL_MAX_US {
@@ -44,6 +46,27 @@ pub const fn panel_limit_us(frame_ms: u32) -> u32 {
     } else {
         PANEL_MAX_US
     }
+}
+
+/// The frame time a Formula of `est_us` (its VM estimate) asking for
+/// `frame_ms` opens at: that, or 20 (every 2nd refresh) when it is past
+/// [`tier_limit_us`] there but not at 20 (a `smooth` one too heavy to
+/// keep every refresh is played, not refused).
+pub const fn opens_ms(frame_ms: u32, est_us: u32) -> u32 {
+    let grid = if frame_ms == 0 { 20 } else { frame_ms };
+    if grid < 20 && est_us > tier_limit_us(grid) {
+        20
+    } else {
+        grid
+    }
+}
+
+/// The panel's limit for a Formula asking for `frame_ms`: one over it is
+/// refused. [`tier_limit_us`] at the rate it opens at, so [`PANEL_MAX_US`]
+/// for every rate (a fast one past its own opens at the default).
+pub const fn panel_limit_us(frame_ms: u32) -> u32 {
+    let grid = if frame_ms == 0 || frame_ms < 20 { 20 } else { frame_ms };
+    tier_limit_us(grid)
 }
 
 /// The panel the VM draws: 128 × 32.
@@ -1338,6 +1361,12 @@ impl Prog {
         } else {
             panel_limit_us(self.frame_ms().unwrap_or(0))
         }
+    }
+
+    /// The frame time it opens at on the panel ([`opens_ms`]: the one its
+    /// rate asks, or 20 when it is too heavy to keep a `smooth` one).
+    pub fn opens_ms(&self) -> u32 {
+        opens_ms(self.frame_ms().unwrap_or(0), self.esp32_us())
     }
 
     /// Whether the panel refuses to play this program (as a look with
