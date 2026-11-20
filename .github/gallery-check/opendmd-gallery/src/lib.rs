@@ -36,7 +36,7 @@
 //! arithmetic over the pixel and the time.
 //!
 //! The same checks run in three places: the public repo's pull-request
-//! workflow (on the contribution, as data), `tools/site.py` at every site
+//! workflow (on the contribution, as data), the site repo's `tools/site.py` at every site
 //! build (on the merged files, before anything is published), and the
 //! tests here. `main.rs` is the command line.
 
@@ -58,7 +58,7 @@ pub const MAX_PSB: usize = 4500;
 
 /// The sentence for a formula the panel refuses to play
 /// (`Program::panel_refusal`: its VM estimate, no JIT and no still cache,
-/// over the panel's limit), if it does (site/worker/src/check.ts says the
+/// over the panel's limit), if it does (the site repo's site/worker/src/check.ts says the
 /// same).
 pub fn panel_refuses(prog: &Program) -> Option<String> {
     let (vm, limit) = prog.panel_refusal(false)?;
@@ -70,7 +70,7 @@ pub fn panel_refuses(prog: &Program) -> Option<String> {
 }
 
 /// The sentence for a formula that is `psb_len` bytes once compiled for the
-/// panel, if that is over [`MAX_PSB`] (site/worker/src/check.ts says the same).
+/// panel, if that is over [`MAX_PSB`] (the site repo's site/worker/src/check.ts says the same).
 pub fn too_long_prepared(psb_len: usize) -> Option<String> {
     (psb_len > MAX_PSB).then(|| {
         format!(
@@ -229,7 +229,7 @@ pub fn is_mark(c: char) -> bool {
 pub const MAX_MARKS: usize = 2;
 
 /// Names a contribution's name or author may not pass for: the project and
-/// its maintainers (keep in step with site/public-repo/.github/CODEOWNERS).
+/// its maintainers (keep in step with the site repo's site/public-repo/.github/CODEOWNERS).
 pub const RESERVED: [&str; 2] = ["opendmd", "duggan"];
 
 /// A rough "looks like" form of a name, for [`RESERVED`]: fullwidth letters

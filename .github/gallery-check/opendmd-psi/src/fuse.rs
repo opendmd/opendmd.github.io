@@ -317,10 +317,10 @@ pub(crate) fn fuse(prog: &mut Prog) {
     debug_assert_eq!(end, src);
     prog.pixel_end = (pe + runs.len()) as u16;
     let mut j = 0;
-    for g in re..pe + runs.len() {
-        if prog.ops[g].code == code::GUARD {
-            let b = prog.ops[g].b as usize + adds.get(j).copied().unwrap_or(0);
-            prog.ops[g].b = b as u8;
+    for op in &mut prog.ops[re..pe + runs.len()] {
+        if op.code == code::GUARD {
+            let b = op.b as usize + adds.get(j).copied().unwrap_or(0);
+            op.b = b as u8;
             j += 1;
         }
     }

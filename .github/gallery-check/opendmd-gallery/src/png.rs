@@ -1,6 +1,6 @@
 //! A minimal PNG writer: 8-bit RGB, no filtering, the zlib stream in stored
 //! (uncompressed) deflate blocks. Big but simple and dependency-free; the
-//! site build recompresses what it publishes (`tools/site.py`).
+//! site build recompresses what it publishes (the site repo's `tools/site.py`).
 
 /// CRC-32 (PNG's, ISO-HDLC).
 pub fn crc32(data: &[u8]) -> u32 {

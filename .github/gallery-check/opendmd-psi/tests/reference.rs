@@ -7,7 +7,7 @@
 //! marked `<!-- psi-gallery: <stem> -->` is that gallery Formula, word for
 //! word (`PSI_BLESS=1 cargo test --features docs --test reference`
 //! rewrites those blocks). The site draws every ```psi block of its Psi
-//! pages (tools/site.py PSI_PAGES, psiref.js): each one compiles and
+//! pages (the site repo's tools/site.py PSI_PAGES, psiref.js): each one compiles and
 //! lights something, and each ```psi-bad block (shown, never drawn) fails; every
 //! ```psi block of the guide's Psi pages (Make a Formula, How Psi thinks)
 //! is a whole, named Formula that lights the panel well.
@@ -48,7 +48,7 @@ fn picture() -> Vec<u8> {
     p
 }
 
-/// The most pixels lit (r + g + b > 90, as site-smoke counts) in any of a
+/// The most pixels lit (r + g + b > 90, as the site's site-smoke counts) in any of a
 /// few frames through the loop, at its controls' defaults, over the picture
 /// when it reads it.
 fn lit(p: &Program) -> usize {
@@ -286,7 +286,7 @@ fn every_recipe_compiles_and_lights_the_panel() {
     std::fs::write(&path, text).unwrap();
 }
 
-/// The docs behind the site's Psi pages (tools/site.py PSI_PAGES; the
+/// The docs behind the site's Psi pages (the site repo's tools/site.py PSI_PAGES; the
 /// errors page's blocks are the errors' help, tested above). A guide page
 /// not written yet is skipped.
 const PSI_DOCS: &[&str] = &[

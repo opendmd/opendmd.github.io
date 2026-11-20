@@ -351,9 +351,9 @@ fn load_raw(b: &[u8], which: Which, prog: &mut Prog) -> Result<(), Refusal> {
     if n > MAX_OPS || prog.n_scalars as usize > MAX_SCALARS {
         return Err("a program bigger than the player holds");
     }
-    for k in 0..n {
+    for op in &mut prog.ops[..n] {
         let s = r.take(5)?;
-        prog.ops[k] = Op {
+        *op = Op {
             code: s[0],
             d: s[1],
             a: s[2],
@@ -374,27 +374,27 @@ fn load_raw(b: &[u8], which: Which, prog: &mut Prog) -> Result<(), Refusal> {
     if lo > prog.tables.len() {
         return Err(SMALL_STORE);
     }
-    for k in 0..lo {
-        prog.tables[k] = r.i32()?;
+    for t in &mut prog.tables[..lo] {
+        *t = r.i32()?;
     }
     let np = r.u8()? as usize;
     if np > crate::program::MAX_PAINT {
         return Err(NOT_PSB);
     }
-    for k in 0..np {
-        prog.paint[k] = r.u32()? & 0xff_ffff;
+    for p in &mut prog.paint[..np] {
+        *p = r.u32()? & 0xff_ffff;
     }
     let ns = r.u8()? as usize;
     if ns > MAX_PALETTES {
         return Err(NOT_PSB);
     }
-    for k in 0..32 * ns {
-        prog.pals[k] = r.u32()? & 0xff_ffff;
+    for p in &mut prog.pals[..32 * ns] {
+        *p = r.u32()? & 0xff_ffff;
     }
     let mut m = Meta::default();
     if flags & F_META != 0 {
-        for k in 0..3 {
-            m.kind[k] = r.u8()?;
+        for v in &mut m.kind {
+            *v = r.u8()?;
         }
         m.look = r.u8()?;
         m.amount = r.u8()?;
